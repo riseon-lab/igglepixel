@@ -1,0 +1,35 @@
+# ── Local-dev workspace ─────────────────────────────────────────────────
+# When you run the backend on a Mac, WORKSPACE defaults to /workspace which
+# isn't writable, so the auth file falls back to ~/.forge/auth.json — but
+# if you ever set WORKSPACE=./workspace, it'll spew secrets here. Don't
+# commit any of it. Holds .forge_auth.json (hashed creds + signing key),
+# user assets, runner logs, downloaded model weights.
+workspace/
+
+# ── Auth artifacts (defence in depth — already covered by workspace/) ──
+.forge_auth.json
+.forge/
+
+# ── Python ──────────────────────────────────────────────────────────────
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+venv/
+.python-version
+
+# ── Editor / OS junk ────────────────────────────────────────────────────
+.DS_Store
+.idea/
+.vscode/
+.claude/
+*.swp
+
+# ── Build / dist ────────────────────────────────────────────────────────
+*.egg-info/
+dist/
+build/
+
+# ── Local-only docker artifacts ────────────────────────────────────────
+.dockerignore-local

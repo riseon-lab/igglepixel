@@ -1,0 +1,433 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Igglepixel</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<!-- ── Inline icon sprite ────────────────────────────────────────────────── -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <symbol id="i-models"     viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 4 7v10l8 4 8-4V7l-8-4Z"/><path d="m4 7 8 4 8-4"/><path d="M12 11v10"/></symbol>
+    <symbol id="i-running"    viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M5 3v18l15-9L5 3Z"/></symbol>
+    <symbol id="i-loras"      viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M4 12h16M4 17h10"/></symbol>
+    <symbol id="i-assets"     viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-5-5L5 21"/></symbol>
+    <symbol id="i-downloads"  viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v13"/><path d="m7 11 5 5 5-5"/><path d="M5 21h14"/></symbol>
+    <symbol id="i-settings"   viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1Z"/></symbol>
+    <symbol id="i-image"      viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-5-5L5 21"/></symbol>
+    <symbol id="i-video"      viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="6" width="14" height="12" rx="2"/><path d="m22 8-6 4 6 4V8Z"/></symbol>
+    <symbol id="i-llm"        viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v10Z"/></symbol>
+    <symbol id="i-audio"      viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10v4M7 6v12M11 3v18M15 7v10M19 10v4"/></symbol>
+    <symbol id="i-x"          viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></symbol>
+    <symbol id="i-stop"       viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="1"/></symbol>
+    <symbol id="i-link"       viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3h7v7"/><path d="M10 14 21 3"/><path d="M21 14v6a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h6"/></symbol>
+    <symbol id="i-trash"      viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></symbol>
+    <symbol id="i-search"     viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></symbol>
+    <symbol id="i-plus"       viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></symbol>
+    <symbol id="i-bolt"       viewBox="0 0 24 24" fill="currentColor"><path d="M13 2 3 14h7l-1 8 10-12h-7l1-8Z"/></symbol>
+    <symbol id="i-dots"       viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/></symbol>
+    <symbol id="i-upload"     viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21V8"/><path d="m7 13 5-5 5 5"/><path d="M5 3h14"/></symbol>
+    <symbol id="i-down"       viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v13"/><path d="m7 13 5 5 5-5"/></symbol>
+    <symbol id="i-check"      viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l5 5 9-11"/></symbol>
+    <symbol id="i-spinner"    viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 3v3"/><path d="M12 18v3"/><path d="m5.6 5.6 2.1 2.1"/><path d="m16.3 16.3 2.1 2.1"/><path d="M3 12h3"/><path d="M18 12h3"/><path d="m5.6 18.4 2.1-2.1"/><path d="m16.3 7.7 2.1-2.1"/></symbol>
+    <symbol id="i-back"       viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5"/><path d="m12 19-7-7 7-7"/></symbol>
+    <symbol id="i-lock"       viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></symbol>
+  </defs>
+</svg>
+
+<!-- ── Auth gate (full-screen overlay) ──────────────────────────────────
+     Both this overlay and the .app shell start HIDDEN. The JS auth check
+     in checkAuth() picks one to reveal: bootApp() shows .app, showAuth()
+     opens this overlay. That avoids any wrong-content flash on refresh
+     in either direction (signed in or signed out). -->
+<div class="auth-shell" id="authShell" aria-hidden="true">
+  <div class="auth-card">
+    <div class="auth-brand">Igglepixel</div>
+    <div class="auth-title" id="authTitle">Set up access</div>
+    <div class="auth-sub" id="authSub">Create credentials for this pod. They reset when the pod stops.</div>
+    <form class="auth-form" id="authForm" autocomplete="off">
+      <input class="text-input" id="authUsername" type="text" placeholder="Username" autocomplete="off">
+      <input class="text-input" id="authPassword" type="password" placeholder="Password" autocomplete="new-password">
+      <input class="text-input" id="authConfirm"  type="password" placeholder="Confirm password" autocomplete="new-password">
+      <div class="auth-error" id="authError"></div>
+      <button class="btn primary lg block" id="authSubmit" type="submit">Continue</button>
+    </form>
+    <div class="auth-foot" id="authFoot">
+      Credentials live in memory and reset when the pod stops.
+    </div>
+  </div>
+</div>
+
+<div class="app" style="display: none;">
+
+  <!-- ── Topbar ────────────────────────────────────────────────────────── -->
+  <header class="topbar">
+    <div class="topbar-brand">Igglepixel</div>
+    <div class="topbar-spacer"></div>
+    <div class="topbar-right">
+      <div class="gpu-pill" id="gpuPill"><div class="dot"></div><span>Detecting GPU…</span></div>
+      <button class="icon-btn" data-view="settings" title="Settings"><svg><use href="#i-settings"/></svg></button>
+    </div>
+  </header>
+
+  <!-- ── Sidebar ───────────────────────────────────────────────────────── -->
+  <aside class="sidebar">
+    <div class="sidebar-search">
+      <input id="globalSearch" placeholder="Search">
+    </div>
+    <div class="sidebar-scroll">
+
+      <div class="nav-section">Launch</div>
+      <div class="nav-item active" data-view="models">
+        <svg><use href="#i-models"/></svg>
+        <span class="label">Models</span>
+        <span class="meta" id="modelCount">—</span>
+      </div>
+      <div class="nav-item" data-view="running">
+        <svg><use href="#i-running"/></svg>
+        <span class="label">Running</span>
+        <span class="live-dot" id="runningDot" style="display:none"></span>
+      </div>
+
+      <div class="nav-section">Library</div>
+      <div class="nav-item" data-view="loras">
+        <svg><use href="#i-loras"/></svg>
+        <span class="label">LoRAs</span>
+        <span class="meta" id="loraNavCount">0</span>
+      </div>
+      <div class="nav-item" data-view="assets">
+        <svg><use href="#i-assets"/></svg>
+        <span class="label">Assets</span>
+        <span class="meta" id="assetNavCount">0</span>
+      </div>
+      <div class="nav-item" data-view="downloads">
+        <svg><use href="#i-downloads"/></svg>
+        <span class="label">Downloads</span>
+      </div>
+
+      <div class="nav-section">System</div>
+      <div class="nav-item" data-view="settings">
+        <svg><use href="#i-settings"/></svg>
+        <span class="label">Settings</span>
+      </div>
+
+    </div>
+  </aside>
+
+  <!-- ── Main ──────────────────────────────────────────────────────────── -->
+  <main class="main">
+
+    <!-- Models -->
+    <section class="view active" data-view="models">
+      <div class="page-head">
+        <div>
+          <div class="page-title">Models</div>
+          <div class="page-sub">Pick a model, configure, launch. First run downloads weights to <span style="font-family:var(--font-mono);color:var(--t-2)">/workspace</span>.</div>
+        </div>
+      </div>
+      <div class="filterbar">
+        <input class="input wide" id="modelSearch" placeholder="Search models">
+        <button class="chip active" data-filter="all">All</button>
+        <button class="chip" data-filter="image"><svg><use href="#i-image"/></svg>Image</button>
+        <button class="chip" data-filter="video"><svg><use href="#i-video"/></svg>Video</button>
+        <button class="chip" data-filter="llm"><svg><use href="#i-llm"/></svg>LLM</button>
+        <button class="chip" data-filter="audio"><svg><use href="#i-audio"/></svg>Audio</button>
+      </div>
+      <div class="model-grid" id="modelGrid">
+        <div class="empty" style="grid-column:1/-1"><div class="spinner"></div><div style="margin-top:8px">Loading models…</div></div>
+      </div>
+    </section>
+
+    <!-- Workspace (per-model, populated when user opens it) -->
+    <section class="view" data-view="workspace">
+      <div class="ws-head">
+        <button class="icon-btn" id="wsBack" title="Back to models"><svg><use href="#i-back"/></svg></button>
+        <div class="mc-icon" id="wsIcon"></div>
+        <div class="ws-titles">
+          <div class="ws-title" id="wsTitle">—</div>
+          <div class="ws-sub" id="wsSub"></div>
+        </div>
+        <span class="ws-status" id="wsStatus"><span class="dot"></span><span>idle</span></span>
+        <div class="ws-actions">
+          <button class="btn" id="wsStop"><svg><use href="#i-stop"/></svg>Stop</button>
+        </div>
+      </div>
+
+      <!-- Image-input strip — Ref / Pose / Style / Generated.
+           Visible only for models with `image_inputs` declared. -->
+      <div class="ws-section" id="wsImgInputs" style="display:none">
+        <div class="ws-section-title">Inputs <span class="meta">drop or click any cell</span></div>
+        <div class="img-strip" id="wsImgStrip"></div>
+      </div>
+
+      <div class="ws-grid">
+        <!-- Main column: prompt + settings -->
+        <div>
+          <div class="ws-section">
+            <div class="ws-section-title">Prompt</div>
+            <textarea class="ws-prompt" id="wsPrompt" placeholder="Describe what to generate…"></textarea>
+          </div>
+
+          <div class="ws-section" id="wsNegSection">
+            <div class="ws-section-title">Negative prompt <span class="meta">optional</span></div>
+            <textarea class="ws-prompt" id="wsNegPrompt" placeholder="What to avoid (optional)"></textarea>
+          </div>
+
+          <!-- Settings: aspect chips + seed row + numeric grid -->
+          <div class="ws-section">
+            <div class="ws-section-title">Settings</div>
+            <div class="aspect-row" id="wsAspectRow"></div>
+            <div class="ws-settings" id="wsSettings"></div>
+          </div>
+
+          <div class="ws-bar">
+            <button class="btn primary" id="wsGenerate"><svg><use href="#i-bolt"/></svg><span id="wsGenerateLabel">Generate</span></button>
+            <button class="btn danger" id="wsCancel" disabled><svg><use href="#i-stop"/></svg>Cancel</button>
+          </div>
+
+          <!-- Queue status: small text line, e.g. "Running 1 of 3 · 2 queued".
+               Empty when nothing is in flight. Card grid lives next to recents. -->
+          <div class="queue-status" id="wsQueueStatus" style="display:none"></div>
+        </div>
+
+        <!-- Aside: LoRAs + auth -->
+        <aside>
+          <div class="ws-section lora-pane" id="wsLoraPane">
+            <div class="ws-section-title">LoRAs <span class="meta" id="wsLoraCount">0</span></div>
+
+            <div class="lora-group" id="wsLoraDefaults" style="display:none">
+              <div class="lora-group-head">Bundled with model</div>
+            </div>
+
+            <div class="lora-group" id="wsLoraAssigned">
+              <div class="lora-group-head">Assigned to this model</div>
+            </div>
+
+            <div class="lora-add" id="wsLoraAdd">+ Add LoRA from library</div>
+          </div>
+
+          <div class="ws-section">
+            <div class="ws-section-title">Auth</div>
+            <input class="text-input" id="wsHFToken" type="password" placeholder="HF token (gated repos)">
+          </div>
+        </aside>
+      </div>
+
+      <div class="ws-section">
+        <div class="ws-section-title">Recent <span class="meta">this session</span></div>
+        <div class="ws-recent" id="wsRecent">
+          <!-- queue placeholder cards (loading) get prepended here while
+               jobs are running. Filled cards for finished generations come
+               after them. -->
+          <div class="empty" style="grid-column:1/-1;padding:18px"><span style="font-size:11.5px">Nothing generated yet.</span></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Running -->
+    <section class="view" data-view="running">
+      <div class="page-head">
+        <div>
+          <div class="page-title">Running</div>
+          <div class="page-sub">Live processes. Click a card to expand logs.</div>
+        </div>
+      </div>
+      <div class="run-list" id="runList">
+        <div class="empty"><div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 6v6l4 2"/><circle cx="12" cy="12" r="9"/></svg></div>Nothing running.</div>
+      </div>
+    </section>
+
+    <!-- LoRAs -->
+    <section class="view" data-view="loras">
+      <div class="page-head">
+        <div>
+          <div class="page-title">LoRAs</div>
+          <div class="page-sub">Browse CivitAI, manage your local files.</div>
+        </div>
+      </div>
+      <div class="filterbar">
+        <input class="input wide" id="civSearch" placeholder="Search CivitAI">
+        <button class="btn" id="civSearchBtn"><svg><use href="#i-search"/></svg>Search</button>
+        <span style="flex:1"></span>
+        <input class="input" id="civUrl" placeholder="Paste civitai.com/models/… URL" style="width:280px">
+        <button class="btn" id="civUrlGo"><svg><use href="#i-link"/></svg>Open</button>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 300px;gap:16px;align-items:start">
+        <div class="civ-grid" id="civResults">
+          <div class="empty" style="grid-column:1/-1"><div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg></div>Search to browse LoRAs.</div>
+        </div>
+        <div class="lora-panel">
+          <div class="lora-panel-head">
+            <div class="lora-panel-title">My LoRAs</div>
+            <div class="lora-panel-count" id="loraCount">0 files</div>
+          </div>
+          <div class="lora-panel-list" id="loraList">
+            <div class="empty" style="padding:18px"><span style="font-size:11.5px">No LoRAs yet</span></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Assets -->
+    <section class="view" data-view="assets">
+      <div class="page-head">
+        <div>
+          <div class="page-title">Assets</div>
+          <div class="page-sub">Uploaded references and generated outputs. Drop files to upload.</div>
+        </div>
+        <div class="actions">
+          <button class="btn" id="uploadBtn"><svg><use href="#i-upload"/></svg>Upload</button>
+        </div>
+      </div>
+      <div class="filterbar">
+        <button class="chip active" data-asset-filter="all">All</button>
+        <button class="chip" data-asset-filter="upload">Uploads</button>
+        <button class="chip" data-asset-filter="generated">Generated</button>
+        <button class="chip" data-asset-filter="image">Images</button>
+        <button class="chip" data-asset-filter="video">Videos</button>
+      </div>
+      <input id="uploadInput" type="file" multiple accept="image/*,video/*" style="display:none">
+      <div class="upload-zone" id="uploadZone">Drop images or videos here, or click to browse</div>
+      <div style="height:14px"></div>
+      <div class="asset-grid" id="assetGrid">
+        <div class="empty" style="grid-column:1/-1"><span>No assets yet</span></div>
+      </div>
+    </section>
+
+    <!-- Downloads -->
+    <section class="view" data-view="downloads">
+      <div class="page-head">
+        <div>
+          <div class="page-title">Downloads</div>
+          <div class="page-sub">Pull weights directly from HuggingFace into your workspace.</div>
+        </div>
+      </div>
+      <div style="max-width:520px">
+        <div class="card" style="padding:14px">
+          <div class="field-stack">
+            <div class="field">
+              <label class="field-label">Repo ID</label>
+              <input class="text-input" id="hfRepo" placeholder="e.g. black-forest-labs/FLUX.1-dev">
+            </div>
+            <div class="field">
+              <label class="field-label">Specific file <span class="hint">optional</span></label>
+              <input class="text-input" id="hfFile" placeholder="e.g. flux1-dev.safetensors">
+            </div>
+            <div class="field">
+              <label class="field-label">Save to</label>
+              <select class="select" id="hfTarget">
+                <option value="models">models/</option>
+                <option value="loras">loras/</option>
+                <option value="checkpoints">checkpoints/</option>
+              </select>
+            </div>
+            <div class="field">
+              <label class="field-label">HF token <span class="hint">for gated models</span></label>
+              <input class="text-input" id="hfTokenDl" type="password" placeholder="hf_…">
+            </div>
+            <button class="btn primary block lg" id="hfDownloadBtn"><svg><use href="#i-down"/></svg>Start download</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Settings -->
+    <section class="view" data-view="settings">
+      <div class="page-head">
+        <div>
+          <div class="page-title">Settings</div>
+          <div class="page-sub">Tokens are persisted to your browser only.</div>
+        </div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;max-width:760px">
+        <div class="card" style="padding:14px">
+          <div class="section-title" style="margin:0 0 10px;border:0;padding:0">HuggingFace</div>
+          <div class="field-stack">
+            <div class="field">
+              <label class="field-label">HF token</label>
+              <input class="text-input" id="settingsHFToken" type="password" placeholder="hf_…">
+            </div>
+            <button class="btn block" data-save="hf_token" data-source="settingsHFToken">Save</button>
+          </div>
+        </div>
+        <div class="card" style="padding:14px">
+          <div class="section-title" style="margin:0 0 10px;border:0;padding:0">CivitAI</div>
+          <div class="field-stack">
+            <div class="field">
+              <label class="field-label">API key</label>
+              <input class="text-input" id="settingsCivKey" type="password" placeholder="Paste key…">
+            </div>
+            <button class="btn block" data-save="civitai_key" data-source="settingsCivKey">Save</button>
+          </div>
+        </div>
+        <div class="card" style="padding:14px;grid-column:1/-1">
+          <div class="section-title" style="margin:0 0 10px;border:0;padding:0">GPU</div>
+          <pre id="gpuDebug" style="font-family:var(--font-mono);font-size:11px;color:var(--t-3);white-space:pre-wrap;margin:0">Loading…</pre>
+        </div>
+      </div>
+    </section>
+
+  </main>
+</div>
+
+<!-- ── Configure drawer (info + Download → Start → Open workspace) ──────── -->
+<div class="scrim" id="drawerScrim"></div>
+<aside class="drawer" id="drawer">
+  <div class="drawer-head">
+    <div class="mc-icon" id="drawerIcon"></div>
+    <div style="flex:1;min-width:0">
+      <div class="drawer-title" id="drawerTitle">Configure</div>
+      <div class="drawer-sub" id="drawerSub"></div>
+    </div>
+    <button class="icon-btn" id="drawerClose"><svg><use href="#i-x"/></svg></button>
+  </div>
+  <div class="drawer-body" id="drawerBody"></div>
+  <div class="drawer-foot">
+    <button class="btn primary block lg" id="drawerPrimary"><svg><use href="#i-down"/></svg>Download weights</button>
+  </div>
+</aside>
+
+<!-- ── Modal ─────────────────────────────────────────────────────────────── -->
+<div class="modal-scrim" id="modalScrim">
+  <div class="modal" id="modal">
+    <div class="modal-head">
+      <div style="flex:1">
+        <div class="modal-title" id="modalTitle"></div>
+        <div class="modal-meta" id="modalMeta"></div>
+      </div>
+      <button class="icon-btn" id="modalClose"><svg><use href="#i-x"/></svg></button>
+    </div>
+    <div class="modal-body" id="modalBody"></div>
+    <div class="modal-foot" id="modalFoot"></div>
+  </div>
+</div>
+
+<!-- ── Lightbox (full-screen view of any asset) ──────────────────────────── -->
+<div class="lightbox" id="lightbox" role="dialog" aria-modal="true" aria-hidden="true">
+  <div class="lightbox-head">
+    <div class="meta" id="lightboxMeta"></div>
+    <button class="btn" id="lightboxDownload"><svg><use href="#i-down"/></svg>Download</button>
+    <button class="icon-btn" id="lightboxClose" title="Close"><svg><use href="#i-x"/></svg></button>
+  </div>
+  <div class="lightbox-stage" id="lightboxStage"></div>
+  <div class="lightbox-foot" id="lightboxFoot"></div>
+</div>
+
+<!-- Hidden file input shared by all image-cell upload buttons -->
+<input id="imgCellInput" type="file" accept="image/*" style="display:none">
+
+<!-- Shared 3-dot menu used by asset/recent thumbnails -->
+<div class="asset-pop" id="assetPop" role="menu" aria-hidden="true"></div>
+
+<!-- ── Toasts ─────────────────────────────────────────────────────────────── -->
+<div class="toasts" id="toasts"></div>
+
+<script src="app.js" type="module"></script>
+</body>
+</html>
