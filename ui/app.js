@@ -223,17 +223,26 @@ function resolveFields(m) {
 async function apiCall(url, opts = {}) {
   const res = await fetch(url, { credentials: 'same-origin', ...opts });
   if (res.status === 401) {
-    // Server says "no" — kick back to the auth screen.
     clearStoredAuth();
     showAuth();
     throw new Error('Unauthorized');
   }
   if (res.status === 423) {
-    // Backend's encryption key isn't in RAM — the user needs to re-enter
-    // their password to unlock.
     state.auth.mode = 'unlock';
     showAuth('unlock');
     throw new Error('Locked');
+  }
+  if (!res.ok) {
+    // Extract FastAPI's detail message if available, otherwise fall back to status.
+    let msg = `Server error ${res.status}`;
+    try {
+      const ct = res.headers.get('content-type') || '';
+      if (ct.includes('application/json')) {
+        const body = await res.json();
+        if (body.detail) msg = String(body.detail);
+      }
+    } catch {}
+    throw new Error(msg);
   }
   return res;
 }
