@@ -2552,14 +2552,22 @@ function renderRecents(modelId) {
     const stateLabel = j.status === 'running'    ? 'Generating'
                      : j.status === 'cancelling' ? 'Cancelling'
                      :                             'Queued';
+    const pct = Math.max(0, Math.min(100, Math.round((j.progress || 0) * 100)));
+    const hasProgress = pct > 0 && j.status !== 'pending';
+    const eta = j.etaMs != null && pct < 100 ? ` · ${formatETA(j.etaMs)}` : '';
+    const metaText = j.status === 'running'
+      ? (hasProgress ? `${pct}%${eta}` : 'Estimating')
+      : '';
     // Prompt is user-typed; escape before injecting.
     const promptText = esc((j.params.prompt || '(no prompt)').slice(0, 80));
-    return `<div class="asset queued${j.status === 'running' ? ' active' : ''}" data-queue-job="${esc(j.id)}">
+    return `<div class="asset queued${j.status === 'running' ? ' active' : ''}${hasProgress ? ' has-progress' : ''}" data-queue-job="${esc(j.id)}">
       <div class="q-state">${stateLabel}</div>
+      ${metaText ? `<div class="q-meta">${esc(metaText)}</div>` : ''}
       <div class="qspinner"></div>
       <button class="asset-menu-btn" data-queue-menu="${esc(j.id)}" title="Actions">
         <svg><use href="#i-dots"/></svg>
       </button>
+      ${hasProgress ? `<div class="q-progress"><span style="width:${pct}%"></span></div>` : ''}
       <div class="q-prompt">${promptText}</div>
     </div>`;
   }).join('');
@@ -2907,6 +2915,44 @@ function updateLLMSendButton() {
 
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
+function formatETA(ms) {
+  if (!Number.isFinite(ms) || ms <= 0) return 'done';
+  const totalSeconds = Math.max(1, Math.round(ms / 1000));
+  if (totalSeconds < 60) return `${totalSeconds}s left`;
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return seconds ? `${minutes}m ${seconds}s left` : `${minutes}m left`;
+}
+
+function updateJobProgress(job, step, total) {
+  if (!job || !total) return;
+  const safeStep = Math.max(0, Math.min(Number(step) || 0, Number(total) || 0));
+  const safeTotal = Math.max(1, Number(total) || 1);
+  job.progressStep = safeStep;
+  job.progressTotal = safeTotal;
+  job.progress = Math.max(job.progress || 0, safeStep / safeTotal);
+  if (!job.startedAt) job.startedAt = Date.now();
+  if (safeStep > 0 && safeStep < safeTotal) {
+    const elapsed = Date.now() - job.startedAt;
+    job.etaMs = (elapsed / safeStep) * (safeTotal - safeStep);
+  } else {
+    job.etaMs = safeStep >= safeTotal ? 0 : null;
+  }
+  renderQueue();
+}
+
+function startJobProgress(job) {
+  if (state.preview || typeof EventSource === 'undefined') return null;
+  const es = new EventSource(`/api/logs/${encodeURIComponent(job.model_id)}?tail=1`);
+  es.onmessage = (e) => {
+    const match = String(e.data || '').match(/\[gen\]\s+step\s+(\d+)\s*\/\s*(\d+)/i);
+    if (!match) return;
+    updateJobProgress(job, Number(match[1]), Number(match[2]));
+  };
+  es.onerror = () => {};
+  return es;
+}
+
 // ── Queue ────────────────────────────────────────────────────────────────
 function snapshotJob() {
   // Snapshot current workspace state into a queueable job. Runs the same
@@ -2996,6 +3042,14 @@ async function runQueue() {
 async function runJob(job) {
   // Poll /api/runner/{id}/preview and update the Generated cell while inference runs.
   let previewInterval = null;
+  let progressStream = null;
+  let previewProgressInterval = null;
+  job.startedAt = Date.now();
+  job.progress = 0;
+  job.progressStep = 0;
+  job.progressTotal = 0;
+  job.etaMs = null;
+  progressStream = startJobProgress(job);
   if (!state.preview) {
     previewInterval = setInterval(async () => {
       if (state.workspace !== job.model_id) return;
@@ -3028,7 +3082,13 @@ async function runJob(job) {
   try {
     let res;
     if (state.preview) {
+      const previewTotal = 100;
+      previewProgressInterval = setInterval(() => {
+        const elapsed = Date.now() - job.startedAt;
+        updateJobProgress(job, Math.min(94, Math.round((elapsed / 1500) * previewTotal)), previewTotal);
+      }, 180);
       await new Promise(r => setTimeout(r, 1500));
+      updateJobProgress(job, previewTotal, previewTotal);
       const m = state.models.find(x => x.id === job.model_id);
       const usedSeed = job.params.seed >= 0
         ? Number(job.params.seed)
@@ -3091,6 +3151,8 @@ async function runJob(job) {
     toast(`Job failed: ${e.message || 'unknown'}`, 'error');
   } finally {
     if (previewInterval) clearInterval(previewInterval);
+    if (previewProgressInterval) clearInterval(previewProgressInterval);
+    if (progressStream) progressStream.close();
   }
 }
 
@@ -3108,7 +3170,12 @@ function renderQueue() {
     const running = state.queue.find(j => j.status === 'running');
     const pos     = doneN + 1;                           // 1-based "now on N of M"
     const pieces = [];
-    if (running) pieces.push(`<span class="pulse-dot"></span><span>Running ${pos} of ${total}</span>`);
+    if (running) {
+      const pct = Math.round((running.progress || 0) * 100);
+      const eta = running.etaMs != null && pct > 0 && pct < 100 ? ` · ${formatETA(running.etaMs)}` : '';
+      const progress = pct > 0 ? ` · ${pct}%${eta}` : '';
+      pieces.push(`<span class="pulse-dot"></span><span>Running ${pos} of ${total}${progress}</span>`);
+    }
     const pending = open.filter(j => j.status === 'pending').length;
     if (pending) pieces.push(`<span class="sep">·</span><span>${pending} queued</span>`);
     status.innerHTML = pieces.join('');

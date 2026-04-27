@@ -578,6 +578,11 @@ async def generate(req: GenerateRequest):
     info = launcher.get(req.model_id)
     if not info or info["status"] != "running":
         raise HTTPException(409, "Runner not running. Launch the model first.")
+    preview_path = WORKSPACE / "assets" / f".preview_{req.model_id}.jpg"
+    try:
+        preview_path.unlink(missing_ok=True)
+    except OSError:
+        pass
     payload = {"params": req.params, "loras": req.loras, "hf_token": req.hf_token}
     async with httpx.AsyncClient(timeout=None) as c:
         r = await c.post(f"http://127.0.0.1:{info['port']}/generate", json=payload)
@@ -611,9 +616,9 @@ async def cancel_generate(model_id: str):
 
 
 @app.get("/api/logs/{model_id}")
-async def stream_logs(model_id: str):
+async def stream_logs(model_id: str, tail: bool = False):
     async def gen():
-        async for line in launcher.stream_logs(model_id):
+        async for line in launcher.stream_logs(model_id, tail=tail):
             yield f"data: {line}\n\n"
     return StreamingResponse(gen(), media_type="text/event-stream")
 

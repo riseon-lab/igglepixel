@@ -150,13 +150,13 @@ class ModelLauncher:
         return self._procs.get(model_id)
 
     # ── Logs (SSE) ───────────────────────────────────────────────────────
-    async def stream_logs(self, model_id: str) -> AsyncIterator[str]:
+    async def stream_logs(self, model_id: str, tail: bool = False) -> AsyncIterator[str]:
         info = self._procs.get(model_id)
         if not info:
             yield "[no such process]"
             return
         path = Path(info["log_path"])
-        last_size = 0
+        last_size = path.stat().st_size if tail and path.exists() else 0
         for _ in range(10_000):
             if path.exists():
                 try:

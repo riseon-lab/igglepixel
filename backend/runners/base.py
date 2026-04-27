@@ -98,9 +98,18 @@ class Runner(ABC):
         them rather than failing.
         """
         pipe = getattr(self, "_pipe", None)
-        if not loras or pipe is None:
+        if pipe is None:
             return False
+        if not loras:
+            self._clear_loras()
+            return False
+        # Diffusers/PEFT keeps adapter names attached to the live pipeline.
+        # If a prior generation failed halfway through LoRA loading, `finally`
+        # may not have known anything was active yet. Clear first so stacked
+        # runs never collide with stale adapter_0/adapter_1 names.
+        self._clear_loras()
         loras_dir = Path(os.environ.get("LORAS_DIR", str(WORKSPACE / "loras")))
+        run_prefix = f"forge_{uuid.uuid4().hex[:8]}"
 
         def resolve(filename: str) -> Optional[Path]:
             """Try the filename as relative path, then as basename anywhere under loras_dir."""
@@ -130,7 +139,7 @@ class Runner(ABC):
                     if not path:
                         print(f"[runner] LoRA file missing, skipping: {fname}", flush=True)
                         continue
-                    adapter = f"adapter_{i}_{j}"
+                    adapter = f"{run_prefix}_{i}_{j}"
                     if target == "low":
                         weight = {"transformer": 0.0, "transformer_2": sl}
                     else:
@@ -149,7 +158,7 @@ class Runner(ABC):
             if not path:
                 print(f"[runner] LoRA not found, skipping: {filename}", flush=True)
                 continue
-            adapter = f"adapter_{i}"
+            adapter = f"{run_prefix}_{i}"
             if "strength_high" in entry or "strength_low" in entry:
                 sh = float(entry.get("strength_high", 1.0))
                 sl = float(entry.get("strength_low",  sh))
@@ -165,6 +174,7 @@ class Runner(ABC):
 
         if names:
             pipe.set_adapters(names, weights)
+            self._active_lora_adapters = list(names)
             print(f"[runner] {len(names)} LoRA adapter(s) active", flush=True)
             return True
         return False
@@ -172,10 +182,17 @@ class Runner(ABC):
     def _clear_loras(self) -> None:
         pipe = getattr(self, "_pipe", None)
         if pipe is not None:
+            names = getattr(self, "_active_lora_adapters", None)
+            if names and hasattr(pipe, "delete_adapters"):
+                try:
+                    pipe.delete_adapters(names)
+                except Exception:
+                    pass
             try:
                 pipe.unload_lora_weights()
             except Exception:
                 pass
+        self._active_lora_adapters = []
 
     # ── Upscaling ────────────────────────────────────────────────────
     @staticmethod
