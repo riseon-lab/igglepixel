@@ -1802,6 +1802,9 @@ body::before {
 }
 
 @media (max-width: 540px) {
+  /* ── Prevent any child from causing page-level horizontal scroll ── */
+  body, .app { overflow-x: hidden; }
+
   /* ── Grid: sidebar gone, single column ── */
   .app { grid-template-columns: 1fr; }
   :root { --sidebar-w: 0px; }
@@ -1812,12 +1815,13 @@ body::before {
   .main {
     padding: 10px 10px calc(56px + env(safe-area-inset-bottom, 0px) + 10px);
     overflow-y: auto;
+    overflow-x: hidden;
   }
 
-  /* ── Topbar ── */
+  /* ── Topbar: compact but keep GPU info ── */
   .topbar { padding: 0 10px; }
-  .gpu-pill span { display: none; }    /* show dot only, no text */
-  .gpu-pill { padding: 0 7px; gap: 4px; }
+  .gpu-pill { font-size: 11px; padding: 0 8px; gap: 5px; }
+  .topbar-brand { font-size: 13px; }
 
   /* ── Page head: stack actions below title ── */
   .page-head { flex-direction: column; align-items: flex-start; gap: 6px; }
@@ -1838,18 +1842,22 @@ body::before {
   /* ── Model cards: 1 column ── */
   .model-grid { grid-template-columns: 1fr !important; }
 
-  /* ── Workspace head ── */
+  /* ── Workspace head: compact, icon-only Stop ── */
   .ws-head { padding: 6px 0 10px; gap: 8px; flex-wrap: wrap; }
   .ws-head .ws-sub { display: none; }
-  .ws-actions .btn span { display: none; }   /* icon-only Stop button */
+  .ws-actions .btn span { display: none; }   /* Stop text hidden — span now in HTML */
+  .ws-bar .btn.danger span { display: none; } /* Cancel text hidden */
 
   /* ── Workspace: img strip 2 cells max ── */
   .img-strip { grid-template-columns: repeat(2, 1fr) !important; }
   .img-cell { min-height: 100px; }
 
+  /* ── Workspace settings: max 2 columns ── */
+  .ws-settings { grid-template-columns: repeat(2, 1fr); }
+
   /* ── LoRAs page ── */
   .lora-layout { grid-template-columns: 1fr; }
-  .lora-panel { order: -1; }  /* My LoRAs above search results on phone */
+  .lora-panel { order: -1; }
   [data-view="loras"] .filterbar { flex-wrap: wrap; }
   #civUrl { width: 100% !important; }
 
@@ -1866,10 +1874,10 @@ body::before {
   /* ── Auth card ── */
   .auth-card { max-width: calc(100vw - 24px); padding: 20px 16px; }
 
-  /* ── Run list cards ── */
+  /* ── Run list ── */
   .run-card .run-pid { display: none; }
 
-  /* ── Ws bar: full-width buttons ── */
+  /* ── Ws bar: equal-width buttons ── */
   .ws-bar { flex-direction: row; gap: 8px; }
   .ws-bar .btn { flex: 1; justify-content: center; }
 }
