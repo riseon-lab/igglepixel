@@ -508,7 +508,11 @@ def get_models():
         m["gpu_compatible"]   = gpu["type"] in m.get("gpu_support", [])
         m["vram_ok"]          = gpu["vram_gb"] >= m.get("min_vram_gb", 0)
         m["vram_recommended"] = gpu["vram_gb"] >= m.get("recommended_vram_gb", 0)
-    return {"models": data["models"], "gpu": gpu}
+    return {
+        "models":    data["models"],
+        "upscalers": data.get("upscalers", []),
+        "gpu":       gpu,
+    }
 
 
 @app.get("/api/gpu")

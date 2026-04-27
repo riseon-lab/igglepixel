@@ -727,14 +727,16 @@ window.addEventListener('popstate', (e) => {
 async function loadModels() {
   try {
     const data = await api.models();
-    state.models = data.models;
-    state.gpu    = data.gpu;
+    state.models    = data.models;
+    state.upscalers = data.upscalers || [];
+    state.gpu       = data.gpu;
     renderGPU(data.gpu);
     renderModels();
     $('#modelCount').textContent = state.models.length;
     $('#gpuDebug').textContent   = JSON.stringify(data.gpu, null, 2);
   } catch (e) {
-    state.models = mockModels();
+    state.models    = mockModels();
+    state.upscalers = [];
     renderModels();
     $('#modelCount').textContent = state.models.length;
     $('#gpuPill').innerHTML = '<div class="dot"></div><span>Dev mode (no backend)</span>';
@@ -1325,6 +1327,25 @@ function renderWorkspace(m, sections) {
       settingsHtml += `<div class="field"><label class="field-label">Width</label>${miniNumber(wField)}</div>`;
       settingsHtml += `<div class="field"><label class="field-label">Height</label>${miniNumber(hField)}</div>`;
     }
+  }
+  // Upscaler dropdown — only when at least one upscaler is compatible with this model's category.
+  // Spans full width of the settings grid. Empty value = no upscale.
+  const upscalers = (state.upscalers || []).filter(u =>
+    !u.compatible_with || u.compatible_with.includes(m.category)
+  );
+  if (upscalers.length) {
+    const cur = (state.params.upscale && (state.params.upscale.id || state.params.upscale)) || '';
+    const opts = upscalers.map(u =>
+      `<option value="${esc(u.id)}" ${cur === u.id ? 'selected' : ''}>${esc(u.label)}</option>`
+    ).join('');
+    settingsHtml += `
+      <div class="field" style="grid-column:1/-1">
+        <label class="field-label">Upscale <span class="hint">lazy-loads on first use</span></label>
+        <select class="select" id="wsUpscale" data-key="upscale">
+          <option value="" ${!cur ? 'selected' : ''}>None</option>
+          ${opts}
+        </select>
+      </div>`;
   }
   $('#wsSettings').innerHTML = settingsHtml;
 

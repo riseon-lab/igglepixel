@@ -86,6 +86,21 @@ Runner subprocess  (127.0.0.1:17000+)               (private; no proxy access)
     POST /cancel    interrupt at next step boundary
 ```
 
+## Upscaling
+
+Image runners support optional post-generation upscaling via [spandrel](https://github.com/chaiNNer-org/spandrel),
+which auto-detects the architecture of common upscaler weight files
+(RealESRGAN, ESRGAN, SwinIR, HAT, …). The Configure / workspace UI
+shows an Upscale dropdown listing every upscaler in the registry that
+matches the model's category. Choosing one is no-op until generation
+fires; weights are pulled from HuggingFace into `HF_HOME` on first use
+and stay cached for subsequent generations in the same runner subprocess.
+
+Curated set ships with: Real-ESRGAN ×4 (general / anime variants),
+4× Remacri (photoreal), 4× UltraSharp. Add more by appending to the
+`upscalers` array in `backend/model_registry.json` — pure registry
+edit, no code change needed for any architecture spandrel recognises.
+
 ## Content moderation
 
 Generated images pass through `Falconsai/nsfw_image_detection` (88M-param ViT,

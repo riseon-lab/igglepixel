@@ -147,6 +147,7 @@ class Runner(RunnerBase):
             return self.asset_response([], meta={"cancelled": True, "model": self.model_id})
 
         out_image = result.images[0]
+        out_image = self._upscale_if_requested(out_image, params)
         from backend import moderator
         if moderator.is_flagged(out_image):
             return self.asset_response([], meta={"flagged": True, "model": self.model_id, "reason": "moderation"})

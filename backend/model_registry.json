@@ -1,5 +1,43 @@
 {
   "_comment": "Each entry declares a Python runner_module under backend/runners/. The runner owns weight loading + inference. backend/runner_host.py wraps it behind a localhost FastAPI; backend/launcher.py spawns it.",
+  "upscalers": [
+    {
+      "id": "realesrgan-x4-plus",
+      "label": "Real-ESRGAN ×4 (general)",
+      "description": "Classic all-purpose upscaler. Strong on photoreal and illustration.",
+      "scale": 4,
+      "hf_repo": "ai-forever/Real-ESRGAN",
+      "weight_file": "RealESRGAN_x4plus.pth",
+      "compatible_with": ["image"]
+    },
+    {
+      "id": "realesrgan-x4-anime",
+      "label": "Real-ESRGAN ×4 (anime)",
+      "description": "Tuned for anime/illustration. Cleaner line edges than the general model.",
+      "scale": 4,
+      "hf_repo": "ai-forever/Real-ESRGAN",
+      "weight_file": "RealESRGAN_x4plus_anime_6B.pth",
+      "compatible_with": ["image"]
+    },
+    {
+      "id": "remacri-x4",
+      "label": "4× Remacri (photoreal)",
+      "description": "Community favourite for photographic upscales. Slightly softer than UltraSharp.",
+      "scale": 4,
+      "hf_repo": "FacehugmanIII/4x_foolhardy_Remacri",
+      "weight_file": "4x_foolhardy_Remacri.pth",
+      "compatible_with": ["image"]
+    },
+    {
+      "id": "ultrasharp-x4",
+      "label": "4× UltraSharp",
+      "description": "Sharp detail recovery. Great on faces and textures; can over-sharpen.",
+      "scale": 4,
+      "hf_repo": "Kim2091/UltraSharp",
+      "weight_file": "4x-UltraSharp.pth",
+      "compatible_with": ["image"]
+    }
+  ],
   "models": [
     {
       "id": "flux-dev",

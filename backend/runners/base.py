@@ -109,6 +109,21 @@ class Runner(ABC):
             except Exception:
                 pass
 
+    # ── Upscaling ────────────────────────────────────────────────────
+    @staticmethod
+    def _upscale_if_requested(image, params: dict):
+        """Apply the chosen upscaler if params['upscale']['id'] is set.
+
+        params shape: { "upscale": { "id": "realesrgan-x4-plus" } }
+        Lazy-loads and caches the upscaler in the runner subprocess.
+        """
+        cfg = params.get("upscale") or {}
+        upscaler_id = cfg.get("id") if isinstance(cfg, dict) else cfg
+        if not upscaler_id:
+            return image
+        from backend import upscaler as _up
+        return _up.upscale(image, upscaler_id)
+
     # ── Helpers shared by subclasses ─────────────────────────────────
     @staticmethod
     def fetch_weight(hf_repo: str, filename: Optional[str] = None,
