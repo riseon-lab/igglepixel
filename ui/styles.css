@@ -1802,7 +1802,7 @@ body::before {
 }
 
 @media (max-width: 540px) {
-  /* ── Prevent any child from causing page-level horizontal scroll ── */
+  /* ── Prevent page-level horizontal scroll ── */
   body, .app { overflow-x: hidden; }
 
   /* ── Grid: sidebar gone, single column ── */
@@ -1815,29 +1815,38 @@ body::before {
   .main {
     padding: 10px 10px calc(56px + env(safe-area-inset-bottom, 0px) + 10px);
     overflow-y: auto;
-    overflow-x: hidden;
   }
 
-  /* ── Topbar: compact but keep GPU info ── */
+  /* ── Topbar: compact, hide duplicate settings button ── */
   .topbar { padding: 0 10px; }
   .gpu-pill { font-size: 11px; padding: 0 8px; gap: 5px; }
   .topbar-brand { font-size: 13px; }
+  .topbar-right .icon-btn[data-view="settings"] { display: none; }
 
   /* ── Page head: stack actions below title ── */
   .page-head { flex-direction: column; align-items: flex-start; gap: 6px; }
   .page-head .actions { width: 100%; }
   .page-head .actions .btn { width: 100%; justify-content: center; }
 
-  /* ── Filter bars: horizontal scroll, no wrap ── */
+  /* ── Filter bars: wrap + center chips; wide inputs span full row ── */
   .filterbar {
-    flex-wrap: nowrap;
-    overflow-x: auto;
-    -webkit-overflow-scrolling: touch;
-    padding-bottom: 2px;
+    flex-wrap: wrap;
+    justify-content: center;
     gap: 6px;
   }
-  .filterbar::-webkit-scrollbar { display: none; }
-  .filterbar .input.wide { min-width: 140px; flex-shrink: 0; }
+  .filterbar .input.wide {
+    width: 100%;
+    min-width: unset;
+    flex-shrink: 0;
+  }
+  /* LoRAs page: two-group search+URL bar — stack each group full-width */
+  [data-view="loras"] .filterbar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  [data-view="loras"] .filterbar .input,
+  [data-view="loras"] .filterbar .btn { width: 100%; }
+  [data-view="loras"] .filterbar span[style*="flex"] { display: none; }
 
   /* ── Model cards: 1 column ── */
   .model-grid { grid-template-columns: 1fr !important; }
