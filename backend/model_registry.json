@@ -44,9 +44,7 @@
       "supports_lora": true,
       "gpu_support": ["nvidia"],
       "image_inputs": [
-        { "key": "ref",   "label": "Reference", "required": true,  "hint": "What to keep from the original" },
-        { "key": "pose",  "label": "Pose",      "required": false, "hint": "Copy the pose from this image" },
-        { "key": "style", "label": "Style",     "required": false, "hint": "Match this image's style" }
+        { "key": "ref", "label": "Reference", "required": true, "hint": "What to keep from the original" }
       ],
       "param_groups": ["prompt", "generation", "dimensions"],
       "param_keys":   ["prompt", "negative_prompt", "seed", "steps", "cfg", "width", "height"],
