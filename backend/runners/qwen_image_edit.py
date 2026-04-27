@@ -37,6 +37,7 @@ class Runner(RunnerBase):
         from diffusers import QwenImageEditPipeline
 
         token = os.environ.get("HF_TOKEN")
+        print("[runner] loading QwenImageEditPipeline…", flush=True)
         pipe = QwenImageEditPipeline.from_pretrained(
             self.HF_REPO,
             torch_dtype=torch.bfloat16,
@@ -47,14 +48,14 @@ class Runner(RunnerBase):
                 _, total = torch.cuda.mem_get_info()
                 total_gb = total / 1024 ** 3
                 if total_gb >= 80:
-                    # Plenty of VRAM — load everything onto GPU directly.
                     pipe.to("cuda")
                 else:
-                    # Model is ~47 GB; cpu offload lets it run on smaller cards
-                    # without OOM by streaming layers on demand.
-                    pipe.enable_model_cpu_offload()
+                    # Sequential offload streams individual layers to GPU one at
+                    # a time — lower peak VRAM than model_cpu_offload.
+                    pipe.enable_sequential_cpu_offload()
             except Exception:
-                pipe.enable_model_cpu_offload()
+                pipe.enable_sequential_cpu_offload()
+        print("[runner] ready", flush=True)
         self._pipe = pipe
 
     def generate(self, params: dict, loras: Optional[list[str]] = None) -> dict:
@@ -72,9 +73,6 @@ class Runner(RunnerBase):
         if not ref_path:
             raise ValueError("`ref_image` is required for Qwen-Image-Edit")
 
-        # Resolve the visible path against the workspace; load_image()
-        # transparently picks <name>.enc over <name> and decrypts when the
-        # data key is in the env.
         rp = Path(ref_path)
         if not rp.is_absolute():
             rp = WORKSPACE / rp
@@ -84,20 +82,32 @@ class Runner(RunnerBase):
             raise FileNotFoundError(f"Reference image not found: {ref_path}")
 
         seed   = int(params.get("seed", -1))
-        steps  = int(params.get("steps", 50))
+        steps  = int(params.get("steps", 30))
         cfg    = float(params.get("cfg", 4.0))
-        # Pre-pick a seed so the UI can report the actual value used.
+        width  = int(params.get("width",  ref_img.width))
+        height = int(params.get("height", ref_img.height))
         if seed < 0:
             seed = secrets.randbits(31)
-        # Qwen-Image-Edit infers dimensions from the reference image — only
-        # honour user-set width/height if they explicitly differ.
+
         device = "cuda" if torch.cuda.is_available() else "cpu"
         gen = torch.Generator(device=device).manual_seed(seed)
+        preview_path = WORKSPACE / "assets" / f".preview_{self.model_id}.jpg"
 
         runner = self
         def _on_step(pipe, step, timestep, callback_kwargs):
             if runner._cancel:
                 pipe._interrupt = True
+            print(f"[gen] step {step + 1}/{steps}", flush=True)
+            if step % 5 == 0 and "latents" in callback_kwargs:
+                try:
+                    lat = callback_kwargs["latents"]
+                    with torch.no_grad():
+                        img = pipe.vae.decode(lat / pipe.vae.config.scaling_factor).sample
+                    img = (img / 2 + 0.5).clamp(0, 1)[0].permute(1, 2, 0).cpu().float().numpy()
+                    from PIL import Image as _PIL
+                    _PIL.fromarray((img * 255).astype("uint8")).save(preview_path, "JPEG", quality=80)
+                except Exception:
+                    pass
             return callback_kwargs
 
         result = self._pipe(
@@ -106,6 +116,8 @@ class Runner(RunnerBase):
             negative_prompt=(params.get("negative_prompt") or "").strip() or None,
             num_inference_steps=steps,
             true_cfg_scale=cfg,
+            width=width,
+            height=height,
             generator=gen,
             callback_on_step_end=_on_step,
         )

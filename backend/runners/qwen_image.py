@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from .base import Runner as RunnerBase
+from .base import Runner as RunnerBase, WORKSPACE
 
 
 class Runner(RunnerBase):
@@ -39,6 +39,7 @@ class Runner(RunnerBase):
         import os
         token = os.environ.get("HF_TOKEN")
 
+        print("[runner] loading QwenImagePipeline…", flush=True)
         pipe = QwenImagePipeline.from_pretrained(
             self.HF_REPO,
             torch_dtype=torch.bfloat16,
@@ -52,9 +53,10 @@ class Runner(RunnerBase):
                 if total_gb >= 80:
                     pipe.to("cuda")
                 else:
-                    pipe.enable_model_cpu_offload()
+                    pipe.enable_sequential_cpu_offload()
             except Exception:
-                pipe.enable_model_cpu_offload()
+                pipe.enable_sequential_cpu_offload()
+        print("[runner] ready", flush=True)
 
         self._pipe = pipe
 
@@ -73,23 +75,33 @@ class Runner(RunnerBase):
         negative = (params.get("negative_prompt") or "").strip() or None
 
         seed   = int(params.get("seed", -1))
-        steps  = int(params.get("steps", 50))
+        steps  = int(params.get("steps", 30))
         cfg    = float(params.get("cfg", 4.0))
-        width  = int(params.get("width",  1328))
-        height = int(params.get("height", 1328))
+        width  = int(params.get("width",  1024))
+        height = int(params.get("height", 1024))
 
-        # Pre-pick a concrete seed so we can report it back to the UI even when
-        # the user asked for "random". 31-bit so it fits in a JS number safely.
         if seed < 0:
             seed = secrets.randbits(31)
 
         device = "cuda" if torch.cuda.is_available() else "cpu"
         gen = torch.Generator(device=device).manual_seed(seed)
+        preview_path = WORKSPACE / "assets" / f".preview_{self.model_id}.jpg"
 
         runner = self
         def _on_step(pipe, step, timestep, callback_kwargs):
             if runner._cancel:
                 pipe._interrupt = True
+            print(f"[gen] step {step + 1}/{steps}", flush=True)
+            if step % 5 == 0 and "latents" in callback_kwargs:
+                try:
+                    lat = callback_kwargs["latents"]
+                    with torch.no_grad():
+                        img = pipe.vae.decode(lat / pipe.vae.config.scaling_factor).sample
+                    img = (img / 2 + 0.5).clamp(0, 1)[0].permute(1, 2, 0).cpu().float().numpy()
+                    from PIL import Image as _PIL
+                    _PIL.fromarray((img * 255).astype("uint8")).save(preview_path, "JPEG", quality=80)
+                except Exception:
+                    pass
             return callback_kwargs
 
         result = self._pipe(

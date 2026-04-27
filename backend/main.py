@@ -612,6 +612,21 @@ async def stream_logs(model_id: str):
     return StreamingResponse(gen(), media_type="text/event-stream")
 
 
+@app.get("/api/runner/{model_id}/preview")
+async def runner_preview(model_id: str):
+    """Return the latest in-progress generation preview JPEG, if available.
+
+    Runners write a low-quality JPEG to .preview_<model_id>.jpg every 5 steps.
+    The frontend polls this during generation to show a live ComfyUI-style preview.
+    Returns 404 if no preview exists yet (start of generation or model idle).
+    """
+    path = WORKSPACE / "assets" / f".preview_{model_id}.jpg"
+    if not path.exists():
+        raise HTTPException(404, "No preview available")
+    return FileResponse(str(path), media_type="image/jpeg",
+                        headers={"Cache-Control": "no-store"})
+
+
 @app.delete("/api/models/{model_id}")
 def delete_model_weights(model_id: str):
     """Remove cached weights for a model so the pod can free disk."""

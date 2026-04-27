@@ -1933,12 +1933,34 @@ async function runQueue() {
 }
 
 async function runJob(job) {
+  // Poll /api/runner/{id}/preview and update the Generated cell while inference runs.
+  let previewInterval = null;
+  if (!state.preview) {
+    previewInterval = setInterval(async () => {
+      if (state.workspace !== job.model_id) return;
+      try {
+        const url = `/api/runner/${job.model_id}/preview?t=${Date.now()}`;
+        const r = await fetch(url, { credentials: 'same-origin' });
+        if (!r.ok) return;
+        const blob = await r.blob();
+        const objUrl = URL.createObjectURL(blob);
+        const cell = document.querySelector('.img-cell.generated .img-cell-thumb');
+        if (cell) {
+          if (cell._previewUrl) URL.revokeObjectURL(cell._previewUrl);
+          cell._previewUrl = objUrl;
+          cell.src = objUrl;
+          cell.style.display = '';
+          cell.closest('.img-cell').classList.remove('empty');
+        }
+      } catch {}
+    }, 1200);
+  }
+
   try {
     let res;
     if (state.preview) {
       await new Promise(r => setTimeout(r, 1500));
       const m = state.models.find(x => x.id === job.model_id);
-      // Pick the seed up-front so we can show what was "used".
       const usedSeed = job.params.seed >= 0
         ? Number(job.params.seed)
         : Math.floor(Math.random() * 2147483647);
@@ -1972,6 +1994,8 @@ async function runJob(job) {
   } catch (e) {
     job.error = e.message;
     toast(`Job failed: ${e.message || 'unknown'}`, 'error');
+  } finally {
+    if (previewInterval) clearInterval(previewInterval);
   }
 }
 
