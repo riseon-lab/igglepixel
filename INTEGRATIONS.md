@@ -113,6 +113,67 @@ transformer with a stock text encoder — niche.
 
 ---
 
+## Smart Dependency Management
+
+**Goal:** stop rebuilding the Docker image every time a new model needs an
+extra Python package. Today the image bundles every pip dep and any
+addition forces a build + push + template-tag bump cycle.
+
+Three layered approaches, increasing complexity:
+
+### 1. Persistent pip cache (cheap, do first)
+Move pip's cache onto the persistent `/workspace` volume so reinstalls hit
+local disk instead of re-downloading. Add to `docker/entrypoint.sh`:
+
+```bash
+export PIP_CACHE_DIR=/workspace/.pip-cache
+mkdir -p "$PIP_CACHE_DIR"
+```
+
+First boot fills the cache; subsequent boots install instantly from local
+files even if the *image* doesn't carry the package. This is the foundation
+for the next two approaches — it makes runtime installs cheap.
+
+### 2. Move feature-flag deps to `requirements-runtime.txt` (medium win)
+Currently the Dockerfile installs `bitsandbytes` (quant only) and `spandrel`
+(upscaling only). They live in the image whether or not the deployment uses
+them. Move them out:
+
+- Drop them from the Dockerfile's `pip install` line
+- Add to `requirements-runtime.txt` at the repo root
+- Entrypoint already pip-installs that file on every boot
+- Image gets ~500 MB lighter; deps install once per persistent volume
+  thanks to (1)
+
+Trade-off: a fresh persistent volume pays ~30s the first time. Acceptable
+for the image-size win.
+
+### 3. Per-model dep manifests (highest leverage, future)
+Each registry entry declares its pip needs:
+
+```json
+{
+  "id": "wan22-i2v",
+  "pip_requirements": ["wan-vae", "decord>=0.6", "av"],
+  ...
+}
+```
+
+`backend/runner_host.py` reads the manifest on spawn and pip-installs
+anything missing before importing the runner module. Failed installs
+surface as `load_error` like any other startup failure.
+
+Useful when models have wildly different deps (audio needs librosa,
+video needs decord/av, ControlNet needs controlnet-aux, etc.) and you
+don't want every deployment paying the cost of every model's deps.
+Pairs cleanly with the persistent pip cache — first launch of a new
+model class downloads the deps; subsequent launches are instant.
+
+**Recommended sequence:** ship (1) and (2) together as one PR. Defer (3)
+until at least one runner has genuinely unique deps that bloat the image.
+
+---
+
 ## VRAM Hygiene on Model Switch
 
 **Status:** Not implemented.
