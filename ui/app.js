@@ -237,7 +237,14 @@ async function apiCall(url, opts = {}) {
   }
   return res;
 }
-const json = (p) => p.then(r => r.json());
+const json = async (p) => {
+  const r = await p;
+  const ct = r.headers.get('content-type') || '';
+  if (!ct.includes('application/json')) {
+    throw new Error(`Server error ${r.status}`);
+  }
+  return r.json();
+};
 const jsonBody = (body) => ({
   method: 'POST',
   headers: { 'Content-Type': 'application/json' },
@@ -1072,6 +1079,9 @@ async function onDrawerPrimary() {
 }
 
 async function downloadWeights(m) {
+  // Read token before any re-render that would wipe the typed value.
+  const hfToken = $('#drawerHFToken')?.value || state.settings.hf_token || '';
+
   // Check upfront — snapshot_download returns instantly for cached repos, which
   // looks like a broken 1-second download. Detect it here and skip the POST.
   try {
@@ -1087,7 +1097,6 @@ async function downloadWeights(m) {
   setModelState(m.id, { downloading: true, downloaded: false, error: null });
   renderDrawerBody();
 
-  const hfToken = $('#drawerHFToken')?.value || '';
   try {
     await api.downloadWeights(m.id, { hf_token: hfToken });
     // Poll weight-status until done. Endpoint reports {downloading, downloaded, progress, error}.
@@ -1120,9 +1129,9 @@ async function waitForDownload(modelId, maxSeconds) {
 }
 
 async function startRunner(m) {
+  const hfToken = $('#drawerHFToken')?.value || state.settings.hf_token || '';
   setModelState(m.id, { starting: true, error: null });
   renderDrawerBody();
-  const hfToken = $('#drawerHFToken')?.value || '';
   let logEs = null;
   try {
     const launched = await api.launch({ model_id: m.id, loras: [], hf_token: hfToken });
