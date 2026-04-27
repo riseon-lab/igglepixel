@@ -884,11 +884,16 @@ async function openDrawer(id) {
   $('#drawerScrim').classList.add('open');
   $('#drawer').classList.add('open');
 
-  // Best-effort: ask the backend whether weights are already cached.
-  // Failures (no backend) just leave the existing state alone.
+  // Reconcile weight + runner state so reopening the drawer never shows stale "starting".
   try {
     const ws = await api.weightStatus(m.id);
     if (ws.downloaded) setModelState(m.id, { downloaded: true });
+  } catch {}
+  try {
+    const h = await api.runnerHealth(m.id);
+    if (h.ready)           setModelState(m.id, { ready: true,  starting: false, error: null });
+    else if (h.load_error) setModelState(m.id, { ready: false, starting: false, error: h.load_error });
+    else if (!h.loading)   setModelState(m.id, { ready: false, starting: false });
   } catch {}
 
   renderDrawerBody();
@@ -2100,11 +2105,17 @@ async function cancelGenerate() {
 async function waitForRunner(modelId, maxSeconds) {
   const deadline = Date.now() + maxSeconds * 1000;
   while (Date.now() < deadline) {
+    let h;
     try {
-      const h = await api.runnerHealth(modelId);
-      if (h.ready) return true;
-      if (h.load_error) throw new Error(h.load_error);
-    } catch { /* tolerate transient errors while it boots */ }
+      h = await api.runnerHealth(modelId);
+    } catch {
+      // Network error — runner not yet listening, keep trying.
+      await new Promise(r => setTimeout(r, 1500));
+      continue;
+    }
+    if (h.ready) return true;
+    // load_error is a definitive failure — stop immediately instead of waiting the full timeout.
+    if (h.load_error) throw new Error(h.load_error);
     await new Promise(r => setTimeout(r, 1500));
   }
   return false;
@@ -2116,6 +2127,17 @@ async function pollRunning() {
     state.running = await api.status();
     const live = Object.values(state.running).filter(r => r.status === 'running').length;
     $('#runningDot').style.display = live > 0 ? 'block' : 'none';
+    // Sync modelStates so a runner that became ready while the drawer was closed
+    // shows as ready immediately on reopen, without needing a manual interaction.
+    for (const [id, info] of Object.entries(state.running)) {
+      if (info.status === 'running') {
+        const s = modelStateOf(id);
+        if (!s.ready) setModelState(id, { ready: true, starting: false, downloaded: true, error: null });
+      } else if (info.status === 'exited') {
+        const s = modelStateOf(id);
+        if (s.ready) setModelState(id, { ready: false });
+      }
+    }
     if ($('.view.active')?.dataset.view === 'running') renderRunning();
   } catch {}
   setTimeout(pollRunning, 3000);

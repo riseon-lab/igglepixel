@@ -43,13 +43,18 @@ class Runner(RunnerBase):
             token=token,
         )
         if torch.cuda.is_available():
-            pipe.to("cuda")
             try:
                 _, total = torch.cuda.mem_get_info()
-                if total / 1024 ** 3 < 36:
+                total_gb = total / 1024 ** 3
+                if total_gb >= 80:
+                    # Plenty of VRAM — load everything onto GPU directly.
+                    pipe.to("cuda")
+                else:
+                    # Model is ~47 GB; cpu offload lets it run on smaller cards
+                    # without OOM by streaming layers on demand.
                     pipe.enable_model_cpu_offload()
             except Exception:
-                pass
+                pipe.enable_model_cpu_offload()
         self._pipe = pipe
 
     def generate(self, params: dict, loras: Optional[list[str]] = None) -> dict:

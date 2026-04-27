@@ -46,15 +46,15 @@ class Runner(RunnerBase):
         )
 
         if torch.cuda.is_available():
-            pipe.to("cuda")
-            # Auto-offload on smaller cards so loads still succeed.
             try:
                 _, total = torch.cuda.mem_get_info()
                 total_gb = total / 1024 ** 3
-                if total_gb < 36:
+                if total_gb >= 80:
+                    pipe.to("cuda")
+                else:
                     pipe.enable_model_cpu_offload()
             except Exception:
-                pass
+                pipe.enable_model_cpu_offload()
 
         self._pipe = pipe
 
