@@ -304,6 +304,7 @@ const api = {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   })),
+  installLoras:  (b) => json(apiCall('/api/loras/install', jsonBody(b))),
   deleteAsset:   (path) => json(apiCall(`/api/assets?path=${encodeURIComponent(path)}`, { method: 'DELETE' })),
   // Phase 3: encrypt the file in the browser BEFORE upload when we have the
   // data key. Backend stores the bytes as-is (sees ciphertext, period).
@@ -700,12 +701,16 @@ function bindShell() {
   $('#civUrl').addEventListener('keydown', (e) => { if (e.key === 'Enter') civOpenByUrl(); });
 
   $('#hfDownloadBtn').addEventListener('click', startHFDownload);
+  ['#settingsHFToken', '#wsHFToken', '#hfTokenDl'].forEach(sel => {
+    $(sel)?.addEventListener('change', e => saveHFToken(e.target.value));
+  });
 
   $$('[data-save]').forEach(b => b.addEventListener('click', () => {
     const key = b.dataset.save;
     const val = $('#' + b.dataset.source).value;
     state.settings[key] = val;
     localStorage.setItem('forge_settings', JSON.stringify(state.settings));
+    if (key === 'hf_token') syncHFTokenInputs();
     toast('Saved', 'success');
   }));
 
@@ -725,6 +730,30 @@ function bindShell() {
 function applySettingsToInputs() {
   if (state.settings.hf_token)    $('#settingsHFToken').value = state.settings.hf_token;
   if (state.settings.civitai_key) $('#settingsCivKey').value  = state.settings.civitai_key;
+  syncHFTokenInputs();
+}
+
+function saveHFToken(value) {
+  const token = (value || '').trim();
+  state.settings.hf_token = token;
+  localStorage.setItem('forge_settings', JSON.stringify(state.settings));
+  syncHFTokenInputs();
+  return token;
+}
+
+function currentHFToken(selector) {
+  const input = selector ? $(selector) : null;
+  const token = input?.value?.trim() || state.settings.hf_token || '';
+  if (input?.value?.trim()) saveHFToken(input.value);
+  return token;
+}
+
+function syncHFTokenInputs() {
+  const token = state.settings.hf_token || '';
+  ['#settingsHFToken', '#drawerHFToken', '#wsHFToken', '#hfTokenDl'].forEach(sel => {
+    const el = $(sel);
+    if (el && el.value !== token) el.value = token;
+  });
 }
 
 // ── Views ────────────────────────────────────────────────────────────────
@@ -1168,6 +1197,7 @@ function renderDrawerBody() {
     setModelState(m.id, { variant: e.target.value, quant: 'auto' });
     renderDrawerBody();
   });
+  $('#drawerHFToken')?.addEventListener('change', e => saveHFToken(e.target.value));
 
   renderDrawerPrimary();
 }
@@ -1220,7 +1250,7 @@ function renderField(f) {
       </div>`;
     case 'slider': {
       const min = f.min ?? 0, max = f.max ?? 100, step = f.step ?? 1;
-      return `<div class="field slider-row">
+      return `<div class="field slider-row" data-control-key="${esc(f.key)}">
         <div class="slider-head">
           <span>${f.label}</span><span class="val" id="val_${f.key}">${v}</span>
         </div>
@@ -1237,7 +1267,7 @@ function renderField(f) {
       </div>`;
     case 'number':
     default:
-      return `<div class="field">
+      return `<div class="field" data-control-key="${esc(f.key)}">
         <label class="field-label">${f.label}${f.hint ? `<span class="hint">${f.hint}</span>` : ''}</label>
         <input class="text-input" type="${f.type === 'number' ? 'number' : 'text'}"
                ${f.min !== undefined ? `min="${f.min}"` : ''}
@@ -1312,7 +1342,7 @@ async function onDrawerPrimary() {
 
 async function downloadWeights(m) {
   // Read token before any re-render that would wipe the typed value.
-  const hfToken = $('#drawerHFToken')?.value || state.settings.hf_token || '';
+  const hfToken = currentHFToken('#drawerHFToken');
 
   // Check upfront — snapshot_download returns instantly for cached repos, which
   // looks like a broken 1-second download. Detect it here and skip the POST.
@@ -1361,7 +1391,7 @@ async function waitForDownload(modelId, maxSeconds) {
 }
 
 async function startRunner(m) {
-  const hfToken = $('#drawerHFToken')?.value || state.settings.hf_token || '';
+  const hfToken = currentHFToken('#drawerHFToken');
   // Resolve variant first (size: 14B / 5B for Wan etc.), then quant within
   // that variant. Both default to 'auto'; auto resolves at launch time.
   let variant;
@@ -1508,8 +1538,8 @@ function renderWorkspace(m, sections) {
     const wField = sections.flatMap(s => s.fields).find(f => f.key === 'width');
     const hField = sections.flatMap(s => s.fields).find(f => f.key === 'height');
     if (wField && hField) {
-      settingsHtml += `<div class="field"><label class="field-label">Width</label>${miniNumber(wField)}</div>`;
-      settingsHtml += `<div class="field"><label class="field-label">Height</label>${miniNumber(hField)}</div>`;
+      settingsHtml += `<div class="field" data-control-key="width"><label class="field-label">Width</label>${miniNumber(wField)}</div>`;
+      settingsHtml += `<div class="field" data-control-key="height"><label class="field-label">Height</label>${miniNumber(hField)}</div>`;
     }
   }
   // Upscaler dropdown — only when at least one upscaler is compatible with this model's category.
@@ -1531,13 +1561,16 @@ function renderWorkspace(m, sections) {
         </select>
       </div>`;
   }
-  $('#wsSettings').innerHTML = settingsHtml;
+  const settingsEl = $('#wsSettings');
+  settingsEl.classList.toggle('video-controls', promptKeys.includes('num_frames') || promptKeys.includes('fps') || m.category === 'video');
+  settingsEl.innerHTML = settingsHtml;
 
   // LoRA panel (with strength sliders + toggles)
   renderWorkspaceLoras(m);
 
   // HF token
   $('#wsHFToken').value = state.settings.hf_token || '';
+  $('#wsHFToken').onchange = (e) => saveHFToken(e.target.value);
 
   // Recents + queue
   renderRecents(m.id);
@@ -2240,7 +2273,7 @@ function renderSeedField() {
   // What appears in the input depends on mode + history.
   const display = isFixed ? state.params.seed : (last ?? '');
   const showCopyHint = !isFixed && last != null;
-  return `<div class="field" data-seed-field>
+  return `<div class="field" data-seed-field data-control-key="seed">
     <label class="field-label">Seed${showCopyHint ? ' <span class="hint">click value to copy</span>' : ''}</label>
     <div class="seed-row">
       <div class="segmented" data-seed-segmented>
@@ -2310,11 +2343,22 @@ function renderWorkspaceLoras(m) {
   }
   $('#wsLoraPane').style.display = '';
 
-  const defaults  = m.default_loras || [];
-  const assigned  = state.loras.filter(l => l.model_id === m.id);
+  // Filter bundled LoRAs by applies_to vs the currently resolved variant.
+  // Wan I2V Lightning only applies to the 14B variant, so it's hidden when
+  // the user has the 5B variant selected (or auto-resolves to 5B).
+  const currentVariant = m.variants?.length
+    ? (selectedVariant(m)?.id || null)
+    : null;
+  const allDefaults = m.default_loras || [];
+  const defaults = allDefaults.filter(l =>
+    !l.applies_to || !currentVariant || l.applies_to.includes(currentVariant)
+  );
+  const assigned = state.loras.filter(l => l.model_id === m.id);
 
-  // Seed per-model lora state on first render so toggles + sliders persist
-  // while the workspace is open.
+  // Stable key per logical LoRA. Multi-file LoRAs use `id` since they don't
+  // have a single filename; everything else falls back to filename.
+  const keyOf = (l) => l.id || l.filename;
+
   // Seed per-model lora state. Dual-expert models (Wan etc.) carry two
   // strength values per LoRA — one for each expert — so high-noise and
   // low-noise can be tuned independently.
@@ -2322,33 +2366,44 @@ function renderWorkspaceLoras(m) {
   const defaultHigh = (l) => l.strength_high ?? l.strength ?? 1.0;
   const defaultLow  = (l) => l.strength_low  ?? l.strength ?? 1.0;
   for (const l of defaults) {
-    const fn = l.filename;
-    if (!lstate[fn]) lstate[fn] = {
+    const k = keyOf(l);
+    if (!lstate[k]) lstate[k] = {
       on: !!l.default_on,
       strength: l.strength ?? 1.0,
       strength_high: defaultHigh(l),
       strength_low:  defaultLow(l),
       bundled: true,
-      label: l.label || fn,
+      label: l.label || l.filename || k,
+      entry: l,                 // keep the registry entry so generate() can pick up files/hf_repo
     };
   }
   for (const l of assigned) {
-    const fn = l.filename;
-    if (!lstate[fn]) lstate[fn] = {
+    const k = keyOf(l);
+    if (!lstate[k]) lstate[k] = {
       on: false,
       strength: 1.0,
       strength_high: 1.0,
       strength_low: 1.0,
       bundled: false,
-      label: fn,
+      label: l.filename,
+      entry: l,
     };
   }
+
+  // A LoRA is "installed" when every file it needs is on disk.
+  // state.loras lists what's actually present (basename + rel_path).
+  const installedNames = new Set((state.loras || []).flatMap(l => [l.filename, l.rel_path].filter(Boolean)));
+  const isInstalled = (entry) => {
+    const files = entry.files?.length ? entry.files.map(f => f.filename) : [entry.filename].filter(Boolean);
+    if (!files.length) return true;
+    return files.every(fn => installedNames.has(fn) || installedNames.has(fn.split('/').pop()));
+  };
 
   const defaultsEl = $('#wsLoraDefaults');
   if (defaults.length) {
     defaultsEl.style.display = '';
     defaultsEl.innerHTML = `<div class="lora-group-head">Bundled with model</div>` +
-      defaults.map(l => loraDetailedHtml(m.id, l.filename)).join('');
+      defaults.map(l => loraDetailedHtml(m.id, keyOf(l), { installed: isInstalled(l) })).join('');
   } else {
     defaultsEl.style.display = 'none';
   }
@@ -2356,7 +2411,7 @@ function renderWorkspaceLoras(m) {
   const assignedEl = $('#wsLoraAssigned');
   assignedEl.innerHTML = `<div class="lora-group-head">Assigned (${assigned.length})</div>` +
     (assigned.length
-      ? assigned.map(l => loraDetailedHtml(m.id, l.filename)).join('')
+      ? assigned.map(l => loraDetailedHtml(m.id, keyOf(l), { installed: true })).join('')
       : `<div style="font-size:11.5px;color:var(--t-3);padding:6px 4px">No LoRAs assigned. Tag any LoRA with <span style="font-family:var(--font-mono)">${m.id}</span> to attach it here.</div>`);
 
   $('#wsLoraCount').textContent = `${defaults.length + assigned.length}`;
@@ -2364,39 +2419,51 @@ function renderWorkspaceLoras(m) {
   bindLoraCards(m);
 }
 
-function loraDetailedHtml(modelId, filename) {
-  const lstate = state.loraStates[modelId][filename];
+function loraDetailedHtml(modelId, key, opts = {}) {
+  const lstate = state.loraStates[modelId][key];
+  if (!lstate) return '';
+  const installed = opts.installed !== false;
   const cls = lstate.bundled ? 'lora-card detailed bundled' : 'lora-card detailed';
   const m = state.models.find(x => x.id === modelId);
   const dual = !!m?.dual_expert;
-  // filename + label come from disk / CivitAI metadata — escape both as
-  // text and as attributes (` " ` in a filename would otherwise close
-  // data-lora="..." early and inject markup).
-  const eFn = esc(filename);
+  const eKey = esc(key);
   const eLbl = esc(lstate.label);
+  // Sub-line shows the file (single) or "N files" (paired). Truncated.
+  const filesNote = lstate.entry?.files?.length
+    ? `${lstate.entry.files.length} files · ${esc(lstate.entry.hf_repo || 'lightx2v')}`
+    : esc(lstate.entry?.filename || '');
+  // When uninstalled, the toggle is disabled and we surface an Install
+  // button instead. Strength sliders are also disabled until installed.
+  const disabledByMissing = !installed;
+  const enabledForSlider = lstate.on && installed;
   const sliderRow = dual
     ? `
       <div class="row">
         <span class="lora-tier">High</span>
-        <input class="slider" type="range" min="0" max="2" step="0.05" value="${lstate.strength_high}" data-lora-strength-high="${eFn}" ${lstate.on ? '' : 'disabled'}>
-        <span class="strength" data-lora-strength-high-val="${eFn}">×${Number(lstate.strength_high).toFixed(2)}</span>
+        <input class="slider" type="range" min="0" max="2" step="0.05" value="${lstate.strength_high}" data-lora-strength-high="${eKey}" ${enabledForSlider ? '' : 'disabled'}>
+        <span class="strength" data-lora-strength-high-val="${eKey}">×${Number(lstate.strength_high).toFixed(2)}</span>
       </div>
       <div class="row">
         <span class="lora-tier">Low</span>
-        <input class="slider" type="range" min="0" max="2" step="0.05" value="${lstate.strength_low}" data-lora-strength-low="${eFn}" ${lstate.on ? '' : 'disabled'}>
-        <span class="strength" data-lora-strength-low-val="${eFn}">×${Number(lstate.strength_low).toFixed(2)}</span>
+        <input class="slider" type="range" min="0" max="2" step="0.05" value="${lstate.strength_low}" data-lora-strength-low="${eKey}" ${enabledForSlider ? '' : 'disabled'}>
+        <span class="strength" data-lora-strength-low-val="${eKey}">×${Number(lstate.strength_low).toFixed(2)}</span>
       </div>`
     : `
       <div class="row">
-        <input class="slider" type="range" min="0" max="2" step="0.05" value="${lstate.strength}" data-lora-strength="${eFn}" ${lstate.on ? '' : 'disabled'}>
-        <span class="strength" data-lora-strength-val="${eFn}">×${lstate.strength.toFixed(2)}</span>
+        <input class="slider" type="range" min="0" max="2" step="0.05" value="${lstate.strength}" data-lora-strength="${eKey}" ${enabledForSlider ? '' : 'disabled'}>
+        <span class="strength" data-lora-strength-val="${eKey}">×${lstate.strength.toFixed(2)}</span>
       </div>`;
-  return `<div class="${cls} ${lstate.on ? 'on' : ''}" data-lora="${eFn}">
+  const installRow = !installed
+    ? `<div class="row"><button class="btn sm" data-lora-install="${eKey}"><svg><use href="#i-down"/></svg>Install</button>
+        <span style="font-size:11px;color:var(--t-3)">Files not on disk</span></div>`
+    : '';
+  return `<div class="${cls} ${lstate.on ? 'on' : ''}${disabledByMissing ? ' missing' : ''}" data-lora="${eKey}">
     <div class="row">
       <span class="label" title="${eLbl}">${eLbl}</span>
-      <button class="toggle ${lstate.on ? 'on' : ''}" data-lora-toggle="${eFn}"></button>
+      <button class="toggle ${lstate.on ? 'on' : ''}" data-lora-toggle="${eKey}" ${disabledByMissing ? 'disabled title="Install before enabling"' : ''}></button>
     </div>
-    <div class="filename" title="${eFn}">${eFn}</div>
+    <div class="filename" title="${esc(filesNote)}">${filesNote}</div>
+    ${installRow}
     ${sliderRow}
   </div>`;
 }
@@ -2405,9 +2472,41 @@ function bindLoraCards(m) {
   const lstate = state.loraStates[m.id];
   $$('[data-lora-toggle]', $('#wsLoraPane')).forEach(b => b.addEventListener('click', (e) => {
     e.stopPropagation();
+    if (b.disabled) return;
     const fn = b.dataset.loraToggle;
     lstate[fn].on = !lstate[fn].on;
     renderWorkspaceLoras(m);
+  }));
+  // Install missing files for a bundled LoRA. Pulls each {hf_repo, filename}
+  // into LORAS_DIR via the install endpoint, then refreshes state.loras so
+  // the card flips to installed and the toggle/sliders enable.
+  $$('[data-lora-install]', $('#wsLoraPane')).forEach(b => b.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    const k = b.dataset.loraInstall;
+    const entry = lstate[k]?.entry;
+    if (!entry) return;
+    const hfRepo = entry.hf_repo;
+    if (!hfRepo) { toast('No source repo declared for this LoRA', 'error'); return; }
+    const files = (entry.files?.length ? entry.files : [{ filename: entry.filename }])
+      .filter(f => f.filename)
+      .map(f => ({ hf_repo: hfRepo, filename: f.filename }));
+    b.disabled = true;
+    b.innerHTML = '<span class="spinner"></span><span>Installing…</span>';
+    try {
+      const res = await api.installLoras({ files, hf_token: state.settings.hf_token || null });
+      const errors = (res.results || []).filter(r => r.status === 'error');
+      if (errors.length) {
+        toast(`Install failed: ${errors[0].error || 'unknown'}`, 'error');
+      } else {
+        toast(`${entry.label || 'LoRA'} installed`, 'success');
+      }
+      await loadLoras();
+      renderWorkspaceLoras(m);
+    } catch (err) {
+      toast(`Install failed: ${err.message || 'unknown'}`, 'error');
+      b.disabled = false;
+      b.innerHTML = '<svg><use href="#i-down"/></svg>Install';
+    }
   }));
   $$('[data-lora-strength]', $('#wsLoraPane')).forEach(s => {
     s.addEventListener('input', () => {
@@ -2737,7 +2836,7 @@ async function generateLLMReply(m, session, prompt, options = {}) {
           messages: history,
         },
         loras: [],
-        hf_token: state.settings.hf_token || null,
+        hf_token: currentHFToken('#wsHFToken') || null,
       });
       text = res.meta?.text || res.text || '';
     }
@@ -2823,11 +2922,32 @@ function snapshotJob() {
     if (slot?.enabled && active) params[inp.key === 'ref' ? 'ref_image' : inp.key] = active.path;
   }
   const lstate = state.loraStates[m.id] || {};
+  // Build the LoRA payload from the per-key state. Multi-file logical LoRAs
+  // (Wan Lightning ships as paired high+low files) forward their `files`
+  // array verbatim so the runner loads each piece as its own adapter.
   const loras = Object.entries(lstate)
     .filter(([_, v]) => v.on)
-    .map(([fn, v]) => m.dual_expert
-      ? { filename: fn, strength_high: v.strength_high ?? v.strength ?? 1.0, strength_low: v.strength_low ?? v.strength ?? 1.0 }
-      : { filename: fn, strength: v.strength ?? 1.0 });
+    .map(([key, v]) => {
+      const entry = v.entry || {};
+      const hasFiles = Array.isArray(entry.files) && entry.files.length;
+      if (hasFiles) {
+        return {
+          id: key,
+          files: entry.files,
+          strength_high: v.strength_high ?? v.strength ?? 1.0,
+          strength_low:  v.strength_low  ?? v.strength ?? 1.0,
+        };
+      }
+      const filename = entry.filename || key;
+      if (m.dual_expert) {
+        return {
+          filename,
+          strength_high: v.strength_high ?? v.strength ?? 1.0,
+          strength_low:  v.strength_low  ?? v.strength ?? 1.0,
+        };
+      }
+      return { filename, strength: v.strength ?? 1.0 };
+    });
   return {
     id: `q_${Date.now()}_${Math.random().toString(36).slice(2,7)}`,
     model_id: m.id,
@@ -2919,8 +3039,15 @@ async function runJob(job) {
         model_id: job.model_id,
         params:   job.params,
         loras:    (job.loras || []).map(l => {
-          // Dual-expert (Wan etc.) sends per-expert strengths; everything
-          // else falls back to single 'strength' field.
+          // Multi-file logical LoRA (Wan Lightning paired high+low etc.)
+          if (Array.isArray(l.files) && l.files.length) {
+            return {
+              files: l.files,
+              strength_high: l.strength_high ?? 1.0,
+              strength_low:  l.strength_low  ?? 1.0,
+            };
+          }
+          // Dual-expert (single file with per-expert strengths)
           if (l.strength_high !== undefined || l.strength_low !== undefined) {
             return {
               filename: l.filename,
@@ -2928,9 +3055,10 @@ async function runJob(job) {
               strength_low:  l.strength_low  ?? 1.0,
             };
           }
+          // Standard single-strength
           return { filename: l.filename, strength: l.strength ?? 1.0 };
         }),
-        hf_token: state.settings.hf_token || null,
+        hf_token: currentHFToken('#wsHFToken') || null,
       });
     }
     // Moderation: backend signals a flagged output by returning empty assets
@@ -3522,7 +3650,7 @@ async function startHFDownload() {
   const repo = $('#hfRepo').value.trim();
   if (!repo) return toast('Enter a repo ID', 'error');
   const file = $('#hfFile').value.trim();
-  const token = $('#hfTokenDl').value;
+  const token = currentHFToken('#hfTokenDl');
   try {
     await api.hfDownload({ repo_id: repo, filename: file || null, target_dir: 'loras', hf_token: token || null });
     toast(`Started: ${repo}`, 'success');

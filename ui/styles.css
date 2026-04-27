@@ -593,8 +593,15 @@ body::before {
 .slider-head {
   display: flex;
   justify-content: space-between;
+  gap: 8px;
   font-size: 11.5px;
   color: var(--t-2);
+}
+.slider-head span:first-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .slider-head .val { font-family: var(--font-mono); color: var(--t-1); font-size: 12px; }
 .slider {
@@ -1133,13 +1140,33 @@ body::before {
 
 .ws-settings {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(120px, 100%), 1fr));
-  gap: 10px;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: 14px 12px;
+  align-items: end;
 }
 .ws-settings > .field,
 .ws-settings > .toggle-row {
   min-width: 0;
 }
+.ws-settings > .field { grid-column: span 3; }
+.ws-settings > [data-seed-field] { grid-column: span 3; }
+.ws-settings > [data-control-key="steps"],
+.ws-settings > [data-control-key="cfg"],
+.ws-settings > [data-control-key="cfg_low"],
+.ws-settings > [data-control-key="num_frames"] { grid-column: span 2; }
+.ws-settings > [data-control-key="fps"],
+.ws-settings > [data-control-key="width"],
+.ws-settings > [data-control-key="height"] { grid-column: span 2; }
+.ws-settings.video-controls > [data-seed-field] { grid-column: span 2; }
+.ws-settings.video-controls > [data-control-key="steps"],
+.ws-settings.video-controls > [data-control-key="cfg"],
+.ws-settings.video-controls > [data-control-key="cfg_low"] { grid-column: span 2; }
+.ws-settings.video-controls > [data-control-key="fps"],
+.ws-settings.video-controls > [data-control-key="width"],
+.ws-settings.video-controls > [data-control-key="height"] { grid-column: span 2; }
+.ws-settings.video-controls > [data-control-key="fps"] { grid-column: 1 / span 2; }
+.ws-settings.video-controls > [data-control-key="width"] { grid-column: 3 / span 2; }
+.ws-settings.video-controls > [data-control-key="height"] { grid-column: 5 / span 2; }
 
 .ws-bar {
   display: flex;
@@ -1979,6 +2006,9 @@ body::before {
   align-items: center;
   gap: 8px;
 }
+.seed-row .text-input:placeholder-shown {
+  min-width: 38px;
+}
 .segmented {
   display: inline-flex;
   background: var(--glass-1);
@@ -2064,6 +2094,13 @@ body::before {
   text-transform: uppercase;
   min-width: 32px;
   flex-shrink: 0;
+}
+.lora-card.detailed.missing { opacity: 0.72; }
+.lora-card.detailed.missing .label { color: var(--t-3); }
+.lora-card.detailed [data-lora-install] {
+  font-size: 11px;
+  height: 26px;
+  padding: 0 10px;
 }
 .lora-card.detailed .slider {
   flex: 1;
@@ -2610,6 +2647,14 @@ body::before {
      Result: [Seed (full width)] → [Steps | CFG] → [Width | Height]
      Related controls naturally pair together. ── */
   .ws-settings { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .ws-settings > .field,
+  .ws-settings > [data-seed-field],
+  .ws-settings > [data-control-key],
+  .ws-settings.video-controls > .field,
+  .ws-settings.video-controls > [data-seed-field],
+  .ws-settings.video-controls > [data-control-key] {
+    grid-column: span 1;
+  }
   .ws-settings [data-seed-field] { grid-column: 1 / -1; }
   .ws-settings .field { gap: 5px; }
   .ws-settings .field-label,

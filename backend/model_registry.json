@@ -108,8 +108,19 @@
         { "key": "ref", "label": "Source frame", "required": true, "hint": "First frame of the video" }
       ],
       "default_loras": [
-        { "filename": "Wan2.2-I2V-A14B-NFE4-V1.safetensors",  "label": "Lightning · 4 steps (14B)", "strength_high": 1.0, "strength_low": 1.0, "default_on": false },
-        { "filename": "Wan2.2-T2V-A14B-NFE4-V1.1.safetensors", "label": "Lightning · 4 steps (T2V)", "strength_high": 1.0, "strength_low": 1.0, "default_on": false }
+        {
+          "id": "wan22-i2v-lightning-4step",
+          "label": "Lightning · 4 steps (I2V)",
+          "description": "lightx2v's 4-step distillation. Drop steps from 30→4. Requires the 14B variant.",
+          "hf_repo": "lightx2v/Wan2.2-Lightning",
+          "files": [
+            { "filename": "Wan2.2-I2V-A14B-4steps-lora-rank64-Seko-V1/high_noise_model.safetensors", "target": "high" },
+            { "filename": "Wan2.2-I2V-A14B-4steps-lora-rank64-Seko-V1/low_noise_model.safetensors",  "target": "low"  }
+          ],
+          "applies_to": ["14b"],
+          "strength_high": 1.0, "strength_low": 1.0,
+          "default_on": false
+        }
       ]
     },
     {
@@ -237,8 +248,20 @@
         { "label": "4:3",             "w": 1536, "h": 1152 }
       ],
       "default_loras": [
-        { "filename": "Qwen-Image-Lightning-4steps-V2.0.safetensors", "label": "Lightning · 4 steps", "strength": 1.0, "default_on": false },
-        { "filename": "Qwen-Image-Lightning-8steps-V2.0.safetensors", "label": "Lightning · 8 steps", "strength": 1.0, "default_on": false }
+        {
+          "id": "qwen-image-lightning-4step",
+          "filename": "Qwen-Image-Lightning-4steps-V2.0.safetensors",
+          "hf_repo": "lightx2v/Qwen-Image-Lightning",
+          "label": "Lightning · 4 steps",
+          "strength": 1.0, "default_on": false
+        },
+        {
+          "id": "qwen-image-lightning-8step",
+          "filename": "Qwen-Image-Lightning-8steps-V2.0.safetensors",
+          "hf_repo": "lightx2v/Qwen-Image-Lightning",
+          "label": "Lightning · 8 steps",
+          "strength": 1.0, "default_on": false
+        }
       ]
     },
     {
@@ -279,9 +302,27 @@
         "height": { "default": 1024, "step": 16, "min": 256, "max": 2048 }
       },
       "default_loras": [
-        { "filename": "Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors", "label": "Lightning · 4 steps", "strength": 1.0, "default_on": false },
-        { "filename": "Qwen-Image-Edit-2511-Lightning-8steps-V1.0-bf16.safetensors", "label": "Lightning · 8 steps", "strength": 1.0, "default_on": false },
-        { "filename": "qwen-image-edit-2511-multiple-angles-lora.safetensors",       "label": "Multiple angles",     "strength": 0.8, "default_on": false }
+        {
+          "id": "qwen-edit-lightning-4step",
+          "filename": "Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors",
+          "hf_repo": "lightx2v/Qwen-Image-Edit-2511-Lightning",
+          "label": "Lightning · 4 steps",
+          "strength": 1.0, "default_on": false
+        },
+        {
+          "id": "qwen-edit-lightning-8step",
+          "filename": "Qwen-Image-Edit-2511-Lightning-8steps-V1.0-bf16.safetensors",
+          "hf_repo": "lightx2v/Qwen-Image-Edit-2511-Lightning",
+          "label": "Lightning · 8 steps",
+          "strength": 1.0, "default_on": false
+        },
+        {
+          "id": "qwen-edit-multi-angles",
+          "filename": "qwen-image-edit-2511-multiple-angles-lora.safetensors",
+          "hf_repo": "fal/Qwen-Image-Edit-2511-Multiple-Angles-LoRA",
+          "label": "Multiple angles",
+          "strength": 0.8, "default_on": false
+        }
       ]
     }
   ]

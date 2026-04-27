@@ -73,46 +73,99 @@ class Runner(ABC):
 
     # ── LoRA helpers ─────────────────────────────────────────────────
     def _load_loras(self, loras: list) -> bool:
-        """Load LoRA adapters onto self._pipe. Returns True if any were loaded.
+        """Load LoRA adapters onto self._pipe. Returns True if any loaded.
 
-        Each entry is either:
-          {filename, strength}                              — single-strength (most pipelines)
-          {filename, strength_high, strength_low}           — dual-expert (Wan 2.2 MoE etc.)
+        Each entry is one of:
 
-        Dual-strength uses diffusers' per-component weight dict so the high-
-        noise expert (`transformer`) gets one strength and the low-noise
-        expert (`transformer_2`) gets the other. Single-strength is applied
-        uniformly across whatever components the pipeline has.
+          {filename, strength}
+              Single file, applied uniformly to whatever components the
+              pipeline has LoRA weights for.
 
-        Resolves files against LORAS_DIR env var (default /workspace/loras).
+          {filename, strength_high, strength_low}
+              Single file containing both high- and low-noise expert weights.
+              Applied per-component for MoE pipelines (Wan etc.) via the
+              diffusers per-component weight dict.
+
+          {files: [{filename, target}, ...], strength_high, strength_low}
+              Multi-file logical LoRA — Wan Lightning ships as paired
+              `high_noise_model.safetensors` + `low_noise_model.safetensors`.
+              Each file is loaded as its own adapter and set_adapters
+              applies it only to its target component. Strengths come from
+              the parent entry, not the per-file dict.
+
+        Files are resolved under LORAS_DIR (default $WORKSPACE/loras).
+        Missing files are logged + skipped — generation continues without
+        them rather than failing.
         """
         pipe = getattr(self, "_pipe", None)
         if not loras or pipe is None:
             return False
         loras_dir = Path(os.environ.get("LORAS_DIR", str(WORKSPACE / "loras")))
+
+        def resolve(filename: str) -> Optional[Path]:
+            """Try the filename as relative path, then as basename anywhere under loras_dir."""
+            direct = loras_dir / filename
+            if direct.exists():
+                return direct
+            base = Path(filename).name
+            matches = list(loras_dir.rglob(base))
+            return matches[0] if matches else None
+
         names, weights = [], []
         for i, entry in enumerate(loras):
-            filename = entry.get("filename") if isinstance(entry, dict) else entry
-            path = loras_dir / filename
-            if not path.exists():
+            if not isinstance(entry, dict):
+                # Bare filename string — treat as single file at strength 1.0.
+                entry = {"filename": entry, "strength": 1.0}
+
+            files = entry.get("files")
+            if isinstance(files, list) and files:
+                # Multi-file logical LoRA (e.g. Wan Lightning high+low pair).
+                # Each file becomes its own adapter, scoped via dict to its target.
+                sh = float(entry.get("strength_high", 1.0))
+                sl = float(entry.get("strength_low",  sh))
+                for j, f in enumerate(files):
+                    fname  = f.get("filename")
+                    target = (f.get("target") or "high").lower()
+                    path   = resolve(fname) if fname else None
+                    if not path:
+                        print(f"[runner] LoRA file missing, skipping: {fname}", flush=True)
+                        continue
+                    adapter = f"adapter_{i}_{j}"
+                    if target == "low":
+                        weight = {"transformer": 0.0, "transformer_2": sl}
+                    else:
+                        weight = {"transformer": sh,  "transformer_2": 0.0}
+                    print(f"[runner] loading LoRA {fname} (target={target}, strength={sl if target == 'low' else sh:.2f})", flush=True)
+                    pipe.load_lora_weights(str(path.parent), weight_name=path.name, adapter_name=adapter)
+                    names.append(adapter)
+                    weights.append(weight)
+                continue
+
+            # Single-file entry.
+            filename = entry.get("filename")
+            if not filename:
+                continue
+            path = resolve(filename)
+            if not path:
                 print(f"[runner] LoRA not found, skipping: {filename}", flush=True)
                 continue
-            name = f"adapter_{i}"
-            if isinstance(entry, dict) and ("strength_high" in entry or "strength_low" in entry):
+            adapter = f"adapter_{i}"
+            if "strength_high" in entry or "strength_low" in entry:
                 sh = float(entry.get("strength_high", 1.0))
                 sl = float(entry.get("strength_low",  sh))
                 weight = {"transformer": sh, "transformer_2": sl}
                 print(f"[runner] loading LoRA {filename} (high={sh:.2f}, low={sl:.2f})", flush=True)
             else:
-                strength = float(entry.get("strength", 1.0) if isinstance(entry, dict) else 1.0)
+                strength = float(entry.get("strength", 1.0))
                 weight = strength
                 print(f"[runner] loading LoRA {filename} @ {strength:.2f}", flush=True)
-            pipe.load_lora_weights(str(path.parent), weight_name=path.name, adapter_name=name)
-            names.append(name)
+            pipe.load_lora_weights(str(path.parent), weight_name=path.name, adapter_name=adapter)
+            names.append(adapter)
             weights.append(weight)
+
         if names:
             pipe.set_adapters(names, weights)
-            print(f"[runner] {len(names)} LoRA(s) active", flush=True)
+            print(f"[runner] {len(names)} LoRA adapter(s) active", flush=True)
             return True
         return False
 

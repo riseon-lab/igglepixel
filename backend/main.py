@@ -794,8 +794,47 @@ def _find_lora(filename: str) -> Optional[Path]:
     direct = LORAS_DIR / filename
     if direct.exists():
         return direct
-    matches = list(LORAS_DIR.rglob(filename))
+    # filename can be a path like "Folder/high_noise_model.safetensors" — try
+    # that as a relative path first, then fall back to basename match.
+    rel = LORAS_DIR / filename.lstrip("/")
+    if rel.exists():
+        return rel
+    base = Path(filename).name
+    matches = list(LORAS_DIR.rglob(base))
     return matches[0] if matches else None
+
+
+class LoraInstallBody(BaseModel):
+    files:    list      # [{hf_repo: str, filename: str}, ...]
+    hf_token: Optional[str] = None
+
+
+@app.post("/api/loras/install")
+def install_loras(body: LoraInstallBody):
+    """Pull a list of {hf_repo, filename} LoRA files from HuggingFace into
+    LORAS_DIR. Skips files that are already on disk. Returns a per-file
+    status report so the UI can update its install state.
+    """
+    from huggingface_hub import hf_hub_download
+    token = body.hf_token or os.environ.get("HF_TOKEN")
+    LORAS_DIR.mkdir(parents=True, exist_ok=True)
+    results = []
+    for entry in body.files or []:
+        repo     = entry.get("hf_repo")
+        filename = entry.get("filename")
+        if not repo or not filename:
+            results.append({"filename": filename or "", "status": "error", "error": "missing hf_repo or filename"})
+            continue
+        # If the file is already present (anywhere under LORAS_DIR), no-op.
+        if _find_lora(filename) is not None:
+            results.append({"filename": filename, "status": "already_installed"})
+            continue
+        try:
+            local = hf_hub_download(repo_id=repo, filename=filename, local_dir=str(LORAS_DIR), token=token)
+            results.append({"filename": filename, "status": "installed", "path": str(local)})
+        except Exception as e:
+            results.append({"filename": filename, "status": "error", "error": f"{type(e).__name__}: {e}"})
+    return {"results": results}
 
 
 @app.delete("/api/loras/{filename}")
