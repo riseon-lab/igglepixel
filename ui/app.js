@@ -2015,6 +2015,13 @@ async function runJob(job) {
         hf_token: state.settings.hf_token || null,
       });
     }
+    // Moderation: backend signals a flagged output by returning empty assets
+    // with meta.flagged = true. Show a neutral toast and skip the rest of the
+    // success path so nothing lands in recents.
+    if (res.meta?.flagged) {
+      toast("This output can't be generated. Please change your request and try again.", 'error');
+      return;
+    }
     if (res.meta?.seed != null) {
       state.lastSeed[job.model_id] = Number(res.meta.seed);
     }

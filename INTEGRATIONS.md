@@ -67,6 +67,31 @@ Recommendation: implement Option A first since it reuses the existing model.
 
 ---
 
+## VRAM Hygiene on Model Switch
+
+**Status:** Not implemented.
+
+**Problem:** `launcher.py` only checks if the model the user is launching is
+already running. It doesn't stop other models. So if a user loads Qwen-Image
+(uses ~47 GB), then opens Qwen-Image-Edit and clicks Start, a second runner
+process spawns and tries to load another ~47 GB model — instant OOM on a
+48 GB card. Same problem when adding more models (Flux, SDXL, etc).
+
+**Fix:**
+- Before spawning a new runner, call `launcher.stop()` on every other live
+  runner so its VRAM is freed
+- Optionally: track approximate VRAM per runner and only auto-stop if the
+  combined footprint would exceed the available card. On a 96 GB card you
+  could keep two ~47 GB models loaded at once.
+- Frontend: when user clicks Start on model B while model A is running,
+  show a "Switching from A → B" status briefly so the eviction is visible
+
+**Where:** `backend/launcher.py`, `launch()` method. Add a sweep over
+`self._procs` calling `_terminate()` on anything that isn't `mid` before
+spawning the new process.
+
+---
+
 ## Queue Persistence
 
 **Status:** Queue is in-memory per browser tab. Closing the tab loses pending jobs.

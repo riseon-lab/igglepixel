@@ -54,6 +54,8 @@ every container start by [`docker/entrypoint.sh`](docker/entrypoint.sh).
 | `HF_TOKEN`        | _(unset)_ | For gated HuggingFace repos |
 | `WORKSPACE`       | `/workspace` | Root for models, assets, logs |
 | `UI_PORT`         | `3000` | FastAPI port |
+| `IGGLEPIXEL_MODERATION` | `true` | Run NSFW classifier on every generated image. Set to `false` for private dev pods or fork operators accepting their own responsibility. |
+| `HF_HOME`         | `/workspace/.cache/huggingface` | HF cache location (set by entrypoint so weights land on the persistent volume) |
 
 If `git fetch` fails on boot (GitHub outage), the pod boots from the cached clone
 in `FORGE_CACHE_DIR` instead of failing.
@@ -82,6 +84,25 @@ Runner subprocess  (127.0.0.1:17000+)               (private; no proxy access)
     POST /generate  inference
     POST /cancel    interrupt at next step boundary
 ```
+
+## Content moderation
+
+Generated images pass through `Falconsai/nsfw_image_detection` (88M-param ViT,
+loaded once on runner spawn, kept resident on GPU) before they're saved.
+Flagged outputs are dropped — nothing persists, nothing reaches the user beyond
+a neutral toast.
+
+- **Default: on.** This is the safe default for public deployments.
+- **Opt out:** set `IGGLEPIXEL_MODERATION=false` in the pod env vars.
+- **Fail-closed:** if the moderation model can't load, all outputs are blocked
+  until you fix it or disable moderation.
+- **Threshold:** `nsfw > 0.85` (tunable in `backend/moderator.py`).
+- **Scope:** image-only, post-generation. Does not check prompts. Does not
+  catch violence, hate symbols, or other categories beyond NSFW.
+
+If you fork this repo and run your own deployment, you take responsibility for
+what your instance generates. The default-on toggle exists so the maintained
+public image (`riseonlab/igglepixel`) ships moderated.
 
 ## Adding a new model
 

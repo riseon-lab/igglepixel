@@ -124,10 +124,15 @@ class Runner(RunnerBase):
         if self._cancel:
             return self.asset_response([], meta={"cancelled": True, "model": self.model_id})
 
+        out_image = result.images[0]
+        from backend import moderator
+        if moderator.is_flagged(out_image):
+            return self.asset_response([], meta={"flagged": True, "model": self.model_id, "reason": "moderation"})
+
         out_path = self.new_output_path(prefix=f"{self.model_id}_{seed}")
         # save_image() encrypts when FORGE_DATA_KEY is set in the env (the
         # backend injects it on spawn). Returned path may be `<out>.enc`.
-        on_disk = self.save_image(result.images[0], out_path, format="PNG")
+        on_disk = self.save_image(out_image, out_path, format="PNG")
         return self.asset_response([on_disk], meta={
             "model":  self.model_id,
             "prompt": prompt,
