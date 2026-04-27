@@ -80,9 +80,18 @@ if [ -f "requirements-runtime.txt" ]; then
         log "WARN: requirements-runtime.txt install failed; continuing"
 fi
 
+# ── Redirect HuggingFace cache to the persistent volume ───────────────
+# By default HF writes to ~/.cache/huggingface which is on the ephemeral
+# container disk (typically 10–20 GB). Models are tens of GB, so they must
+# land on /workspace (the persistent network volume, 90+ GB).
+export HF_HOME=/workspace/.cache/huggingface
+export TRANSFORMERS_CACHE=/workspace/.cache/huggingface/hub   # older transformers compat
+export HF_DATASETS_CACHE=/workspace/.cache/huggingface/datasets
+
 # ── Workspace skeleton (the volume may be empty on first boot) ─────────
 mkdir -p /workspace/models /workspace/loras /workspace/checkpoints \
-         /workspace/assets/uploads /workspace/assets/generated /workspace/logs
+         /workspace/assets/uploads /workspace/assets/generated /workspace/logs \
+         /workspace/.cache/huggingface
 
 # ── Run ────────────────────────────────────────────────────────────────
 log "starting Forge (port ${UI_PORT:-3000})"

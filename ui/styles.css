@@ -1680,6 +1680,22 @@ body::before {
   transition: width 200ms var(--ease);
 }
 
+.drawer-log-stream {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.65;
+  color: rgba(255,255,255,0.7);
+  background: rgba(0,0,0,0.35);
+  border: 1px solid var(--line-1);
+  border-radius: 6px;
+  padding: 10px 12px;
+  margin-top: 12px;
+  height: 140px;
+  overflow-y: auto;
+}
+.drawer-log-stream .log-line { white-space: pre-wrap; word-break: break-all; }
+.drawer-log-stream .log-line.err { color: var(--bad); }
+
 /* ── Toasts ────────────────────────────────────────────────────────────── */
 .toasts {
   position: fixed;

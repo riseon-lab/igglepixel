@@ -929,8 +929,11 @@ function renderDrawerBody() {
       </div>
     </div>
 
-    ${(phase === 'downloading' || phase === 'starting') ? `
+    ${phase === 'downloading' ? `
       <div class="drawer-progress"><div class="fill" id="drawerProgress" style="width:${(modelStateOf(m.id).progress || 0.05) * 100}%"></div></div>
+    ` : ''}
+    ${phase === 'starting' ? `
+      <div class="drawer-log-stream" id="drawerLogStream"><div class="log-line" style="color:rgba(255,255,255,0.35)">Waiting for runner…</div></div>
     ` : ''}
 
     <div class="field" style="margin-top:14px">
@@ -1069,10 +1072,18 @@ async function onDrawerPrimary() {
 }
 
 async function downloadWeights(m) {
-  // Pull weights to disk via huggingface_hub. Doesn't load anything onto the
-  // GPU — that happens in startRunner(). The two are intentionally separate
-  // so the user can stage the slow part (download) without committing GPU
-  // memory until they're ready to generate.
+  // Check upfront — snapshot_download returns instantly for cached repos, which
+  // looks like a broken 1-second download. Detect it here and skip the POST.
+  try {
+    const ws = await api.weightStatus(m.id);
+    if (ws.downloaded) {
+      setModelState(m.id, { downloading: false, downloaded: true });
+      toast(`${m.name} already on disk`, 'info');
+      renderDrawerBody();
+      return;
+    }
+  } catch { /* if weight-status errors, fall through to the normal download path */ }
+
   setModelState(m.id, { downloading: true, downloaded: false, error: null });
   renderDrawerBody();
 
@@ -1109,21 +1120,35 @@ async function waitForDownload(modelId, maxSeconds) {
 }
 
 async function startRunner(m) {
-  // Weights cached but runner stopped — re-launch.
   setModelState(m.id, { starting: true, error: null });
   renderDrawerBody();
   const hfToken = $('#drawerHFToken')?.value || '';
+  let logEs = null;
   try {
     const launched = await api.launch({ model_id: m.id, loras: [], hf_token: hfToken });
     if (launched.status !== 'launched' && launched.status !== 'already_running') {
       throw new Error(launched.message || 'Launch failed');
     }
+    // Pipe runner stdout/stderr into the drawer log box while we wait.
+    logEs = new EventSource(`/api/logs/${m.id}`);
+    logEs.onmessage = (e) => {
+      const logEl = document.getElementById('drawerLogStream');
+      if (!logEl) return;
+      if (logEl.querySelector('.log-line[style]')) logEl.innerHTML = ''; // clear placeholder
+      const line = document.createElement('div');
+      line.className = 'log-line' + (e.data.toLowerCase().includes('error') ? ' err' : '');
+      line.textContent = e.data;
+      logEl.appendChild(line);
+      logEl.scrollTop = logEl.scrollHeight;
+    };
     const ok = await waitForRunner(m.id, 600);
     if (!ok) throw new Error('Runner did not become ready');
     setModelState(m.id, { starting: false, ready: true });
     toast(`${m.name} ready`, 'success');
   } catch (e) {
     setModelState(m.id, { starting: false, error: e.message });
+  } finally {
+    if (logEs) logEs.close();
   }
   renderDrawerBody();
 }
