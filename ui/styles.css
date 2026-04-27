@@ -1806,10 +1806,11 @@ body::before {
   .sidebar { display: none; }
   .mobile-nav { display: flex; }
 
-  /* ── Main: full width, pad bottom so content clears the nav bar ── */
+  /* ── Main: full width, pad bottom, clip horizontal overflow ── */
   .main {
     padding: 10px 10px calc(56px + env(safe-area-inset-bottom, 0px) + 10px);
     overflow-y: auto;
+    overflow-x: hidden;
   }
 
   /* ── Topbar: compact, hide duplicate settings button ── */
@@ -1856,8 +1857,19 @@ body::before {
   .img-strip { grid-template-columns: repeat(2, 1fr) !important; }
   .img-cell { min-height: 100px; }
 
-  /* ── Workspace settings: max 2 columns ── */
+  /* ── Aspect chips: smaller on mobile so they don't crowd ── */
+  .aspect-chip { font-size: 10.5px; padding: 0 8px; height: 26px; }
+  .aspect-row { gap: 4px; }
+
+  /* ── Workspace settings: 2-column grid, seed row spans both ──
+     Result: [Seed (full width)] → [Steps | CFG] → [Width | Height]
+     Related controls naturally pair together. ── */
   .ws-settings { grid-template-columns: repeat(2, 1fr); }
+  .ws-settings .seed-row { grid-column: 1 / -1; }
+  /* Sliders fill their cell width properly */
+  .ws-settings .slider { width: 100%; box-sizing: border-box; }
+  /* Labels on sliders: tighten on small screens */
+  .ws-settings .field-label { font-size: 10px; }
 
   /* ── LoRAs page ── */
   .lora-layout { grid-template-columns: 1fr; }
