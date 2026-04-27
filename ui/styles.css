@@ -1084,7 +1084,8 @@ body::before {
   gap: 14px;
   align-items: start;
 }
-@media (max-width: 1100px) { .ws-grid { grid-template-columns: 1fr; } }
+@media (max-width: 1100px) { .ws-grid { grid-template-columns: minmax(0, 1fr); } }
+.ws-grid > * { min-width: 0; }
 
 .ws-section {
   background: var(--glass-1);
@@ -1092,6 +1093,8 @@ body::before {
   border-radius: var(--r-lg);
   padding: 14px;
   margin-bottom: 12px;
+  min-width: 0;
+  max-width: 100%;
 }
 .ws-section-title {
   font-size: 10.5px;
@@ -1132,8 +1135,12 @@ body::before {
 
 .ws-settings {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(120px, 100%), 1fr));
   gap: 10px;
+}
+.ws-settings > .field,
+.ws-settings > .toggle-row {
+  min-width: 0;
 }
 
 .ws-bar {
@@ -1207,15 +1214,20 @@ body::before {
 /* ── Image-input strip (Ref / Pose / Style / Generated) ───────────────── */
 .img-strip {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(min(220px, 100%), 1fr));
   gap: 10px;
   margin-bottom: 12px;
+  align-items: start;
 }
 @media (max-width: 1100px) { .img-strip { grid-template-columns: repeat(2, 1fr); } }
 
 .img-cell {
   position: relative;
+  width: 100%;
+  min-width: 0;
   aspect-ratio: 1 / 1;
+  min-height: 160px;
+  max-height: 420px;
   border-radius: var(--r-md);
   overflow: hidden;
   background: var(--glass-1);
@@ -1223,8 +1235,20 @@ body::before {
   display: flex;
   align-items: stretch;
   justify-content: stretch;
+  align-self: start;
   transition: border-color 120ms var(--ease), background 120ms var(--ease);
 }
+.img-cell.has-media {
+  aspect-ratio: var(--media-ratio, 1 / 1);
+  min-height: 0;
+  background: rgba(0, 0, 0, 0.32);
+}
+.img-cell.has-media.landscape-media {
+  grid-column: span 2;
+}
+.img-strip.has-media .img-cell[data-input="ref"] { order: 1; }
+.img-strip.has-media .img-cell.generated { order: 2; }
+.img-strip.has-media .img-cell:not([data-input="ref"]):not(.generated) { order: 3; }
 .img-cell.empty {
   border-style: dashed;
   border-color: var(--line-2);
@@ -1243,7 +1267,10 @@ body::before {
 }
 .img-cell img,
 .img-cell video {
-  width: 100%; height: 100%; object-fit: cover; display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
 }
 
 .img-cell-empty {
@@ -1534,8 +1561,18 @@ body::before {
   z-index: 3;
 }
 .asset:hover .asset-menu-btn { opacity: 1; }
+.ws-recent .asset-menu-btn,
+.asset-menu-btn:focus-visible,
+.asset-menu-btn.img-cell-menu,
+.asset.queued .asset-menu-btn {
+  opacity: 1;
+}
 .asset-menu-btn:hover { background: rgba(0, 0, 0, 0.8); }
 .asset-menu-btn svg { width: 14px; height: 14px; }
+
+@media (hover: none), (max-width: 540px) {
+  .asset-menu-btn { opacity: 1; }
+}
 
 .asset-pop {
   position: fixed;
@@ -1644,6 +1681,56 @@ body::before {
   color: var(--t-1);
   margin-top: 2px;
   font-family: var(--font-mono);
+  word-break: break-all;
+}
+.drawer-stat .value .ext-link {
+  color: var(--t-1);
+  text-decoration: none;
+  border-bottom: 1px dotted var(--line-2);
+  transition: color 120ms var(--ease), border-color 120ms var(--ease);
+}
+.drawer-stat .value .ext-link:hover { color: #fff; border-bottom-color: var(--t-2); }
+
+/* Drawer head: model name as a link to the source repo */
+.drawer-title .title-link {
+  color: inherit;
+  text-decoration: none;
+}
+.drawer-title .title-link:hover { color: #fff; }
+
+/* License pills — colour-coded by type */
+.license-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-family: var(--font-sans);
+  font-size: 11px;
+  letter-spacing: 0.01em;
+  padding: 2px 8px;
+  border-radius: 999px;
+  text-decoration: none;
+  border: 1px solid var(--line-2);
+  transition: filter 120ms var(--ease);
+}
+.license-pill:hover { filter: brightness(1.15); }
+.license-pill.commercial {
+  background: rgba(34, 197, 94, 0.10);
+  border-color: rgba(34, 197, 94, 0.35);
+  color: #6ee7a8;
+}
+.license-pill.non-commercial {
+  background: rgba(245, 158, 11, 0.10);
+  border-color: rgba(245, 158, 11, 0.35);
+  color: #fbbf60;
+}
+.license-pill.research {
+  background: rgba(239, 68, 68, 0.10);
+  border-color: rgba(239, 68, 68, 0.35);
+  color: #fb8b8b;
+}
+.license-pill.custom {
+  background: var(--glass-1);
+  color: var(--t-2);
 }
 .drawer-state {
   display: flex;
@@ -1811,13 +1898,26 @@ body::before {
     padding: 10px 10px calc(56px + env(safe-area-inset-bottom, 0px) + 10px);
     overflow-y: auto;
     overflow-x: hidden;
+    width: 100%;
+    min-width: 0;
+    max-width: 100vw;
+  }
+  .view,
+  .ws-grid,
+  .ws-grid > *,
+  .ws-section {
+    width: 100%;
+    min-width: 0;
+    max-width: 100%;
+  }
+  .ws-section {
+    overflow: hidden;
   }
 
-  /* ── Topbar: compact, hide duplicate settings button ── */
+  /* ── Topbar: compact, settings stays here while bottom nav carries Downloads ── */
   .topbar { padding: 0 10px; }
   .topbar-logo { height: 14px; }
   .gpu-pill { font-size: 11px; padding: 0 8px; gap: 5px; }
-  .topbar-right .icon-btn[data-view="settings"] { display: none; }
 
   /* ── Page head: stack actions below title ── */
   .page-head { flex-direction: column; align-items: flex-start; gap: 6px; }
@@ -1854,22 +1954,101 @@ body::before {
   .ws-bar .btn.danger span { display: none; } /* Cancel text hidden */
 
   /* ── Workspace: img strip 2 cells max ── */
-  .img-strip { grid-template-columns: repeat(2, 1fr) !important; }
-  .img-cell { min-height: 100px; }
+  .img-strip {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+  .img-strip.has-media {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+  .img-cell {
+    min-height: 132px;
+    max-height: none;
+  }
+  .img-cell.has-media,
+  .img-cell.has-media.landscape-media,
+  .img-strip.has-media .img-cell.empty {
+    grid-column: 1 / -1;
+  }
+  .img-cell.has-media {
+    min-height: 0;
+    max-height: calc(100dvh - 170px);
+  }
+  .img-strip.has-media .img-cell.empty {
+    aspect-ratio: 16 / 9;
+    min-height: 150px;
+  }
 
   /* ── Aspect chips: smaller on mobile so they don't crowd ── */
-  .aspect-chip { font-size: 10.5px; padding: 0 8px; height: 26px; }
-  .aspect-row { gap: 4px; }
+  .aspect-row {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 6px;
+  }
+  .aspect-chip {
+    width: 100%;
+    min-width: 0;
+    height: 30px;
+    padding: 0 8px;
+    font-size: 10.5px;
+    justify-content: flex-start;
+  }
+  .aspect-chip span:not(.ratio-glyph) {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .aspect-chip span:last-child {
+    flex-shrink: 0;
+  }
+  .aspect-chip .ratio-glyph {
+    flex-shrink: 0;
+  }
 
   /* ── Workspace settings: 2-column grid, seed row spans both ──
      Result: [Seed (full width)] → [Steps | CFG] → [Width | Height]
      Related controls naturally pair together. ── */
-  .ws-settings { grid-template-columns: repeat(2, 1fr); }
-  .ws-settings .seed-row { grid-column: 1 / -1; }
-  /* Sliders fill their cell width properly */
-  .ws-settings .slider { width: 100%; box-sizing: border-box; }
-  /* Labels on sliders: tighten on small screens */
-  .ws-settings .field-label { font-size: 10px; }
+  .ws-settings { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .ws-settings [data-seed-field] { grid-column: 1 / -1; }
+  .ws-settings .field { gap: 5px; }
+  .ws-settings .field-label,
+  .ws-settings .slider-head {
+    min-width: 0;
+    height: 16px;
+    font-size: 10.5px;
+    line-height: 16px;
+  }
+  .ws-settings .slider-head span:first-child,
+  .ws-settings .field-label {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .ws-settings .slider-head .val {
+    flex-shrink: 0;
+    padding-left: 6px;
+    font-size: 11px;
+  }
+  .ws-settings .text-input,
+  .ws-settings .select {
+    height: 32px;
+    min-width: 0;
+    padding-top: 0;
+    padding-bottom: 0;
+  }
+  .ws-settings .slider {
+    width: 100%;
+    min-width: 0;
+    height: 32px;
+    box-sizing: border-box;
+  }
+  .ws-settings .segmented {
+    flex: 0 0 auto;
+  }
+  .ws-settings .segmented .seg {
+    padding-left: 8px;
+    padding-right: 8px;
+  }
 
   /* ── LoRAs page ── */
   .lora-layout { grid-template-columns: 1fr; }

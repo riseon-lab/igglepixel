@@ -8,6 +8,11 @@
       "description": "Black Forest Labs' open-weight rectified-flow transformer. Excellent photorealism, hands, faces, and text-in-image. Native 1024×1024. Gated repo — accept the licence on HuggingFace and set HF_TOKEN.",
       "runner_module": "backend.runners.flux_dev",
       "hf_repo": "black-forest-labs/FLUX.1-dev",
+      "license": {
+        "type": "non-commercial",
+        "label": "Non-commercial",
+        "url": "https://huggingface.co/black-forest-labs/FLUX.1-dev/blob/main/LICENSE.md"
+      },
       "min_vram_gb": 8,
       "recommended_vram_gb": 24,
       "supports_lora": true,
@@ -46,6 +51,11 @@
       "description": "Alibaba's Qwen-Image text-to-image. Strong prompt adherence, native 1328×1328. ~40 GB on first download.",
       "runner_module": "backend.runners.qwen_image",
       "hf_repo": "Qwen/Qwen-Image",
+      "license": {
+        "type": "commercial",
+        "label": "Apache 2.0",
+        "url": "https://www.apache.org/licenses/LICENSE-2.0"
+      },
       "min_vram_gb": 16,
       "recommended_vram_gb": 24,
       "supports_lora": true,
@@ -87,6 +97,11 @@
       "description": "Alibaba's Qwen-Image-Edit — image-to-image with reference, pose and style conditioning.",
       "runner_module": "backend.runners.qwen_image_edit",
       "hf_repo": "Qwen/Qwen-Image-Edit",
+      "license": {
+        "type": "commercial",
+        "label": "Apache 2.0",
+        "url": "https://www.apache.org/licenses/LICENSE-2.0"
+      },
       "min_vram_gb": 16,
       "recommended_vram_gb": 24,
       "supports_lora": true,

@@ -901,8 +901,13 @@ async function openDrawer(id) {
   if (!m) return;
   state.selected = m;
 
-  $('#drawerTitle').textContent = m.name;
-  $('#drawerSub').textContent   = m.hf_repo || '';
+  // Title links to the source HuggingFace repo if known. innerHTML rather
+  // than textContent here because we're injecting a link; m.name comes from
+  // our own registry so it's safe.
+  $('#drawerTitle').innerHTML = m.hf_repo
+    ? `<a class="title-link" href="https://huggingface.co/${esc(m.hf_repo)}" target="_blank" rel="noopener">${esc(m.name)} ↗</a>`
+    : esc(m.name);
+  $('#drawerSub').textContent = m.hf_repo || '';
   const dIcon = $('#drawerIcon');
   dIcon.className = `mc-icon ${m.category}`;
   dIcon.innerHTML = `<svg><use href="#${categoryIcon(m.category)}"/></svg>`;
@@ -956,7 +961,16 @@ function renderDrawerBody() {
     <div class="drawer-stats">
       <div class="drawer-stat"><div class="label">VRAM</div><div class="value">${sizeStr}</div></div>
       <div class="drawer-stat"><div class="label">LoRA</div><div class="value">${m.supports_lora ? 'yes' : 'no'}</div></div>
-      <div class="drawer-stat" style="grid-column:1/-1"><div class="label">HF repo</div><div class="value">${m.hf_repo || '—'}</div></div>
+      <div class="drawer-stat" style="grid-column:1/-1"><div class="label">HF repo</div><div class="value">${m.hf_repo
+        ? `<a class="ext-link" href="https://huggingface.co/${esc(m.hf_repo)}" target="_blank" rel="noopener">${esc(m.hf_repo)} ↗</a>`
+        : '—'}</div></div>
+      ${m.license ? `
+        <div class="drawer-stat" style="grid-column:1/-1">
+          <div class="label">License</div>
+          <div class="value">
+            <a class="license-pill ${esc(m.license.type || 'custom')}" href="${esc(m.license.url || '#')}" target="_blank" rel="noopener" title="${esc(m.license.label || '')}">${esc(m.license.label || 'Unknown')} ↗</a>
+          </div>
+        </div>` : ''}
     </div>
 
     <div class="drawer-state ${stateBlocks.cls}">
@@ -1353,6 +1367,7 @@ function updateWsStatus() {
 function renderImgStrip(m) {
   const slots = state.imgInputs[m.id] || (state.imgInputs[m.id] = {});
   const cells = [];
+  let hasMedia = false;
   for (const inp of m.image_inputs) {
     // Migrate legacy {image} shape to carousel shape on first access.
     let slot = slots[inp.key];
@@ -1361,14 +1376,19 @@ function renderImgStrip(m) {
     } else if (slot.image !== undefined) {
       slot = slots[inp.key] = { enabled: slot.enabled, images: slot.image ? [slot.image] : [], idx: 0 };
     }
+    if ((slot.images || [])[slot.idx ?? 0]) hasMedia = true;
     cells.push(imgCellHtml(inp.key, inp.label, slot, inp.required, inp.hint));
   }
   // The Generated cell shows the latest result (or empty).
   const recents = state.recents[m.id] || [];
   const latest  = recents[recents.length - 1] || null;
+  hasMedia = hasMedia || !!latest;
   cells.push(generatedCellHtml(latest));
 
-  $('#wsImgStrip').innerHTML = cells.join('');
+  const strip = $('#wsImgStrip');
+  strip.classList.toggle('has-media', hasMedia);
+  strip.innerHTML = cells.join('');
+  updateImageCellRatios(strip);
   bindImgStrip(m);
 }
 
@@ -1384,7 +1404,8 @@ function imgCellHtml(key, label, slot, required, hint) {
        <span class="carousel-pos">${idx + 1}/${images.length}</span>
        <button class="icon-btn" data-next-input="${key}" title="Next">&#8250;</button>`
     : '';
-  return `<div class="img-cell${off}${empty}${req}" data-input="${key}">
+  const media = active ? ' has-media' : '';
+  return `<div class="img-cell${media}${off}${empty}${req}" data-input="${key}">
     <div class="img-cell-head">
       <div class="label">${label}${required ? ' *' : ''}</div>
       <button class="toggle ${slot.enabled ? 'on' : ''}" data-toggle-input="${key}" title="Use this input"></button>
@@ -1408,10 +1429,14 @@ function imgCellHtml(key, label, slot, required, hint) {
 }
 
 function generatedCellHtml(asset) {
-  return `<div class="img-cell generated${asset ? '' : ' empty'}" data-input="generated">
+  return `<div class="img-cell generated${asset ? ' has-media' : ' empty'}" data-input="generated">
     <div class="img-cell-head">
       <div class="label">Generated</div>
     </div>
+    ${asset ? `
+      <button class="asset-menu-btn img-cell-menu" data-generated-menu title="Actions">
+        <svg><use href="#i-dots"/></svg>
+      </button>` : ''}
     <div class="img-cell-content" ${asset ? 'data-zoom="1"' : ''}>
       ${asset
         ? `<img src="${esc(asset.url)}" alt="${esc(asset.name)}">`
@@ -1423,8 +1448,30 @@ function generatedCellHtml(asset) {
   </div>`;
 }
 
+function updateImageCellRatios(root = document) {
+  root.querySelectorAll('.img-cell.has-media img, .img-cell.has-media video').forEach(media => {
+    const apply = () => {
+      const w = media.videoWidth || media.naturalWidth;
+      const h = media.videoHeight || media.naturalHeight;
+      if (!w || !h) return;
+      const cell = media.closest('.img-cell');
+      if (!cell) return;
+      cell.style.setProperty('--media-ratio', `${w} / ${h}`);
+      cell.classList.toggle('portrait-media', h > w * 1.15);
+      cell.classList.toggle('landscape-media', w > h * 1.35);
+    };
+    apply();
+    media.addEventListener(media.tagName === 'VIDEO' ? 'loadedmetadata' : 'load', apply, { once: true });
+  });
+}
+
 function bindImgStrip(m) {
   const slots = state.imgInputs[m.id];
+  const latest = (state.recents[m.id] || []).at(-1);
+  $$('[data-generated-menu]', $('#wsImgStrip')).forEach(b => b.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (latest) showAssetMenu(latest, b);
+  }));
   // Toggle on/off per cell
   $$('[data-toggle-input]', $('#wsImgStrip')).forEach(b => b.addEventListener('click', (e) => {
     e.stopPropagation();
@@ -2060,6 +2107,9 @@ async function runJob(job) {
         if (img._previewUrl) URL.revokeObjectURL(img._previewUrl);
         img._previewUrl = objUrl;
         img.src = objUrl;
+        genCell.classList.add('has-media');
+        genCell.closest('.img-strip')?.classList.add('has-media');
+        updateImageCellRatios(genCell);
       } catch {}
     }, 1200);
   }
