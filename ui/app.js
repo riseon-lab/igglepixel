@@ -29,6 +29,11 @@ const state = {
   recents:       {},          // model_id -> [asset, …] (this session only)
   imgInputs:     {},          // { model_id -> { ref:{img,enabled}, pose:{...}, ... } }
   loraStates:    {},          // { model_id -> { filename -> { on, strength } } }
+  chats:         {},          // { model_id -> [{role, text, thinking?, streaming?}] }
+  chatSessions:  {},          // { model_id -> [{id,title,messages,compact_summary,…}] }
+  activeChat:    {},          // { model_id -> session_id }
+  llmDrawerOpen: true,
+  llmBusy:       false,
   queue:         [],          // [{ id, model_id, params, loras, status }]
   queueRunning:  false,
   lastSeed:      {},          // { model_id -> int } — actual seed used by last generation
@@ -123,10 +128,10 @@ const PARAM_GROUPS = {
   llm: {
     title: 'Inference',
     fields: [
-      { key: 'max_model_len', label: 'Context length',     type: 'number', default: 8192, step: 1024 },
-      { key: 'temperature',   label: 'Temperature',         type: 'slider', min: 0, max: 2,  step: 0.05, default: 0.7 },
-      { key: 'top_p',         label: 'Top P',               type: 'slider', min: 0, max: 1,  step: 0.01, default: 0.95 },
-      { key: 'tensor_parallel', label: 'Tensor-parallel GPUs', type: 'number', default: 1, min: 1, max: 8 },
+      { key: 'thinking',       label: 'Thinking',        type: 'bool',   default: true },
+      { key: 'max_new_tokens', label: 'Output length',   type: 'slider', min: 64, max: 2048, step: 64, default: 512 },
+      { key: 'temperature',    label: 'Temperature',     type: 'slider', min: 0,  max: 2,    step: 0.05, default: 0.7 },
+      { key: 'top_p',          label: 'Top P',           type: 'slider', min: 0,  max: 1,    step: 0.01, default: 0.9 },
     ],
   },
   audio: {
@@ -150,7 +155,7 @@ const PARAM_GROUPS = {
 const DEFAULT_GROUPS_BY_CATEGORY = {
   image: ['prompt', 'generation', 'dimensions', 'reference', 'precision', 'server'],
   video: ['prompt', 'generation', 'video', 'reference', 'precision', 'server'],
-  llm:   ['llm', 'precision', 'server'],
+  llm:   ['llm'],
   audio: ['audio', 'server'],
 };
 
@@ -639,6 +644,26 @@ function bindShell() {
   $('#wsLoraAdd').addEventListener('click', () => {
     if (state.selected) openLoraPicker(state.selected);
   });
+  $('#llmSend').addEventListener('click', sendLLMMessage);
+  $('#llmPrompt').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      sendLLMMessage();
+    }
+  });
+  $('#llmSessionsToggle').addEventListener('click', () => {
+    state.llmDrawerOpen = !state.llmDrawerOpen;
+    if (state.selected?.category === 'llm') renderLLMSessions(state.selected);
+  });
+  $('#llmSessionsClose').addEventListener('click', () => {
+    state.llmDrawerOpen = false;
+    if (state.selected?.category === 'llm') renderLLMSessions(state.selected);
+  });
+  $('#llmNewSession').addEventListener('click', () => {
+    if (!state.selected || state.selected.category !== 'llm') return;
+    createChatSession(state.selected.id, true);
+    renderLLMWorkspace(state.selected, resolveFields(state.selected));
+  });
 
   // Lightbox
   $('#lightboxClose').addEventListener('click', closeLightbox);
@@ -695,6 +720,12 @@ function applySettingsToInputs() {
 
 // ── Views ────────────────────────────────────────────────────────────────
 function switchView(name, push = true) {
+  if (name !== 'workspace') {
+    $('.main')?.classList.remove('llm-open');
+    $('[data-view="workspace"]')?.classList.remove('llm-mode');
+    const toggle = $('#llmSessionsToggle');
+    if (toggle) toggle.style.display = 'none';
+  }
   if (push) {
     const url = new URL(window.location);
     url.hash = name === 'models' ? '' : name;
@@ -888,6 +919,37 @@ function pickAutoQuant(m, vramGb) {
   return quants[quants.length - 1];
 }
 
+function selectedQuantId(m) {
+  const saved = modelStateOf(m.id).quant || 'auto';
+  if (saved !== 'auto') return saved;
+  return pickAutoQuant(m, state.gpu?.vram_gb || 0)?.id || null;
+}
+
+function resolveContextConfig(m) {
+  const vram = state.gpu?.vram_gb || 0;
+  const quant = selectedQuantId(m);
+  let cfg = {
+    tokens: Number(m.context_window || m.max_context_tokens || m.max_model_len || 2048),
+    mode: 'workspace',
+    auto_compact_at: 0.82,
+    keep_recent_messages: 8,
+    label: 'Default',
+  };
+
+  if (Array.isArray(m.context_by_vram)) {
+    const tier = m.context_by_vram.find(t => {
+      const minGb = t.min_gb ?? 0;
+      const quantOk = !t.quant || !quant || t.quant === quant;
+      return vram >= minGb && quantOk;
+    });
+    if (tier) cfg = { ...cfg, ...tier, label: tier.label || `${tier.tokens?.toLocaleString?.() || tier.tokens} tokens` };
+  }
+
+  if (m.context_policy) cfg = { ...cfg, ...m.context_policy };
+  cfg.tokens = Number(cfg.tokens || 2048);
+  return cfg;
+}
+
 function drawerPhase(id) {
   const s = modelStateOf(id);
   if (s.error)             return 'error';
@@ -963,6 +1025,11 @@ function renderDrawerBody() {
     <div class="drawer-stats">
       <div class="drawer-stat"><div class="label">VRAM</div><div class="value">${sizeStr}</div></div>
       <div class="drawer-stat"><div class="label">LoRA</div><div class="value">${m.supports_lora ? 'yes' : 'no'}</div></div>
+      ${m.category === 'llm' ? `
+        <div class="drawer-stat" style="grid-column:1/-1">
+          <div class="label">Context</div>
+          <div class="value">${contextStatText(m)}</div>
+        </div>` : ''}
       <div class="drawer-stat" style="grid-column:1/-1"><div class="label">HF repo</div><div class="value">${m.hf_repo
         ? `<a class="ext-link" href="https://huggingface.co/${esc(m.hf_repo)}" target="_blank" rel="noopener">${esc(m.hf_repo)} ↗</a>`
         : '—'}</div></div>
@@ -1027,6 +1094,14 @@ function renderDrawerBody() {
   });
 
   renderDrawerPrimary();
+}
+
+function contextStatText(m) {
+  const cfg = resolveContextConfig(m);
+  const bits = [`${cfg.tokens.toLocaleString()} tokens`];
+  if (cfg.label) bits.push(cfg.label);
+  if (cfg.mode) bits.push(cfg.mode);
+  return esc(bits.join(' · '));
 }
 
 function renderDrawerPrimary() {
@@ -1274,6 +1349,15 @@ function openWorkspace(modelId, push = true) {
       state.params.height = tier.h;
     }
   }
+  if (m.category === 'llm') {
+    const cfg = resolveContextConfig(m);
+    state.params.max_model_len = cfg.tokens;
+    state.params.context_policy = {
+      mode: cfg.mode || 'workspace',
+      auto_compact_at: cfg.auto_compact_at ?? 0.82,
+      keep_recent_messages: cfg.keep_recent_messages ?? 8,
+    };
+  }
   closeDrawer();
   renderWorkspace(m, sections);
   switchView('workspace', push);
@@ -1285,6 +1369,8 @@ function closeWorkspace() {
 }
 
 function renderWorkspace(m, sections) {
+  const isLLM = m.category === 'llm';
+
   // Header
   $('#wsTitle').textContent = m.name;
   $('#wsSub').textContent   = `${m.hf_repo || ''} · ${m.runner_module || ''}`;
@@ -1294,6 +1380,19 @@ function renderWorkspace(m, sections) {
 
   // Status pill — derived from modelStates + running poll
   updateWsStatus();
+
+  const workspaceView = $('[data-view="workspace"]');
+  workspaceView?.classList.toggle('llm-mode', isLLM);
+  $('.main')?.classList.toggle('llm-open', isLLM);
+  $('#llmSessionsToggle').style.display = isLLM ? '' : 'none';
+  $('#llmWorkspace').style.display = isLLM ? '' : 'none';
+  $('#wsGrid').style.display = isLLM ? 'none' : '';
+  $('#wsRecentSection').style.display = isLLM ? 'none' : '';
+  if (isLLM) {
+    $('#wsImgInputs').style.display = 'none';
+    renderLLMWorkspace(m, sections);
+    return;
+  }
 
   // Image-input strip (Ref/Pose/Style/+ Generated) — only if the model declares it.
   const inputs = m.image_inputs || [];
@@ -1361,6 +1460,414 @@ function renderWorkspace(m, sections) {
 
   // Wire dynamic inputs (param fields, seed toggle)
   bindWorkspaceInputs();
+}
+
+function renderLLMWorkspace(m, sections) {
+  ensureChatSession(m.id);
+
+  const controls = sections.flatMap(s => s.fields)
+    .filter(f => f.key !== 'prompt' && f.key !== 'messages')
+    .map(f => renderField(f))
+    .join('');
+  $('#llmSettings').innerHTML = controls;
+  bindParamInputs($('#llmSettings'));
+  renderLLMSessions(m);
+  renderLLMThread(m);
+  renderLLMContext(m);
+  updateLLMSendButton();
+}
+
+function renderLLMThread(modelOrId) {
+  const m = typeof modelOrId === 'string' ? state.models.find(x => x.id === modelOrId) : modelOrId;
+  const modelId = m?.id || modelOrId;
+  const thread = $('#llmThread');
+  const session = activeChatSession(modelId);
+  const messages = session?.messages || [];
+  if (!messages.length) {
+    thread.innerHTML = `
+      <div class="llm-empty">
+        <div class="llm-orbit" aria-hidden="true"><span></span><span></span><span></span></div>
+        <div class="llm-empty-title">Start a conversation</div>
+        <div class="llm-empty-sub">Ask for drafts, plans, code ideas, or a quick second brain check.</div>
+      </div>`;
+    return;
+  }
+
+  // Pre-compute which assistant messages have a saved counterpart so we can
+  // mark them visually and swap "Save" → "Saved" on the action row.
+  const savedKeys = new Set(
+    (session.saved_context || []).map(b => `${b.user} ${b.assistant}`)
+  );
+  thread.innerHTML = messages.map((msg, idx) => {
+    const busy = msg.thinking || msg.streaming;
+    const canEdit = msg.role === 'user' && !state.llmBusy;
+    const canCopy = msg.text && !msg.streaming;
+    const prev = messages[idx - 1];
+    const canSave = msg.role === 'assistant' && msg.text && !msg.streaming
+                  && prev && prev.role === 'user';
+    const isSaved = canSave && savedKeys.has(`${prev.text} ${msg.text}`);
+    return `
+      <div class="llm-message ${esc(msg.role)}${isSaved ? ' saved' : ''}" data-msg-index="${idx}">
+        <div class="llm-bubble">
+          ${busy ? thinkingIndicator(msg.thinking) : ''}
+          ${msg.text ? `<div class="llm-text">${formatChatText(msg.text)}</div>` : ''}
+          ${canEdit || canCopy || canSave ? `
+            <div class="llm-msg-actions">
+              ${canCopy ? `<button class="llm-msg-action" data-copy-msg="${idx}">Copy</button>` : ''}
+              ${canEdit ? `<button class="llm-msg-action" data-edit-msg="${idx}">Edit</button>` : ''}
+              ${canSave ? (isSaved
+                ? `<span class="llm-msg-action saved-tag">Saved</span>`
+                : `<button class="llm-msg-action" data-save-msg="${idx}">Save</button>`) : ''}
+            </div>` : ''}
+        </div>
+      </div>`;
+  }).join('');
+  bindLLMMessageActions(m, session);
+  thread.scrollTop = thread.scrollHeight;
+  if (m) renderLLMContext(m);
+}
+
+function bindLLMMessageActions(m, session) {
+  $('#llmThread').querySelectorAll('[data-copy-msg]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const msg = session.messages[Number(btn.dataset.copyMsg)];
+      if (!msg?.text) return;
+      try {
+        await navigator.clipboard.writeText(msg.text);
+        toast('Copied', 'success');
+      } catch {
+        toast('Copy failed', 'error');
+      }
+    });
+  });
+  $('#llmThread').querySelectorAll('[data-edit-msg]').forEach(btn => {
+    btn.addEventListener('click', () => editLLMMessage(m, Number(btn.dataset.editMsg)));
+  });
+  $('#llmThread').querySelectorAll('[data-save-msg]').forEach(btn => {
+    btn.addEventListener('click', () => saveContextFromMessage(m, session, Number(btn.dataset.saveMsg)));
+  });
+}
+
+// Save a user→assistant turn as persistent context for this session.
+// Stays verbatim across compaction; visible in transcript with a marker;
+// manageable from the Saved Context modal.
+function saveContextFromMessage(m, session, assistantIdx) {
+  const assistant = session.messages[assistantIdx];
+  const user = session.messages[assistantIdx - 1];
+  if (!assistant || assistant.role !== 'assistant' || !user || user.role !== 'user') return;
+  session.saved_context ||= [];
+  // Don't double-save the same exact pair.
+  if (session.saved_context.some(b => b.user === user.text && b.assistant === assistant.text)) return;
+  session.saved_context.push({
+    id: `ctx_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+    user: user.text,
+    assistant: assistant.text,
+    label: user.text.slice(0, 40).trim() || 'Saved exchange',
+    tokens: estimateTokens(`${user.text} ${assistant.text}`),
+  });
+  session.updated_at = Date.now();
+  toast('Saved to context', 'success');
+  renderLLMThread(m);
+  renderLLMContext(m);
+}
+
+function openSavedContextModal(m) {
+  const session = activeChatSession(m.id);
+  if (!session) return;
+  const blocks = session.saved_context || [];
+  const totalTokens = blocks.reduce((sum, b) => sum + (b.tokens || 0), 0);
+
+  $('#modalTitle').textContent = 'Saved context';
+  $('#modalMeta').textContent  = blocks.length
+    ? `${blocks.length} block${blocks.length === 1 ? '' : 's'} · ~${totalTokens.toLocaleString()} tokens`
+    : 'Nothing saved yet — use the Save button under any assistant reply.';
+
+  const renderRows = () => blocks.map(b => `
+    <div class="ctx-row" data-ctx-id="${esc(b.id)}">
+      <div class="ctx-row-head">
+        <input class="ctx-label-input" type="text" value="${esc(b.label || '')}" data-ctx-label="${esc(b.id)}" placeholder="Label">
+        <span class="ctx-tokens">~${(b.tokens || 0).toLocaleString()} tokens</span>
+        <button class="icon-btn" data-ctx-delete="${esc(b.id)}" title="Delete"><svg><use href="#i-trash"/></svg></button>
+      </div>
+      <div class="ctx-snippet"><span class="ctx-role">user</span> ${esc(b.user.slice(0, 200))}${b.user.length > 200 ? '…' : ''}</div>
+      <div class="ctx-snippet"><span class="ctx-role">assistant</span> ${esc(b.assistant.slice(0, 200))}${b.assistant.length > 200 ? '…' : ''}</div>
+    </div>`).join('');
+
+  $('#modalBody').innerHTML = blocks.length
+    ? `<div class="ctx-list">${renderRows()}</div>`
+    : `<div class="empty" style="padding:24px;text-align:center"><span style="font-size:11.5px;color:var(--t-3)">Nothing saved yet</span></div>`;
+  $('#modalFoot').innerHTML = `<button class="btn ghost" id="modalCancel">Close</button>`;
+  $('#modalCancel').onclick = closeModal;
+
+  // Inline label edits update the session immediately.
+  $$('[data-ctx-label]', $('#modalBody')).forEach(input => {
+    input.addEventListener('input', () => {
+      const id = input.dataset.ctxLabel;
+      const block = (session.saved_context || []).find(b => b.id === id);
+      if (block) {
+        block.label = input.value;
+        session.updated_at = Date.now();
+      }
+    });
+  });
+  // Delete drops the block and re-renders the modal so the token count updates live.
+  $$('[data-ctx-delete]', $('#modalBody')).forEach(btn => {
+    btn.addEventListener('click', () => {
+      const id = btn.dataset.ctxDelete;
+      session.saved_context = (session.saved_context || []).filter(b => b.id !== id);
+      session.updated_at = Date.now();
+      renderLLMThread(m);
+      renderLLMContext(m);
+      openSavedContextModal(m);   // reopen so it re-renders with updated list/total
+    });
+  });
+
+  openModal();
+}
+
+function editLLMMessage(m, index) {
+  const session = activeChatSession(m.id);
+  const msg = session?.messages?.[index];
+  if (!session || !msg || msg.role !== 'user' || state.llmBusy) return;
+  const node = $(`.llm-message[data-msg-index="${index}"] .llm-bubble`, $('#llmThread'));
+  if (!node) return;
+  node.classList.add('editing');
+  node.innerHTML = `
+    <textarea class="llm-edit-input">${esc(msg.text)}</textarea>
+    <div class="llm-edit-actions">
+      <button class="btn sm ghost" data-edit-cancel>Cancel</button>
+      <button class="btn sm primary" data-edit-save>Save & rerun</button>
+    </div>`;
+  const textarea = $('.llm-edit-input', node);
+  textarea.focus();
+  textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+  $('[data-edit-cancel]', node).addEventListener('click', () => renderLLMThread(m));
+  $('[data-edit-save]', node).addEventListener('click', () => {
+    const next = textarea.value.trim();
+    if (!next) return;
+    rerunFromEditedMessage(m, session, index, next);
+  });
+}
+
+function thinkingIndicator(showLabel = true) {
+  return `
+    <div class="llm-thinking">
+      <span class="think-core"></span>
+      ${showLabel ? '<span class="think-label">Thinking</span>' : ''}
+      <span class="think-dots"><i></i><i></i><i></i></span>
+    </div>`;
+}
+
+function formatChatText(text) {
+  return esc(text).replace(/\n/g, '<br>');
+}
+
+function ensureChatSession(modelId) {
+  state.chatSessions[modelId] ||= [];
+  if (!state.chatSessions[modelId].length) createChatSession(modelId, true);
+  const activeId = state.activeChat[modelId];
+  const active = state.chatSessions[modelId].find(s => s.id === activeId);
+  if (!active) state.activeChat[modelId] = state.chatSessions[modelId][0].id;
+  return activeChatSession(modelId);
+}
+
+function createChatSession(modelId, activate = false) {
+  state.chatSessions[modelId] ||= [];
+  const session = {
+    id: `chat_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+    title: 'New chat',
+    messages: [],
+    compact_summary: '',
+    compacted_count: 0,
+    saved_context: [],   // [{id, user, assistant, label, tokens}] — user-pinned exchanges
+    created_at: Date.now(),
+    updated_at: Date.now(),
+  };
+  state.chatSessions[modelId].unshift(session);
+  if (activate) state.activeChat[modelId] = session.id;
+  return session;
+}
+
+function activeChatSession(modelId) {
+  const sessions = state.chatSessions[modelId] || [];
+  return sessions.find(s => s.id === state.activeChat[modelId]) || sessions[0] || null;
+}
+
+function renderLLMSessions(m) {
+  const drawer = $('#llmSessions');
+  drawer.classList.toggle('open', state.llmDrawerOpen);
+  $('.llm-shell')?.classList.toggle('drawer-open', state.llmDrawerOpen);
+  $('#llmSessionsToggle').classList.toggle('active', state.llmDrawerOpen);
+  $('#llmSessionsMeta').textContent = `${(state.chatSessions[m.id] || []).length} session${(state.chatSessions[m.id] || []).length === 1 ? '' : 's'}`;
+
+  const sessions = state.chatSessions[m.id] || [];
+  $('#llmSessionList').innerHTML = sessions.map(session => {
+    const active = session.id === state.activeChat[m.id];
+    const tokens = estimateSessionTokens(session);
+    const last = session.messages.at(-1)?.text || 'No messages yet';
+    return `
+      <div class="llm-session ${active ? 'active' : ''}" data-session="${esc(session.id)}">
+        <button class="llm-session-main" data-open-session="${esc(session.id)}">
+          <span class="llm-session-name">${esc(session.title)}</span>
+          <span class="llm-session-last">${esc(last)}</span>
+          <span class="llm-session-meta">${tokens} tokens${session.compacted_count ? ` · ${session.compacted_count} compacted` : ''}</span>
+        </button>
+        <button class="icon-btn" data-rename-session="${esc(session.id)}" title="Rename"><svg><use href="#i-dots"/></svg></button>
+        <button class="icon-btn danger" data-delete-session="${esc(session.id)}" title="Delete"><svg><use href="#i-trash"/></svg></button>
+      </div>`;
+  }).join('');
+
+  $('#llmSessionList').querySelectorAll('[data-open-session]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      state.activeChat[m.id] = btn.dataset.openSession;
+      renderLLMWorkspace(m, resolveFields(m));
+    });
+  });
+  $('#llmSessionList').querySelectorAll('[data-rename-session]').forEach(btn => {
+    btn.addEventListener('click', () => renameChatSession(m.id, btn.dataset.renameSession));
+  });
+  $('#llmSessionList').querySelectorAll('[data-delete-session]').forEach(btn => {
+    btn.addEventListener('click', () => deleteChatSession(m.id, btn.dataset.deleteSession));
+  });
+}
+
+function renameChatSession(modelId, sessionId) {
+  const session = (state.chatSessions[modelId] || []).find(s => s.id === sessionId);
+  if (!session) return;
+  const next = prompt('Rename chat', session.title);
+  if (!next) return;
+  session.title = next.trim().slice(0, 80) || session.title;
+  session.updated_at = Date.now();
+  const m = state.models.find(x => x.id === modelId);
+  if (m) renderLLMSessions(m);
+}
+
+async function deleteChatSession(modelId, sessionId) {
+  const sessions = state.chatSessions[modelId] || [];
+  const session = sessions.find(s => s.id === sessionId);
+  if (!session) return;
+  if (!await confirmModal('Delete Chat', `Delete "${esc(session.title)}" from this session? This removes the conversation from the current app memory.`, 'Delete', true)) return;
+  state.chatSessions[modelId] = sessions.filter(s => s.id !== sessionId);
+  if (!state.chatSessions[modelId].length) createChatSession(modelId, true);
+  if (state.activeChat[modelId] === sessionId) state.activeChat[modelId] = state.chatSessions[modelId][0].id;
+  const m = state.models.find(x => x.id === modelId);
+  if (m) renderLLMWorkspace(m, resolveFields(m));
+}
+
+function autoNameSession(session, promptText) {
+  if (!session || session.title !== 'New chat') return;
+  const words = promptText.replace(/\s+/g, ' ').trim().split(' ').slice(0, 7).join(' ');
+  session.title = words.length > 36 ? `${words.slice(0, 34)}…` : (words || 'New chat');
+}
+
+function renderLLMContext(m) {
+  const session = activeChatSession(m.id);
+  const used = estimateSessionTokens(session);
+  const limit = contextLimitFor(m);
+  const pct = Math.min(100, Math.round((used / limit) * 100));
+  const left = Math.max(0, 100 - pct);
+  const remaining = Math.max(0, limit - used);
+  const compacted = session?.compacted_count || 0;
+  const compacting = (session?.compacting_until || 0) > Date.now();
+  const savedCount = (session?.saved_context || []).length;
+  $('#llmContext').innerHTML = `
+    <button class="llm-context-meter ${compacting ? 'compacting' : ''}" type="button" aria-label="Context window ${pct}% full">
+      <span class="context-ring" aria-hidden="true">
+        <svg viewBox="0 0 36 36">
+          <circle class="context-ring-bg" cx="18" cy="18" r="14"></circle>
+          <circle class="context-ring-fill" cx="18" cy="18" r="14" pathLength="100" stroke-dasharray="${pct} 100"></circle>
+        </svg>
+      </span>
+      <span class="context-mini">${left}% left</span>
+      <span class="llm-context-card" role="tooltip">
+        <span class="ctx-muted">Context window</span>
+        <strong>${pct}% full</strong>
+        <span>${used.toLocaleString()} / ${limit.toLocaleString()} tokens used</span>
+        <span>${remaining.toLocaleString()} tokens left</span>
+        <span>${savedCount} saved block${savedCount === 1 ? '' : 's'}</span>
+        <span>${compacting ? 'Compacting older turns now' : compacted ? `${compacted} messages compacted` : 'Auto compacts near 82% full'}</span>
+      </span>
+    </button>
+    <button class="llm-context-manage" type="button" id="llmContextManage" aria-label="Manage saved context">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v10Z"/></svg>
+      <span>Saved${savedCount ? ` · ${savedCount}` : ''}</span>
+    </button>`;
+  $('#llmContextManage')?.addEventListener('click', () => openSavedContextModal(m));
+}
+
+function contextLimitFor(m) {
+  return Number(state.params.max_model_len || resolveContextConfig(m).tokens || 2048);
+}
+
+function estimateSessionTokens(session) {
+  if (!session) return 0;
+  const body = [
+    session.compact_summary || '',
+    ...(session.saved_context || []).map(b => `${b.user}\n${b.assistant}`),
+    ...(session.messages || []).map(msg => `${msg.role}: ${msg.text || ''}`),
+  ].join('\n');
+  return estimateTokens(body);
+}
+
+function estimateTokens(text) {
+  return Math.max(1, Math.ceil(String(text || '').length / 4));
+}
+
+function compactSessionIfNeeded(session, m) {
+  if (!session) return false;
+  const limit = contextLimitFor(m);
+  const policy = state.params.context_policy || resolveContextConfig(m);
+  const compactAt = Number(policy.auto_compact_at ?? 0.82);
+  const keepCount = Number(policy.keep_recent_messages ?? 8);
+  if (estimateSessionTokens(session) < limit * compactAt) return false;
+  const keep = session.messages.slice(-keepCount);
+  const old = session.messages.slice(0, -keepCount);
+  if (!old.length) return false;
+  const digest = old.map(msg => `${msg.role}: ${String(msg.text || '').replace(/\s+/g, ' ').slice(0, 220)}`).join('\n');
+  session.compact_summary = [
+    session.compact_summary,
+    `Earlier conversation summary:\n${digest}`,
+  ].filter(Boolean).join('\n\n').slice(-Math.floor(limit * 2.2));
+  session.compacted_count += old.length;
+  session.messages = keep;
+  session.compacting_until = Date.now() + 1800;
+  setTimeout(() => {
+    if (state.selected?.id === m.id && activeChatSession(m.id)?.id === session.id) {
+      renderLLMContext(m);
+    }
+  }, 1850);
+  return true;
+}
+
+function messagesForLLMPayload(session, assistant) {
+  const messages = [];
+  if (session?.compact_summary) {
+    messages.push({ role: 'system', content: session.compact_summary });
+  }
+  // Saved context (user-pinned exchanges). Framed so the model treats them
+  // as established background, not as recent conversation to reference.
+  // The "do not paraphrase / do not say 'as we discussed'" line is the bit
+  // most chat UIs forget — it's what stops the performative-recall problem.
+  if (session?.saved_context?.length) {
+    const blocks = session.saved_context
+      .map(b => `User: ${b.user}\nAssistant: ${b.assistant}`)
+      .join('\n\n');
+    messages.push({
+      role: 'system',
+      content:
+        'The user has saved the following past exchanges as relevant context. ' +
+        'Treat them as established background — preferences, facts, or reference ' +
+        'material that already shaped this conversation. Apply them silently. ' +
+        'Do NOT paraphrase them back to the user. Do NOT say "as you mentioned earlier" ' +
+        'or "as we discussed". Use the information only when it directly bears on the ' +
+        'current question.\n\n=== Saved context ===\n' + blocks + '\n=== End saved context ===',
+    });
+  }
+  messages.push(...(session?.messages || [])
+    .filter(msg => msg !== assistant)
+    .slice(-16)
+    .map(msg => ({ role: msg.role, content: msg.text })));
+  return messages;
 }
 
 function miniNumber(f) {
@@ -2039,6 +2546,130 @@ function bindWorkspaceInputs() {
   $('#wsNegPrompt').oninput  = (e) => { state.params.negative_prompt = e.target.value; };
   bindSeedField();
 }
+
+async function sendLLMMessage() {
+  const m = state.selected;
+  if (!m || m.category !== 'llm' || state.llmBusy) return;
+  const input = $('#llmPrompt');
+  const prompt = (input.value || '').trim();
+  if (!prompt) return;
+
+  const session = ensureChatSession(m.id);
+  input.value = '';
+  await generateLLMReply(m, session, prompt);
+}
+
+async function generateLLMReply(m, session, prompt, options = {}) {
+  const messages = session.messages;
+  if (options.replaceFromIndex != null) {
+    messages.splice(options.replaceFromIndex);
+  }
+  messages.push({ role: 'user', text: prompt });
+  autoNameSession(session, prompt);
+  const assistant = {
+    role: 'assistant',
+    text: '',
+    thinking: state.params.thinking !== false,
+    streaming: true,
+  };
+  messages.push(assistant);
+  state.llmBusy = true;
+  setModelState(m.id, { generating: true });
+  updateWsStatus();
+  updateLLMSendButton();
+  renderLLMSessions(m);
+  renderLLMThread(m);
+
+  try {
+    let text = '';
+    const compactedNow = compactSessionIfNeeded(session, m);
+    if (compactedNow) {
+      renderLLMThread(m);
+      await delay(450);
+    }
+    if (state.preview) {
+      await delay(650);
+      text = previewLLMText(prompt, state.params.thinking !== false);
+    } else {
+      const history = messagesForLLMPayload(session, assistant);
+      const res = await api.generate({
+        model_id: m.id,
+        params: {
+          ...state.params,
+          prompt,
+          messages: history,
+        },
+        loras: [],
+        hf_token: state.settings.hf_token || null,
+      });
+      text = res.meta?.text || res.text || '';
+    }
+    assistant.thinking = false;
+    await streamLLMText(m, assistant, text || 'I did not get any text back from the runner.');
+    session.updated_at = Date.now();
+    renderLLMSessions(m);
+  } catch (e) {
+    assistant.thinking = false;
+    assistant.streaming = false;
+    assistant.text = `Generation failed: ${e.message || 'unknown error'}`;
+    renderLLMThread(m);
+    toast(`Text generation failed: ${e.message || 'unknown'}`, 'error');
+  } finally {
+    state.llmBusy = false;
+    setModelState(m.id, { generating: false });
+    updateWsStatus();
+    updateLLMSendButton();
+  }
+}
+
+function rerunFromEditedMessage(m, session, index, text) {
+  if (state.llmBusy) return;
+  generateLLMReply(m, session, text, { replaceFromIndex: index });
+}
+
+async function streamLLMText(modelOrId, message, text) {
+  const m = typeof modelOrId === 'string' ? state.models.find(x => x.id === modelOrId) : modelOrId;
+  const modelId = m?.id || modelOrId;
+  message.text = '';
+  message.streaming = true;
+  renderLLMThread(m || modelId);
+  const source = String(text || '');
+  for (let i = 0; i < source.length; i += chunkSizeFor(source, i)) {
+    message.text = source.slice(0, Math.min(source.length, i + chunkSizeFor(source, i)));
+    renderLLMThread(m || modelId);
+    await delay(source.length > 800 ? 10 : 18);
+  }
+  message.text = source;
+  message.streaming = false;
+  renderLLMThread(m || modelId);
+}
+
+function chunkSizeFor(text, index) {
+  const remaining = text.length - index;
+  if (remaining > 1200) return 18;
+  if (remaining > 500) return 10;
+  return 4;
+}
+
+function previewLLMText(prompt, thinking) {
+  const trimmed = prompt.replace(/\s+/g, ' ').slice(0, 180);
+  const preface = thinking
+    ? 'I would start by narrowing the goal, then turn it into the smallest useful next step.'
+    : 'Here is a simple first pass.';
+  return `${preface}\n\nFor "${trimmed}", I would keep the interface quiet: one clear conversation column, a compact composer, and controls tucked into a collapsible panel so they are available without taking over the workspace.\n\nThe useful default is to make the model feel alive while it works: show a thinking state immediately, then reveal the answer in small chunks so the user can see progress instead of waiting on a blank screen.`;
+}
+
+function updateLLMSendButton() {
+  const btn = $('#llmSend');
+  const input = $('#llmPrompt');
+  if (!btn || !input) return;
+  btn.disabled = state.llmBusy;
+  btn.innerHTML = state.llmBusy
+    ? '<span class="spinner"></span><span>Thinking</span>'
+    : '<svg><use href="#i-bolt"/></svg><span>Send</span>';
+}
+
+const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 // ── Queue ────────────────────────────────────────────────────────────────
 function snapshotJob() {
@@ -2741,17 +3372,16 @@ async function startHFDownload() {
   const repo = $('#hfRepo').value.trim();
   if (!repo) return toast('Enter a repo ID', 'error');
   const file = $('#hfFile').value.trim();
-  const target = $('#hfTarget').value;
   const token = $('#hfTokenDl').value;
   try {
-    await api.hfDownload({ repo_id: repo, filename: file || null, target_dir: target, hf_token: token || null });
+    await api.hfDownload({ repo_id: repo, filename: file || null, target_dir: 'loras', hf_token: token || null });
     toast(`Started: ${repo}`, 'success');
   } catch { toast('Failed to start', 'error'); return; }
 
   // The download runs in a backend background subprocess; poll the LoRA list
   // for ~3 minutes so a freshly-arrived file shows up in the LoRAs tab without
   // the user having to navigate away and back.
-  if (target === 'loras') watchForNewLoras(repo);
+  watchForNewLoras(repo);
 }
 
 async function watchForNewLoras(label) {
@@ -2800,6 +3430,32 @@ function confirmModal(title, text, confirmLabel = 'OK', danger = false) {
 // cards as production. Append entries here when adding new runners.
 function mockModels() {
   return [
+    {
+      id: 'tinyllama-chat', name: 'TinyLlama Chat 1.1B', category: 'llm',
+      description: 'Lightweight local chat model for prototyping the text workspace UI. Small enough for quick iteration; not intended as the final quality bar.',
+      runner_module: 'backend.runners.tinyllama_chat',
+      hf_repo: 'TinyLlama/TinyLlama-1.1B-Chat-v1.0',
+      min_vram_gb: 4, recommended_vram_gb: 8,
+      context_window: 2048,
+      context_by_vram: [
+        { min_gb: 12, tokens: 4096, label: 'extended' },
+        { min_gb: 0,  tokens: 2048, label: 'safe default' },
+      ],
+      context_policy: {
+        mode: 'workspace',
+        auto_compact_at: 0.82,
+        keep_recent_messages: 8,
+      },
+      supports_lora: false, gpu_support: ['nvidia'],
+      param_groups: ['llm'],
+      param_keys: ['thinking', 'max_new_tokens', 'temperature', 'top_p'],
+      param_overrides: {
+        max_new_tokens: { default: 512, min: 64, max: 2048, step: 64 },
+        temperature:    { default: 0.7, min: 0, max: 2, step: 0.05 },
+        top_p:          { default: 0.9, min: 0, max: 1, step: 0.01 },
+        thinking:       { default: true },
+      },
+    },
     {
       id: 'qwen-image', name: 'Qwen-Image', category: 'image',
       description: "Alibaba's Qwen-Image text-to-image. Strong prompt adherence, native 1328×1328. ~40 GB on first download.",
