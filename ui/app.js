@@ -1939,19 +1939,24 @@ async function runJob(job) {
     previewInterval = setInterval(async () => {
       if (state.workspace !== job.model_id) return;
       try {
-        const url = `/api/runner/${job.model_id}/preview?t=${Date.now()}`;
-        const r = await fetch(url, { credentials: 'same-origin' });
+        const r = await fetch(`/api/runner/${job.model_id}/preview?t=${Date.now()}`, { credentials: 'same-origin' });
         if (!r.ok) return;
         const blob = await r.blob();
         const objUrl = URL.createObjectURL(blob);
-        const cell = document.querySelector('.img-cell.generated .img-cell-thumb');
-        if (cell) {
-          if (cell._previewUrl) URL.revokeObjectURL(cell._previewUrl);
-          cell._previewUrl = objUrl;
-          cell.src = objUrl;
-          cell.style.display = '';
-          cell.closest('.img-cell').classList.remove('empty');
+        const genCell = document.querySelector('.img-cell.generated');
+        if (!genCell) return;
+        const content = genCell.querySelector('.img-cell-content');
+        if (!content) return;
+        genCell.classList.remove('empty');
+        let img = content.querySelector('img');
+        if (!img) {
+          content.innerHTML = '';
+          img = document.createElement('img');
+          content.appendChild(img);
         }
+        if (img._previewUrl) URL.revokeObjectURL(img._previewUrl);
+        img._previewUrl = objUrl;
+        img.src = objUrl;
       } catch {}
     }, 1200);
   }

@@ -120,6 +120,7 @@ class Runner(RunnerBase):
             height=height,
             generator=gen,
             callback_on_step_end=_on_step,
+            callback_on_step_end_tensor_inputs=["latents"],
         )
 
         if self._cancel:
