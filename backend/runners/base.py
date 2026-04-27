@@ -129,7 +129,14 @@ class Runner(ABC):
             files = entry.get("files")
             if isinstance(files, list) and files:
                 # Multi-file logical LoRA (e.g. Wan Lightning high+low pair).
-                # Each file becomes its own adapter, scoped via dict to its target.
+                # Wan 2.2 MoE has separate `transformer` (high-noise expert) and
+                # `transformer_2` (low-noise expert) submodules. Each Lightning
+                # LoRA targets only one expert's module names — applying it
+                # pipe-wide makes PEFT validate against both and fail with
+                # "No modules were targeted" on the wrong one. So we load each
+                # file directly onto its matching submodule. set_adapters on
+                # the pipe still works after this since it propagates per
+                # submodule, ignoring components without that adapter name.
                 sh = float(entry.get("strength_high", 1.0))
                 sl = float(entry.get("strength_low",  sh))
                 for j, f in enumerate(files):
@@ -139,12 +146,22 @@ class Runner(ABC):
                     if not path:
                         print(f"[runner] LoRA file missing, skipping: {fname}", flush=True)
                         continue
-                    adapter = f"{run_prefix}_{i}_{j}"
-                    if target == "low":
-                        weight = {"transformer": 0.0, "transformer_2": sl}
-                    else:
-                        weight = {"transformer": sh,  "transformer_2": 0.0}
-                    print(f"[runner] loading LoRA {fname} (target={target}, strength={sl if target == 'low' else sh:.2f})", flush=True)
+                    adapter  = f"{run_prefix}_{i}_{j}"
+                    strength = sl if target == "low" else sh
+                    submodule = getattr(pipe, "transformer_2", None) if target == "low" else getattr(pipe, "transformer", None)
+                    if submodule is not None and hasattr(submodule, "load_lora_adapter"):
+                        print(f"[runner] loading LoRA {fname} onto {target}-noise expert (strength={strength:.2f})", flush=True)
+                        try:
+                            submodule.load_lora_adapter(str(path), adapter_name=adapter)
+                            names.append(adapter)
+                            weights.append(strength)
+                            continue
+                        except Exception as e:
+                            print(f"[runner] direct submodule load failed ({e}); trying pipe-level", flush=True)
+                    # Fallback for older diffusers / non-MoE pipes: pipe-level
+                    # load with per-component weight dict.
+                    weight = {"transformer": 0.0, "transformer_2": strength} if target == "low" else {"transformer": strength, "transformer_2": 0.0}
+                    print(f"[runner] loading LoRA {fname} via pipe (target={target}, strength={strength:.2f})", flush=True)
                     pipe.load_lora_weights(str(path.parent), weight_name=path.name, adapter_name=adapter)
                     names.append(adapter)
                     weights.append(weight)
