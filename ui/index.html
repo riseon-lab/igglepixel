@@ -269,7 +269,41 @@
         </div>
         <span class="ws-status" id="wsStatus"><span class="dot"></span><span>idle</span></span>
         <div class="ws-actions">
+          <button class="btn" id="llmSessionsToggle" style="display:none"><svg><use href="#i-llm"/></svg><span>Chats</span></button>
           <button class="btn" id="wsStop"><svg><use href="#i-stop"/></svg><span>Stop</span></button>
+        </div>
+      </div>
+
+      <div class="llm-workspace" id="llmWorkspace" style="display:none">
+        <div class="llm-shell">
+          <div class="llm-main">
+            <div class="llm-thread" id="llmThread"></div>
+            <div class="llm-fixed">
+              <div class="llm-context" id="llmContext"></div>
+              <details class="llm-controls" id="llmControls">
+                <summary>
+                  <span>Controls</span>
+                  <svg><use href="#i-down"/></svg>
+                </summary>
+                <div class="ws-settings llm-settings" id="llmSettings"></div>
+              </details>
+              <div class="llm-composer">
+                <textarea class="llm-input" id="llmPrompt" placeholder="Message the model…"></textarea>
+                <button class="btn primary llm-send" id="llmSend"><svg><use href="#i-bolt"/></svg><span>Send</span></button>
+              </div>
+            </div>
+          </div>
+          <aside class="llm-sessions open" id="llmSessions">
+            <div class="llm-sessions-head">
+              <div>
+                <div class="llm-sessions-title">Chats</div>
+                <div class="llm-sessions-sub" id="llmSessionsMeta">this model</div>
+              </div>
+              <button class="icon-btn" id="llmSessionsClose" title="Hide chats"><svg><use href="#i-x"/></svg></button>
+            </div>
+            <button class="btn primary block" id="llmNewSession"><svg><use href="#i-plus"/></svg>New chat</button>
+            <div class="llm-session-list" id="llmSessionList"></div>
+          </aside>
         </div>
       </div>
 
@@ -280,7 +314,7 @@
         <div class="img-strip" id="wsImgStrip"></div>
       </div>
 
-      <div class="ws-grid">
+      <div class="ws-grid" id="wsGrid">
         <!-- Main column: prompt + settings -->
         <div>
           <div class="ws-section">
@@ -333,7 +367,7 @@
         </aside>
       </div>
 
-      <div class="ws-section">
+      <div class="ws-section" id="wsRecentSection">
         <div class="ws-section-title">Recent <span class="meta">this session</span></div>
         <div class="ws-recent" id="wsRecent">
           <!-- queue placeholder cards (loading) get prepended here while
@@ -419,30 +453,22 @@
       <div class="page-head">
         <div>
           <div class="page-title">Downloads</div>
-          <div class="page-sub">Pull weights directly from HuggingFace into your workspace.</div>
+          <div class="page-sub">Pull LoRA files from HuggingFace into your library.</div>
         </div>
       </div>
       <div style="max-width:520px">
         <div class="card" style="padding:14px">
           <div class="field-stack">
             <div class="field">
-              <label class="field-label">Repo ID</label>
-              <input class="text-input" id="hfRepo" placeholder="e.g. black-forest-labs/FLUX.1-dev">
+              <label class="field-label">LoRA repo ID</label>
+              <input class="text-input" id="hfRepo" placeholder="e.g. username/example-lora">
             </div>
             <div class="field">
               <label class="field-label">Specific file <span class="hint">optional</span></label>
-              <input class="text-input" id="hfFile" placeholder="e.g. flux1-dev.safetensors">
+              <input class="text-input" id="hfFile" placeholder="e.g. adapter.safetensors">
             </div>
             <div class="field">
-              <label class="field-label">Save to</label>
-              <select class="select" id="hfTarget">
-                <option value="models">models/</option>
-                <option value="loras">loras/</option>
-                <option value="checkpoints">checkpoints/</option>
-              </select>
-            </div>
-            <div class="field">
-              <label class="field-label">HF token <span class="hint">for gated models</span></label>
+              <label class="field-label">HF token <span class="hint">for gated repos</span></label>
               <input class="text-input" id="hfTokenDl" type="password" placeholder="hf_…">
             </div>
             <button class="btn primary block lg" id="hfDownloadBtn"><svg><use href="#i-down"/></svg>Start download</button>
@@ -503,8 +529,8 @@
     <div class="nav-item" data-view="loras">
       <svg><use href="#i-loras"/></svg><span>LoRAs</span>
     </div>
-    <div class="nav-item" data-view="settings">
-      <svg><use href="#i-settings"/></svg><span>More</span>
+    <div class="nav-item" data-view="downloads">
+      <svg><use href="#i-downloads"/></svg><span>Downloads</span>
     </div>
   </nav>
 

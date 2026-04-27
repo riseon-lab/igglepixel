@@ -47,9 +47,11 @@ def main() -> None:
         try:
             runner.load()
             # Pre-load the moderation model so it's in VRAM by the time
-            # the first generate() call fires. No-op if disabled via env.
-            from backend import moderator
-            moderator.init()
+            # the first image generate() call fires. Text runners should not
+            # pay this VRAM/dependency cost.
+            if getattr(runner, "category", None) == "image":
+                from backend import moderator
+                moderator.init()
             state["ready"] = True
         except Exception as e:
             state["load_error"] = f"{type(e).__name__}: {e}"
