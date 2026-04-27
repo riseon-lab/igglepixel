@@ -360,6 +360,11 @@ async function bootApp() {
   await ensureServiceWorker();   // register SW so <img> requests get decrypted
   await primeBrowserKey();       // hand the IDB-cached CryptoKey to the SW
   await Promise.all([loadModels(), loadLoras(), loadAssets()]);
+  const initialView = window.location.hash.replace('#', '');
+  const canRestoreView = initialView
+    && initialView !== 'workspace'
+    && $(`.view[data-view="${CSS.escape(initialView)}"]`);
+  if (canRestoreView) switchView(initialView, false);
   pollRunning();
 }
 
@@ -869,6 +874,18 @@ function setModelState(id, patch) {
   state.modelStates[id] = { ...modelStateOf(id), ...patch };
 }
 
+// Pick the highest-quality quant the detected GPU can comfortably run.
+// Registry lists quants best-first; first match wins. Falls back to the
+// smallest if nothing else fits.
+function pickAutoQuant(m, vramGb) {
+  const quants = m.quants || [];
+  if (!quants.length) return null;
+  for (const q of quants) {
+    if (vramGb >= (q.auto_min_vram_gb ?? 0)) return q;
+  }
+  return quants[quants.length - 1];
+}
+
 function drawerPhase(id) {
   const s = modelStateOf(id);
   if (s.error)             return 'error';
@@ -957,11 +974,41 @@ function renderDrawerBody() {
       <div class="drawer-log-stream" id="drawerLogStream"><div class="log-line" style="color:rgba(255,255,255,0.35)">Waiting for runner…</div></div>
     ` : ''}
 
+    ${(() => {
+      // Quantisation dropdown — only for models that declare quant variants.
+      // "Auto" resolves to the highest-quality option the GPU can run, picked
+      // at launch time. User can override per-model and the choice persists.
+      if (!m.quants?.length) return '';
+      const vram = state.gpu?.vram_gb || 0;
+      const auto = pickAutoQuant(m, vram);
+      const cur  = modelStateOf(m.id).quant || 'auto';
+      const autoHint = auto ? `auto picks ${auto.label} on this GPU` : 'auto';
+      const opts = m.quants.map(q => {
+        const tooBig = vram > 0 && vram < (q.vram_gb - 4);   // 4 GB headroom slack
+        const note   = `${q.vram_gb} GB · ${q.description}`;
+        return `<option value="${q.id}" ${cur === q.id ? 'selected' : ''} ${tooBig ? 'disabled' : ''}>${q.label} — ${note}</option>`;
+      }).join('');
+      return `
+        <div class="field" style="margin-top:14px">
+          <label class="field-label">Quantisation <span class="hint">${autoHint}</span></label>
+          <select class="select" id="drawerQuant">
+            <option value="auto" ${cur === 'auto' ? 'selected' : ''}>Auto</option>
+            ${opts}
+          </select>
+        </div>`;
+    })()}
+
     <div class="field" style="margin-top:14px">
       <label class="field-label">HF token <span class="hint">gated repos</span></label>
       <input class="text-input" id="drawerHFToken" type="password" placeholder="hf_…" value="${state.settings.hf_token || ''}">
     </div>
   `;
+
+  // Persist the quant choice immediately on change so reopening the drawer
+  // remembers what the user picked.
+  $('#drawerQuant')?.addEventListener('change', (e) => {
+    setModelState(m.id, { quant: e.target.value });
+  });
 
   renderDrawerPrimary();
 }
@@ -1148,11 +1195,19 @@ async function waitForDownload(modelId, maxSeconds) {
 
 async function startRunner(m) {
   const hfToken = $('#drawerHFToken')?.value || state.settings.hf_token || '';
+  // Resolve quant: "auto" → highest tier the GPU can run; explicit → as-is.
+  // Read from the drawer if it's open, otherwise fall back to saved choice.
+  const quantSel = $('#drawerQuant')?.value || modelStateOf(m.id).quant || 'auto';
+  let quant = quantSel;
+  if (quantSel === 'auto' && m.quants?.length) {
+    const auto = pickAutoQuant(m, state.gpu?.vram_gb || 0);
+    quant = auto?.id || 'bf16';
+  }
   setModelState(m.id, { starting: true, error: null });
   renderDrawerBody();
   let logEs = null;
   try {
-    const launched = await api.launch({ model_id: m.id, loras: [], hf_token: hfToken });
+    const launched = await api.launch({ model_id: m.id, loras: [], hf_token: hfToken, quant });
     if (launched.status !== 'launched' && launched.status !== 'already_running') {
       throw new Error(launched.message || 'Launch failed');
     }
@@ -1191,6 +1246,17 @@ function openWorkspace(modelId, push = true) {
   const sections = resolveFields(m);
   for (const s of sections) for (const f of s.fields) {
     if (f.default !== undefined) state.params[f.key] = f.default;
+  }
+  // VRAM-aware size override — registry can declare default_size_by_vram so a
+  // 96 GB card lands on native 1328 instead of the 1024 fallback. Tiers are
+  // listed largest-first; first match wins.
+  if (Array.isArray(m.default_size_by_vram)) {
+    const vram = state.gpu?.vram_gb || 0;
+    const tier = m.default_size_by_vram.find(t => vram >= (t.min_gb || 0));
+    if (tier) {
+      state.params.width  = tier.w;
+      state.params.height = tier.h;
+    }
   }
   closeDrawer();
   renderWorkspace(m, sections);

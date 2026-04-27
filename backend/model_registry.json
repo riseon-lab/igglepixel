@@ -8,10 +8,20 @@
       "description": "Alibaba's Qwen-Image text-to-image. Strong prompt adherence, native 1328×1328. ~40 GB on first download.",
       "runner_module": "backend.runners.qwen_image",
       "hf_repo": "Qwen/Qwen-Image",
-      "min_vram_gb": 24,
-      "recommended_vram_gb": 48,
+      "min_vram_gb": 16,
+      "recommended_vram_gb": 24,
       "supports_lora": true,
       "gpu_support": ["nvidia"],
+      "default_size_by_vram": [
+        { "min_gb": 80, "w": 1328, "h": 1328 },
+        { "min_gb": 36, "w": 1024, "h": 1024 },
+        { "min_gb": 0,  "w": 768,  "h": 768  }
+      ],
+      "quants": [
+        { "id": "bf16", "label": "BF16", "description": "Best quality",       "vram_gb": 47, "auto_min_vram_gb": 80 },
+        { "id": "int8", "label": "INT8", "description": "Faster, near-bf16",  "vram_gb": 24, "auto_min_vram_gb": 36 },
+        { "id": "nf4",  "label": "NF4",  "description": "Fits any modern card","vram_gb": 14, "auto_min_vram_gb": 0  }
+      ],
       "param_groups": ["prompt", "generation", "dimensions"],
       "param_keys":   ["prompt", "negative_prompt", "seed", "steps", "cfg", "width", "height"],
       "param_overrides": {
@@ -39,10 +49,20 @@
       "description": "Alibaba's Qwen-Image-Edit — image-to-image with reference, pose and style conditioning.",
       "runner_module": "backend.runners.qwen_image_edit",
       "hf_repo": "Qwen/Qwen-Image-Edit",
-      "min_vram_gb": 24,
-      "recommended_vram_gb": 48,
+      "min_vram_gb": 16,
+      "recommended_vram_gb": 24,
       "supports_lora": true,
       "gpu_support": ["nvidia"],
+      "default_size_by_vram": [
+        { "min_gb": 80, "w": 1328, "h": 1328 },
+        { "min_gb": 36, "w": 1024, "h": 1024 },
+        { "min_gb": 0,  "w": 768,  "h": 768  }
+      ],
+      "quants": [
+        { "id": "bf16", "label": "BF16", "description": "Best quality",       "vram_gb": 47, "auto_min_vram_gb": 80 },
+        { "id": "int8", "label": "INT8", "description": "Faster, near-bf16",  "vram_gb": 24, "auto_min_vram_gb": 36 },
+        { "id": "nf4",  "label": "NF4",  "description": "Fits any modern card","vram_gb": 14, "auto_min_vram_gb": 0  }
+      ],
       "image_inputs": [
         { "key": "ref", "label": "Reference", "required": true, "hint": "What to keep from the original" }
       ],

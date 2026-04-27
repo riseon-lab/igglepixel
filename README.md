@@ -56,6 +56,7 @@ every container start by [`docker/entrypoint.sh`](docker/entrypoint.sh).
 | `UI_PORT`         | `3000` | FastAPI port |
 | `IGGLEPIXEL_MODERATION` | `true` | Run NSFW classifier on every generated image. Set to `false` for private dev pods or fork operators accepting their own responsibility. |
 | `HF_HOME`         | `/workspace/.cache/huggingface` | HF cache location (set by entrypoint so weights land on the persistent volume) |
+| `FORGE_QUANT`     | _(unset → bf16)_ | Set by the launcher per-runner from the UI Quant dropdown. Values: `bf16`, `int8`, `nf4`. Don't set manually. |
 
 If `git fetch` fails on boot (GitHub outage), the pod boots from the cached clone
 in `FORGE_CACHE_DIR` instead of failing.

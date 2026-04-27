@@ -521,6 +521,7 @@ class LaunchRequest(BaseModel):
     model_id: str
     loras: list[str] = []
     hf_token: Optional[str] = None
+    quant: Optional[str] = None    # bf16 | int8 | nf4 — runner reads FORGE_QUANT
 
 
 @app.post("/api/launch")
@@ -533,7 +534,7 @@ async def launch_model(req: LaunchRequest):
     model = next((m for m in registry["models"] if m["id"] == req.model_id), None)
     if not model:
         raise HTTPException(404, "Model not found")
-    return await launcher.launch(model, req.loras, req.hf_token)
+    return await launcher.launch(model, req.loras, req.hf_token, req.quant)
 
 
 @app.post("/api/stop/{model_id}")

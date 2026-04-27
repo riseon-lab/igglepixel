@@ -67,6 +67,52 @@ Recommendation: implement Option A first since it reuses the existing model.
 
 ---
 
+## Pre-quantised Weights (FP8, GGUF)
+
+**Status:** Not implemented. Current quant story is runtime-only (BitsAndBytes
+INT8 / NF4 applied at `from_pretrained` time on the same official HF repo).
+
+**What's needed for FP8:**
+- Comfy-Org publishes `qwen_image_edit_2511_fp8mixed.safetensors` etc — these
+  are ComfyUI-format split files, not directly loadable by diffusers'
+  `from_pretrained`. Either:
+  - Find a diffusers-format FP8 repo, or
+  - Hand-load the safetensors into pipeline components (transformer + VAE +
+    text encoder loaded individually, then assembled via `Pipeline(...)` ctor)
+- Add `fp8` to the model's `quants` array in `model_registry.json` with a
+  separate `hf_repo` / `weight_file` per quant
+- Runner's `load()` branches on the quant id and uses the right loader path
+
+**What's needed for GGUF:**
+- `gguf` Python library + diffusers' `GGUFQuantizationConfig` (recent feature,
+  works for FluxPipeline; QwenImage support unverified at time of writing)
+- Repos like `city96/Qwen-Image-gguf` provide Q4_K_M / Q5_K_M / Q6_K / Q8_0
+- Pre-load probe: the GGUF loader is finicky — should be tested against a
+  specific QwenImage repo before exposing in the UI
+
+**Why not yet:** runtime BnB INT8 / NF4 covers 80 % of the use case with one
+HF repo per model. Pre-quantised weights add per-model curation overhead.
+Defer until users hit a real limitation BnB doesn't solve.
+
+---
+
+## Hot-swap Pipeline Components
+
+**Status:** Not implemented. ComfyUI does this; diffusers makes it harder.
+
+**What's needed:**
+- Load each component separately (`AutoencoderKLQwenImage`, transformer,
+  Qwen2.5-VL text encoder) instead of via `from_pretrained` on the full repo
+- Construct the pipeline manually: `QwenImagePipeline(text_encoder=..., transformer=..., vae=...)`
+- Registry entry per component variant
+- UI: separate dropdowns in the configure drawer for each slot
+
+**Why not yet:** quant covers the main use case (smaller resident model).
+Component-swap is mostly useful for the rare case of mixing a fine-tuned
+transformer with a stock text encoder — niche.
+
+---
+
 ## VRAM Hygiene on Model Switch
 
 **Status:** Not implemented.

@@ -54,7 +54,8 @@ RUN pip install --no-cache-dir \
         accelerate==1.2.1 \
         safetensors==0.4.5 \
         sentencepiece==0.2.0 \
-        Pillow==11.0.0
+        Pillow==11.0.0 \
+        bitsandbytes
 
 # ── Entrypoint ──
 COPY docker/entrypoint.sh /entrypoint.sh

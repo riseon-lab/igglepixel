@@ -37,13 +37,26 @@ class Runner(RunnerBase):
         from diffusers import QwenImageEditPipeline
 
         token = os.environ.get("HF_TOKEN")
-        print("[runner] loading QwenImageEditPipeline…", flush=True)
-        pipe = QwenImageEditPipeline.from_pretrained(
-            self.HF_REPO,
-            torch_dtype=torch.bfloat16,
-            token=token,
-        )
-        if torch.cuda.is_available():
+        quant = os.environ.get("FORGE_QUANT", "bf16").lower()
+
+        kwargs = {"torch_dtype": torch.bfloat16, "token": token}
+        if quant in ("int8", "nf4"):
+            from diffusers import BitsAndBytesConfig
+            if quant == "int8":
+                kwargs["quantization_config"] = BitsAndBytesConfig(load_in_8bit=True)
+            else:
+                kwargs["quantization_config"] = BitsAndBytesConfig(
+                    load_in_4bit=True,
+                    bnb_4bit_quant_type="nf4",
+                    bnb_4bit_compute_dtype=torch.bfloat16,
+                )
+            print(f"[runner] loading QwenImageEditPipeline with {quant} quantisation…", flush=True)
+        else:
+            print("[runner] loading QwenImageEditPipeline (bf16)…", flush=True)
+
+        pipe = QwenImageEditPipeline.from_pretrained(self.HF_REPO, **kwargs)
+
+        if torch.cuda.is_available() and quant == "bf16":
             try:
                 _, total = torch.cuda.mem_get_info()
                 total_gb = total / 1024 ** 3
@@ -55,6 +68,7 @@ class Runner(RunnerBase):
                     pipe.enable_sequential_cpu_offload()
             except Exception:
                 pipe.enable_sequential_cpu_offload()
+        # int8 / nf4: bnb already placed weights on GPU during from_pretrained
         print("[runner] ready", flush=True)
         self._pipe = pipe
 
