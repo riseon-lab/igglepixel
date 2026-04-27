@@ -120,6 +120,30 @@ class Runner(ABC):
             matches = list(loras_dir.rglob(base))
             return matches[0] if matches else None
 
+        # Some pipelines validate the LoRA's target_modules against EVERY
+        # component when loading at the pipe level — if the LoRA only
+        # targets the transformer, the text encoder gets validated, no
+        # match, PEFT raises "No modules were targeted for adaptation".
+        # Bypass that by loading directly onto the matching submodule:
+        #   - For multi-file paired LoRAs (Wan Lightning): high → transformer,
+        #     low → transformer_2.
+        #   - For single-file LoRAs (Qwen Lightning, FLUX LoRAs, …): target
+        #     pipe.transformer if it exposes load_lora_adapter; fall back to
+        #     pipe-level load otherwise.
+        # When a LoRA loads directly onto a submodule, set_adapters with a
+        # plain float weight is enough — pipe.set_adapters propagates per
+        # component and ignores ones without that adapter name.
+        def _load_to_submodule(path: Path, adapter: str, target: str) -> bool:
+            sub = getattr(pipe, "transformer_2", None) if target == "low" else getattr(pipe, "transformer", None)
+            if sub is None or not hasattr(sub, "load_lora_adapter"):
+                return False
+            try:
+                sub.load_lora_adapter(str(path), adapter_name=adapter)
+                return True
+            except Exception as e:
+                print(f"[runner] direct submodule load failed ({type(e).__name__}: {e}); falling back to pipe-level", flush=True)
+                return False
+
         names, weights = [], []
         for i, entry in enumerate(loras):
             if not isinstance(entry, dict):
@@ -129,7 +153,6 @@ class Runner(ABC):
             files = entry.get("files")
             if isinstance(files, list) and files:
                 # Multi-file logical LoRA (e.g. Wan Lightning high+low pair).
-                # Each file becomes its own adapter, scoped via dict to its target.
                 sh = float(entry.get("strength_high", 1.0))
                 sl = float(entry.get("strength_low",  sh))
                 for j, f in enumerate(files):
@@ -139,15 +162,19 @@ class Runner(ABC):
                     if not path:
                         print(f"[runner] LoRA file missing, skipping: {fname}", flush=True)
                         continue
-                    adapter = f"{run_prefix}_{i}_{j}"
-                    if target == "low":
-                        weight = {"transformer": 0.0, "transformer_2": sl}
+                    adapter  = f"{run_prefix}_{i}_{j}"
+                    strength = sl if target == "low" else sh
+                    print(f"[runner] loading LoRA {fname} ({target}, strength={strength:.2f})", flush=True)
+                    if _load_to_submodule(path, adapter, target):
+                        names.append(adapter)
+                        weights.append(strength)
                     else:
-                        weight = {"transformer": sh,  "transformer_2": 0.0}
-                    print(f"[runner] loading LoRA {fname} (target={target}, strength={sl if target == 'low' else sh:.2f})", flush=True)
-                    pipe.load_lora_weights(str(path.parent), weight_name=path.name, adapter_name=adapter)
-                    names.append(adapter)
-                    weights.append(weight)
+                        weight = ({"transformer": 0.0, "transformer_2": strength}
+                                  if target == "low"
+                                  else {"transformer": strength, "transformer_2": 0.0})
+                        pipe.load_lora_weights(str(path.parent), weight_name=path.name, adapter_name=adapter)
+                        names.append(adapter)
+                        weights.append(weight)
                 continue
 
             # Single-file entry.
@@ -162,15 +189,28 @@ class Runner(ABC):
             if "strength_high" in entry or "strength_low" in entry:
                 sh = float(entry.get("strength_high", 1.0))
                 sl = float(entry.get("strength_low",  sh))
-                weight = {"transformer": sh, "transformer_2": sl}
                 print(f"[runner] loading LoRA {filename} (high={sh:.2f}, low={sl:.2f})", flush=True)
+                # Try high-targeted submodule first; if it works, the same
+                # adapter on the same submodule gets weight sh. The low side
+                # wouldn't match anyway with a single file.
+                if _load_to_submodule(path, adapter, "high"):
+                    names.append(adapter)
+                    weights.append(sh)
+                else:
+                    weight = {"transformer": sh, "transformer_2": sl}
+                    pipe.load_lora_weights(str(path.parent), weight_name=path.name, adapter_name=adapter)
+                    names.append(adapter)
+                    weights.append(weight)
             else:
                 strength = float(entry.get("strength", 1.0))
-                weight = strength
                 print(f"[runner] loading LoRA {filename} @ {strength:.2f}", flush=True)
-            pipe.load_lora_weights(str(path.parent), weight_name=path.name, adapter_name=adapter)
-            names.append(adapter)
-            weights.append(weight)
+                if _load_to_submodule(path, adapter, "high"):
+                    names.append(adapter)
+                    weights.append(strength)
+                else:
+                    pipe.load_lora_weights(str(path.parent), weight_name=path.name, adapter_name=adapter)
+                    names.append(adapter)
+                    weights.append(strength)
 
         if names:
             pipe.set_adapters(names, weights)
