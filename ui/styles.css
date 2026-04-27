@@ -1747,10 +1747,129 @@ body::before {
 ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.08); border-radius: 4px; border: 2px solid transparent; background-clip: padding-box; }
 ::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.16); border: 2px solid transparent; background-clip: padding-box; }
 
+/* ── Layout classes replacing inline grid styles ──────────────────────── */
+.lora-layout {
+  display: grid;
+  grid-template-columns: 1fr 300px;
+  gap: 16px;
+  align-items: start;
+}
+.settings-layout {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  max-width: 760px;
+}
+.settings-full { grid-column: 1 / -1; }
+
+/* ── Mobile bottom nav ────────────────────────────────────────────────── */
+.mobile-nav {
+  display: none;
+  position: fixed;
+  bottom: 0; left: 0; right: 0;
+  height: 56px;
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+  background: rgba(8,8,10,0.96);
+  backdrop-filter: blur(24px) saturate(160%);
+  -webkit-backdrop-filter: blur(24px) saturate(160%);
+  border-top: 1px solid var(--line-1);
+  z-index: 200;
+}
+.mobile-nav .nav-item {
+  flex: 1;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  gap: 2px;
+  padding: 6px 2px;
+  height: 100%;
+  border-radius: 0;
+  font-size: 9px;
+  letter-spacing: 0.02em;
+  background: transparent !important;
+}
+.mobile-nav .nav-item svg { width: 20px; height: 20px; opacity: 0.6; }
+.mobile-nav .nav-item span { font-size: 9px; line-height: 1; opacity: 0.6; }
+.mobile-nav .nav-item.active svg,
+.mobile-nav .nav-item.active span { opacity: 1; color: var(--t-1); }
+
 /* ── Responsive ────────────────────────────────────────────────────────── */
 @media (max-width: 880px) {
   .app { grid-template-columns: 64px 1fr; }
   :root { --sidebar-w: 64px; }
   .sidebar-search, .nav-section, .nav-item .label, .nav-item .meta { display: none; }
   .nav-item { justify-content: center; padding: 0; }
+}
+
+@media (max-width: 540px) {
+  /* ── Grid: sidebar gone, single column ── */
+  .app { grid-template-columns: 1fr; }
+  :root { --sidebar-w: 0px; }
+  .sidebar { display: none; }
+  .mobile-nav { display: flex; }
+
+  /* ── Main: full width, pad bottom so content clears the nav bar ── */
+  .main {
+    padding: 10px 10px calc(56px + env(safe-area-inset-bottom, 0px) + 10px);
+    overflow-y: auto;
+  }
+
+  /* ── Topbar ── */
+  .topbar { padding: 0 10px; }
+  .gpu-pill span { display: none; }    /* show dot only, no text */
+  .gpu-pill { padding: 0 7px; gap: 4px; }
+
+  /* ── Page head: stack actions below title ── */
+  .page-head { flex-direction: column; align-items: flex-start; gap: 6px; }
+  .page-head .actions { width: 100%; }
+  .page-head .actions .btn { width: 100%; justify-content: center; }
+
+  /* ── Filter bars: horizontal scroll, no wrap ── */
+  .filterbar {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    padding-bottom: 2px;
+    gap: 6px;
+  }
+  .filterbar::-webkit-scrollbar { display: none; }
+  .filterbar .input.wide { min-width: 140px; flex-shrink: 0; }
+
+  /* ── Model cards: 1 column ── */
+  .model-grid { grid-template-columns: 1fr !important; }
+
+  /* ── Workspace head ── */
+  .ws-head { padding: 6px 0 10px; gap: 8px; flex-wrap: wrap; }
+  .ws-head .ws-sub { display: none; }
+  .ws-actions .btn span { display: none; }   /* icon-only Stop button */
+
+  /* ── Workspace: img strip 2 cells max ── */
+  .img-strip { grid-template-columns: repeat(2, 1fr) !important; }
+  .img-cell { min-height: 100px; }
+
+  /* ── LoRAs page ── */
+  .lora-layout { grid-template-columns: 1fr; }
+  .lora-panel { order: -1; }  /* My LoRAs above search results on phone */
+  [data-view="loras"] .filterbar { flex-wrap: wrap; }
+  #civUrl { width: 100% !important; }
+
+  /* ── Settings page ── */
+  .settings-layout { grid-template-columns: 1fr; max-width: 100%; }
+
+  /* ── Drawer: full-width slide-in ── */
+  .drawer { width: 100%; max-width: 100vw; }
+
+  /* ── Modal ── */
+  .modal { margin: 8px; max-width: calc(100vw - 16px); max-height: calc(100dvh - 80px); }
+  .modal-body { max-height: calc(60dvh); }
+
+  /* ── Auth card ── */
+  .auth-card { max-width: calc(100vw - 24px); padding: 20px 16px; }
+
+  /* ── Run list cards ── */
+  .run-card .run-pid { display: none; }
+
+  /* ── Ws bar: full-width buttons ── */
+  .ws-bar { flex-direction: row; gap: 8px; }
+  .ws-bar .btn { flex: 1; justify-content: center; }
 }

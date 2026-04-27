@@ -258,7 +258,7 @@
         <input class="input" id="civUrl" placeholder="Paste civitai.com/models/… URL" style="width:280px">
         <button class="btn" id="civUrlGo"><svg><use href="#i-link"/></svg>Open</button>
       </div>
-      <div style="display:grid;grid-template-columns:1fr 300px;gap:16px;align-items:start">
+      <div class="lora-layout">
         <div class="civ-grid" id="civResults">
           <div class="empty" style="grid-column:1/-1"><div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg></div>Search to browse LoRAs.</div>
         </div>
@@ -345,7 +345,7 @@
           <div class="page-sub">Tokens are persisted to your browser only.</div>
         </div>
       </div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;max-width:760px">
+      <div class="settings-layout">
         <div class="card" style="padding:14px">
           <div class="section-title" style="margin:0 0 10px;border:0;padding:0">HuggingFace</div>
           <div class="field-stack">
@@ -366,7 +366,7 @@
             <button class="btn block" data-save="civitai_key" data-source="settingsCivKey">Save</button>
           </div>
         </div>
-        <div class="card" style="padding:14px;grid-column:1/-1">
+        <div class="card settings-full" style="padding:14px">
           <div class="section-title" style="margin:0 0 10px;border:0;padding:0">GPU</div>
           <pre id="gpuDebug" style="font-family:var(--font-mono);font-size:11px;color:var(--t-3);white-space:pre-wrap;margin:0">Loading…</pre>
         </div>
@@ -374,6 +374,26 @@
     </section>
 
   </main>
+
+  <!-- ── Mobile bottom nav (phones ≤ 540px) ─────────────────────────────── -->
+  <nav class="mobile-nav">
+    <div class="nav-item active" data-view="models">
+      <svg><use href="#i-models"/></svg><span>Models</span>
+    </div>
+    <div class="nav-item" data-view="running">
+      <svg><use href="#i-running"/></svg><span>Running</span>
+    </div>
+    <div class="nav-item" data-view="assets">
+      <svg><use href="#i-assets"/></svg><span>Assets</span>
+    </div>
+    <div class="nav-item" data-view="loras">
+      <svg><use href="#i-loras"/></svg><span>LoRAs</span>
+    </div>
+    <div class="nav-item" data-view="settings">
+      <svg><use href="#i-settings"/></svg><span>More</span>
+    </div>
+  </nav>
+
 </div>
 
 <!-- ── Configure drawer (info + Download → Start → Open workspace) ──────── -->
