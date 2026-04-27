@@ -1288,7 +1288,13 @@ function renderImgStrip(m) {
   const slots = state.imgInputs[m.id] || (state.imgInputs[m.id] = {});
   const cells = [];
   for (const inp of m.image_inputs) {
-    const slot = slots[inp.key] || (slots[inp.key] = { enabled: !!inp.required, image: null });
+    // Migrate legacy {image} shape to carousel shape on first access.
+    let slot = slots[inp.key];
+    if (!slot) {
+      slot = slots[inp.key] = { enabled: !!inp.required, images: [], idx: 0 };
+    } else if (slot.image !== undefined) {
+      slot = slots[inp.key] = { enabled: slot.enabled, images: slot.image ? [slot.image] : [], idx: 0 };
+    }
     cells.push(imgCellHtml(inp.key, inp.label, slot, inp.required, inp.hint));
   }
   // The Generated cell shows the latest result (or empty).
@@ -1301,26 +1307,35 @@ function renderImgStrip(m) {
 }
 
 function imgCellHtml(key, label, slot, required, hint) {
-  const off = !slot.enabled ? ' off' : '';
-  const empty = !slot.image ? ' empty' : '';
-  const req = required ? ' required' : '';
+  const images = slot.images || [];
+  const idx    = slot.idx ?? 0;
+  const active = images[idx] || null;
+  const off    = !slot.enabled ? ' off' : '';
+  const empty  = !active ? ' empty' : '';
+  const req    = required ? ' required' : '';
+  const nav    = images.length > 1
+    ? `<button class="icon-btn" data-prev-input="${key}" title="Previous">&#8249;</button>
+       <span class="carousel-pos">${idx + 1}/${images.length}</span>
+       <button class="icon-btn" data-next-input="${key}" title="Next">&#8250;</button>`
+    : '';
   return `<div class="img-cell${off}${empty}${req}" data-input="${key}">
     <div class="img-cell-head">
       <div class="label">${label}${required ? ' *' : ''}</div>
       <button class="toggle ${slot.enabled ? 'on' : ''}" data-toggle-input="${key}" title="Use this input"></button>
     </div>
-    <div class="img-cell-content" data-pick-input="${key}">
-      ${slot.image
-        ? `<img src="${esc(slot.image.url)}" alt="${esc(slot.image.name || '')}">`
+    <div class="img-cell-content" data-add-input="${key}">
+      ${active
+        ? `<img src="${esc(active.url)}" alt="${esc(active.name || '')}">`
         : `<div class="img-cell-empty">
              <svg class="icon" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-5-5L5 21"/></svg>
              ${esc(hint || 'Click to add')}
            </div>`}
     </div>
-    ${slot.image ? `
+    ${active ? `
       <div class="img-cell-foot">
-        <button class="icon-btn" data-pick-input="${key}" title="Replace"><svg width="13" height="13"><use href="#i-upload"/></svg></button>
+        ${nav}
         <div class="spacer"></div>
+        <button class="icon-btn" data-add-input="${key}" title="Add image"><svg width="13" height="13"><use href="#i-upload"/></svg></button>
         <button class="icon-btn" data-clear-input="${key}" title="Remove"><svg width="13" height="13"><use href="#i-trash"/></svg></button>
       </div>` : ''}
   </div>`;
@@ -1347,19 +1362,33 @@ function bindImgStrip(m) {
   // Toggle on/off per cell
   $$('[data-toggle-input]', $('#wsImgStrip')).forEach(b => b.addEventListener('click', (e) => {
     e.stopPropagation();
-    const key = b.dataset.toggleInput;
-    slots[key].enabled = !slots[key].enabled;
+    slots[b.dataset.toggleInput].enabled = !slots[b.dataset.toggleInput].enabled;
     renderImgStrip(m);
   }));
-  // Pick / replace — opens asset picker, or file dialog if user holds shift
-  $$('[data-pick-input]', $('#wsImgStrip')).forEach(b => b.addEventListener('click', (e) => {
+  // Add image (opens picker, pushes to images[])
+  $$('[data-add-input]', $('#wsImgStrip')).forEach(b => b.addEventListener('click', (e) => {
     e.stopPropagation();
-    pickImageForInput(m, b.dataset.pickInput);
+    pickImageForInput(m, b.dataset.addInput);
   }));
-  // Clear
+  // Carousel prev / next
+  $$('[data-prev-input]', $('#wsImgStrip')).forEach(b => b.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const slot = slots[b.dataset.prevInput];
+    slot.idx = (slot.idx - 1 + slot.images.length) % slot.images.length;
+    renderImgStrip(m);
+  }));
+  $$('[data-next-input]', $('#wsImgStrip')).forEach(b => b.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const slot = slots[b.dataset.nextInput];
+    slot.idx = (slot.idx + 1) % slot.images.length;
+    renderImgStrip(m);
+  }));
+  // Remove current image from carousel
   $$('[data-clear-input]', $('#wsImgStrip')).forEach(b => b.addEventListener('click', (e) => {
     e.stopPropagation();
-    slots[b.dataset.clearInput].image = null;
+    const slot = slots[b.dataset.clearInput];
+    slot.images.splice(slot.idx, 1);
+    slot.idx = Math.max(0, Math.min(slot.idx, slot.images.length - 1));
     renderImgStrip(m);
   }));
   // Zoom on the generated cell
@@ -1388,7 +1417,10 @@ function pickImageForInput(m, key) {
   $('#modalFoot').innerHTML = `<button class="btn ghost" id="modalCancel">Cancel</button>`;
   $('#modalCancel').onclick = closeModal;
   const apply = (asset) => {
-    state.imgInputs[m.id][key] = { enabled: true, image: asset };
+    const slot = state.imgInputs[m.id][key];
+    slot.enabled = true;
+    slot.images.push(asset);
+    slot.idx = slot.images.length - 1;   // jump to newly added
     closeModal();
     renderImgStrip(m);
   };
@@ -1885,7 +1917,8 @@ function snapshotJob() {
   const params = { ...state.params };
   for (const inp of (m.image_inputs || [])) {
     const slot = slots[inp.key];
-    if (slot?.enabled && slot.image) params[inp.key === 'ref' ? 'ref_image' : inp.key] = slot.image.path;
+    const active = slot?.images?.[slot.idx ?? 0];
+    if (slot?.enabled && active) params[inp.key === 'ref' ? 'ref_image' : inp.key] = active.path;
   }
   const lstate = state.loraStates[m.id] || {};
   const loras = Object.entries(lstate)
@@ -2087,7 +2120,7 @@ function onGenerate() {
   for (const inp of (m.image_inputs || [])) {
     if (inp.required) {
       const slot = (state.imgInputs[m.id] || {})[inp.key];
-      if (!slot?.enabled || !slot.image) {
+      if (!slot?.enabled || !slot.images?.length) {
         toast(`Add a ${inp.label} image first`, 'error');
         return;
       }

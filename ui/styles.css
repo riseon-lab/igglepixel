@@ -1312,6 +1312,20 @@ body::before {
 }
 .img-cell-foot .icon-btn:hover { background: rgba(0,0,0,0.7); }
 .img-cell-foot .spacer { flex: 1; }
+.carousel-pos {
+  font-size: 10px;
+  color: rgba(255,255,255,0.7);
+  line-height: 22px;
+  min-width: 24px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+.img-cell-foot .icon-btn[data-prev-input],
+.img-cell-foot .icon-btn[data-next-input] {
+  font-size: 16px;
+  line-height: 1;
+  padding: 0;
+}
 
 .img-cell.generated .img-cell-empty .icon { opacity: 0.3; }
 
