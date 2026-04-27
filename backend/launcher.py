@@ -77,10 +77,10 @@ class ModelLauncher:
             env["HF_TOKEN"] = hf_token
         # Pass the at-rest data key to the runner subprocess (hex-encoded).
         # Without this, the runner can't decrypt user refs or encrypt outputs.
-        # We only have a key in RAM if the user is currently unlocked — the
-        # caller is responsible for refusing to launch in the locked state.
+        # Use sys.modules['__main__'] — the backend runs as __main__ (not 'main'),
+        # so `from main import auth` would re-import a fresh module with no key.
         try:
-            from main import auth as _backend_auth   # avoid circular import at module load
+            _backend_auth = sys.modules["__main__"].auth
             if _backend_auth.is_unlocked():
                 env["FORGE_DATA_KEY"] = _backend_auth.data_key.hex()
         except Exception:

@@ -154,7 +154,7 @@ class Runner(ABC):
 
         key = _data_key()
         if key:
-            import crypto as fcrypto
+            import backend.crypto as fcrypto
             return fcrypto.write_encrypted(key, dest, plaintext)
         # Legacy fallback (encryption disabled): plaintext on disk.
         dest.parent.mkdir(parents=True, exist_ok=True)
@@ -171,7 +171,7 @@ class Runner(ABC):
         from PIL import Image
         key = _data_key()
         if key:
-            import crypto as fcrypto
+            import backend.crypto as fcrypto
             data = fcrypto.read_decrypted(key, visible_path)
             return Image.open(io.BytesIO(data))
         # Legacy plaintext path.
