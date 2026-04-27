@@ -916,11 +916,38 @@ function setModelState(id, patch) {
   state.modelStates[id] = { ...modelStateOf(id), ...patch };
 }
 
+// Pick the highest-quality variant the GPU can run. Variants are model
+// sizes (14B vs 5B for Wan etc.); within each variant there's a quant
+// list. Returns the variant object or null if the model isn't variant-based.
+function pickAutoVariant(m, vramGb) {
+  const variants = m.variants || [];
+  if (!variants.length) return null;
+  for (const v of variants) {
+    if (vramGb >= (v.auto_min_vram_gb ?? 0)) return v;
+  }
+  return variants[variants.length - 1];
+}
+
+// Resolve the current variant — explicit user choice from drawer state, or
+// the auto-pick. Returns null for non-variant models.
+function selectedVariant(m) {
+  const variants = m.variants || [];
+  if (!variants.length) return null;
+  const saved = modelStateOf(m.id).variant || 'auto';
+  if (saved !== 'auto') {
+    const found = variants.find(v => v.id === saved);
+    if (found) return found;
+  }
+  return pickAutoVariant(m, state.gpu?.vram_gb || 0);
+}
+
 // Pick the highest-quality quant the detected GPU can comfortably run.
+// For variant-based models, the quant list comes from the resolved variant.
 // Registry lists quants best-first; first match wins. Falls back to the
 // smallest if nothing else fits.
 function pickAutoQuant(m, vramGb) {
-  const quants = m.quants || [];
+  const variant = pickAutoVariant(m, vramGb);
+  const quants = (variant?.quants) || m.quants || [];
   if (!quants.length) return null;
   for (const q of quants) {
     if (vramGb >= (q.auto_min_vram_gb ?? 0)) return q;
@@ -932,6 +959,15 @@ function selectedQuantId(m) {
   const saved = modelStateOf(m.id).quant || 'auto';
   if (saved !== 'auto') return saved;
   return pickAutoQuant(m, state.gpu?.vram_gb || 0)?.id || null;
+}
+
+// Quants list to render in the drawer dropdown — comes from the currently
+// selected variant if the model is variant-based, otherwise the model's
+// flat quants list.
+function quantsFor(m) {
+  const variants = m.variants || [];
+  if (variants.length) return selectedVariant(m)?.quants || [];
+  return m.quants || [];
 }
 
 function resolveContextConfig(m) {
@@ -1067,18 +1103,42 @@ function renderDrawerBody() {
     ` : ''}
 
     ${(() => {
-      // Quantisation dropdown — only for models that declare quant variants.
-      // "Auto" resolves to the highest-quality option the GPU can run, picked
-      // at launch time. User can override per-model and the choice persists.
-      if (!m.quants?.length) return '';
+      // Variant dropdown — only for models with multiple sizes (Wan 14B / 5B etc).
+      // "Auto" picks the largest variant the GPU can comfortably run.
+      if (!m.variants?.length) return '';
+      const vram = state.gpu?.vram_gb || 0;
+      const auto = pickAutoVariant(m, vram);
+      const cur  = modelStateOf(m.id).variant || 'auto';
+      const autoHint = auto ? `auto picks ${auto.label}` : 'auto';
+      const opts = m.variants.map(v => {
+        const minVram = v.auto_min_vram_gb ?? 0;
+        const tooBig = vram > 0 && vram < minVram - 4;
+        return `<option value="${esc(v.id)}" ${cur === v.id ? 'selected' : ''} ${tooBig ? 'disabled' : ''}>${esc(v.label)}</option>`;
+      }).join('');
+      return `
+        <div class="field" style="margin-top:14px">
+          <label class="field-label">Size <span class="hint">${autoHint}</span></label>
+          <select class="select" id="drawerVariant">
+            <option value="auto" ${cur === 'auto' ? 'selected' : ''}>Auto</option>
+            ${opts}
+          </select>
+        </div>`;
+    })()}
+
+    ${(() => {
+      // Quantisation dropdown — for variant-based models the quants come from
+      // the resolved variant's list; otherwise the flat m.quants list.
+      // "Auto" resolves to the highest-quality option the GPU can run.
+      const quants = quantsFor(m);
+      if (!quants.length) return '';
       const vram = state.gpu?.vram_gb || 0;
       const auto = pickAutoQuant(m, vram);
       const cur  = modelStateOf(m.id).quant || 'auto';
       const autoHint = auto ? `auto picks ${auto.label} on this GPU` : 'auto';
-      const opts = m.quants.map(q => {
-        const tooBig = vram > 0 && vram < (q.vram_gb - 4);   // 4 GB headroom slack
+      const opts = quants.map(q => {
+        const tooBig = vram > 0 && vram < (q.vram_gb - 4);
         const note   = `${q.vram_gb} GB · ${q.description}`;
-        return `<option value="${q.id}" ${cur === q.id ? 'selected' : ''} ${tooBig ? 'disabled' : ''}>${q.label} — ${note}</option>`;
+        return `<option value="${esc(q.id)}" ${cur === q.id ? 'selected' : ''} ${tooBig ? 'disabled' : ''}>${esc(q.label)} — ${esc(note)}</option>`;
       }).join('');
       return `
         <div class="field" style="margin-top:14px">
@@ -1100,6 +1160,13 @@ function renderDrawerBody() {
   // remembers what the user picked.
   $('#drawerQuant')?.addEventListener('change', (e) => {
     setModelState(m.id, { quant: e.target.value });
+  });
+  // Variant change resets quant to 'auto' (since quant options differ per
+  // variant) and re-renders the drawer so the quant dropdown shows the new
+  // variant's quants.
+  $('#drawerVariant')?.addEventListener('change', (e) => {
+    setModelState(m.id, { variant: e.target.value, quant: 'auto' });
+    renderDrawerBody();
   });
 
   renderDrawerPrimary();
@@ -1295,11 +1362,20 @@ async function waitForDownload(modelId, maxSeconds) {
 
 async function startRunner(m) {
   const hfToken = $('#drawerHFToken')?.value || state.settings.hf_token || '';
-  // Resolve quant: "auto" → highest tier the GPU can run; explicit → as-is.
-  // Read from the drawer if it's open, otherwise fall back to saved choice.
+  // Resolve variant first (size: 14B / 5B for Wan etc.), then quant within
+  // that variant. Both default to 'auto'; auto resolves at launch time.
+  let variant;
+  if (m.variants?.length) {
+    const variantSel = $('#drawerVariant')?.value || modelStateOf(m.id).variant || 'auto';
+    if (variantSel === 'auto') {
+      variant = pickAutoVariant(m, state.gpu?.vram_gb || 0)?.id || m.variants[0].id;
+    } else {
+      variant = variantSel;
+    }
+  }
   const quantSel = $('#drawerQuant')?.value || modelStateOf(m.id).quant || 'auto';
   let quant = quantSel;
-  if (quantSel === 'auto' && m.quants?.length) {
+  if (quantSel === 'auto' && (m.quants?.length || m.variants?.length)) {
     const auto = pickAutoQuant(m, state.gpu?.vram_gb || 0);
     quant = auto?.id || 'bf16';
   }
@@ -1307,7 +1383,7 @@ async function startRunner(m) {
   renderDrawerBody();
   let logEs = null;
   try {
-    const launched = await api.launch({ model_id: m.id, loras: [], hf_token: hfToken, quant });
+    const launched = await api.launch({ model_id: m.id, loras: [], hf_token: hfToken, quant, variant });
     if (launched.status !== 'launched' && launched.status !== 'already_running') {
       throw new Error(launched.message || 'Launch failed');
     }
@@ -2239,14 +2315,33 @@ function renderWorkspaceLoras(m) {
 
   // Seed per-model lora state on first render so toggles + sliders persist
   // while the workspace is open.
+  // Seed per-model lora state. Dual-expert models (Wan etc.) carry two
+  // strength values per LoRA — one for each expert — so high-noise and
+  // low-noise can be tuned independently.
   const lstate = state.loraStates[m.id] || (state.loraStates[m.id] = {});
+  const defaultHigh = (l) => l.strength_high ?? l.strength ?? 1.0;
+  const defaultLow  = (l) => l.strength_low  ?? l.strength ?? 1.0;
   for (const l of defaults) {
     const fn = l.filename;
-    if (!lstate[fn]) lstate[fn] = { on: !!l.default_on, strength: l.strength ?? 1.0, bundled: true, label: l.label || fn };
+    if (!lstate[fn]) lstate[fn] = {
+      on: !!l.default_on,
+      strength: l.strength ?? 1.0,
+      strength_high: defaultHigh(l),
+      strength_low:  defaultLow(l),
+      bundled: true,
+      label: l.label || fn,
+    };
   }
   for (const l of assigned) {
     const fn = l.filename;
-    if (!lstate[fn]) lstate[fn] = { on: false, strength: 1.0, bundled: false, label: fn };
+    if (!lstate[fn]) lstate[fn] = {
+      on: false,
+      strength: 1.0,
+      strength_high: 1.0,
+      strength_low: 1.0,
+      bundled: false,
+      label: fn,
+    };
   }
 
   const defaultsEl = $('#wsLoraDefaults');
@@ -2272,21 +2367,37 @@ function renderWorkspaceLoras(m) {
 function loraDetailedHtml(modelId, filename) {
   const lstate = state.loraStates[modelId][filename];
   const cls = lstate.bundled ? 'lora-card detailed bundled' : 'lora-card detailed';
+  const m = state.models.find(x => x.id === modelId);
+  const dual = !!m?.dual_expert;
   // filename + label come from disk / CivitAI metadata — escape both as
   // text and as attributes (` " ` in a filename would otherwise close
   // data-lora="..." early and inject markup).
   const eFn = esc(filename);
   const eLbl = esc(lstate.label);
+  const sliderRow = dual
+    ? `
+      <div class="row">
+        <span class="lora-tier">High</span>
+        <input class="slider" type="range" min="0" max="2" step="0.05" value="${lstate.strength_high}" data-lora-strength-high="${eFn}" ${lstate.on ? '' : 'disabled'}>
+        <span class="strength" data-lora-strength-high-val="${eFn}">×${Number(lstate.strength_high).toFixed(2)}</span>
+      </div>
+      <div class="row">
+        <span class="lora-tier">Low</span>
+        <input class="slider" type="range" min="0" max="2" step="0.05" value="${lstate.strength_low}" data-lora-strength-low="${eFn}" ${lstate.on ? '' : 'disabled'}>
+        <span class="strength" data-lora-strength-low-val="${eFn}">×${Number(lstate.strength_low).toFixed(2)}</span>
+      </div>`
+    : `
+      <div class="row">
+        <input class="slider" type="range" min="0" max="2" step="0.05" value="${lstate.strength}" data-lora-strength="${eFn}" ${lstate.on ? '' : 'disabled'}>
+        <span class="strength" data-lora-strength-val="${eFn}">×${lstate.strength.toFixed(2)}</span>
+      </div>`;
   return `<div class="${cls} ${lstate.on ? 'on' : ''}" data-lora="${eFn}">
     <div class="row">
       <span class="label" title="${eLbl}">${eLbl}</span>
       <button class="toggle ${lstate.on ? 'on' : ''}" data-lora-toggle="${eFn}"></button>
     </div>
     <div class="filename" title="${eFn}">${eFn}</div>
-    <div class="row">
-      <input class="slider" type="range" min="0" max="2" step="0.05" value="${lstate.strength}" data-lora-strength="${eFn}" ${lstate.on ? '' : 'disabled'}>
-      <span class="strength" data-lora-strength-val="${eFn}">×${lstate.strength.toFixed(2)}</span>
-    </div>
+    ${sliderRow}
   </div>`;
 }
 
@@ -2303,6 +2414,23 @@ function bindLoraCards(m) {
       const fn = s.dataset.loraStrength;
       lstate[fn].strength = Number(s.value);
       const out = $(`[data-lora-strength-val="${CSS.escape(fn)}"]`);
+      if (out) out.textContent = `×${Number(s.value).toFixed(2)}`;
+    });
+  });
+  // Dual-expert (high-noise / low-noise) sliders for MoE pipelines (Wan etc.)
+  $$('[data-lora-strength-high]', $('#wsLoraPane')).forEach(s => {
+    s.addEventListener('input', () => {
+      const fn = s.dataset.loraStrengthHigh;
+      lstate[fn].strength_high = Number(s.value);
+      const out = $(`[data-lora-strength-high-val="${CSS.escape(fn)}"]`);
+      if (out) out.textContent = `×${Number(s.value).toFixed(2)}`;
+    });
+  });
+  $$('[data-lora-strength-low]', $('#wsLoraPane')).forEach(s => {
+    s.addEventListener('input', () => {
+      const fn = s.dataset.loraStrengthLow;
+      lstate[fn].strength_low = Number(s.value);
+      const out = $(`[data-lora-strength-low-val="${CSS.escape(fn)}"]`);
       if (out) out.textContent = `×${Number(s.value).toFixed(2)}`;
     });
   });
@@ -2697,7 +2825,9 @@ function snapshotJob() {
   const lstate = state.loraStates[m.id] || {};
   const loras = Object.entries(lstate)
     .filter(([_, v]) => v.on)
-    .map(([fn, v]) => ({ filename: fn, strength: v.strength }));
+    .map(([fn, v]) => m.dual_expert
+      ? { filename: fn, strength_high: v.strength_high ?? v.strength ?? 1.0, strength_low: v.strength_low ?? v.strength ?? 1.0 }
+      : { filename: fn, strength: v.strength ?? 1.0 });
   return {
     id: `q_${Date.now()}_${Math.random().toString(36).slice(2,7)}`,
     model_id: m.id,
@@ -2788,7 +2918,18 @@ async function runJob(job) {
       res = await api.generate({
         model_id: job.model_id,
         params:   job.params,
-        loras:    (job.loras || []).map(l => ({ filename: l.filename, strength: l.strength ?? 1.0 })),
+        loras:    (job.loras || []).map(l => {
+          // Dual-expert (Wan etc.) sends per-expert strengths; everything
+          // else falls back to single 'strength' field.
+          if (l.strength_high !== undefined || l.strength_low !== undefined) {
+            return {
+              filename: l.filename,
+              strength_high: l.strength_high ?? 1.0,
+              strength_low:  l.strength_low  ?? 1.0,
+            };
+          }
+          return { filename: l.filename, strength: l.strength ?? 1.0 };
+        }),
         hf_token: state.settings.hf_token || null,
       });
     }

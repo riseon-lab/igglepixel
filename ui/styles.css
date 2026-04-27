@@ -2056,6 +2056,15 @@ body::before {
   text-align: right;
   flex-shrink: 0;
 }
+.lora-card.detailed .lora-tier {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  letter-spacing: 0.06em;
+  color: var(--t-3);
+  text-transform: uppercase;
+  min-width: 32px;
+  flex-shrink: 0;
+}
 .lora-card.detailed .slider {
   flex: 1;
   min-width: 0;
