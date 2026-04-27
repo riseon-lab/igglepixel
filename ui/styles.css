@@ -118,12 +118,10 @@ body::before {
   border-bottom: 1px solid var(--line-1);
   z-index: 10;
 }
-.topbar-brand {
-  font-family: var(--font-sans);
-  font-weight: 600;
-  font-size: 14px;
-  letter-spacing: -0.01em;
-  color: var(--t-1);
+.topbar-logo {
+  height: 17px;
+  display: block;
+  flex-shrink: 0;
 }
 .topbar-spacer { flex: 1; }
 .topbar-right { display: flex; align-items: center; gap: 6px; }
@@ -1003,13 +1001,10 @@ body::before {
   pointer-events: none;
   background: linear-gradient(180deg, rgba(255,255,255,0.04), transparent 35%);
 }
-.auth-brand {
-  font-family: var(--font-sans);
-  font-weight: 600;
-  font-size: 22px;
-  letter-spacing: -0.02em;
-  color: var(--t-1);
-  margin-bottom: 18px;
+.auth-logo {
+  height: 26px;
+  display: block;
+  margin: 0 auto 22px;
 }
 .auth-title {
   font-size: 18px;
@@ -1819,8 +1814,8 @@ body::before {
 
   /* ── Topbar: compact, hide duplicate settings button ── */
   .topbar { padding: 0 10px; }
+  .topbar-logo { height: 14px; }
   .gpu-pill { font-size: 11px; padding: 0 8px; gap: 5px; }
-  .topbar-brand { font-size: 13px; }
   .topbar-right .icon-btn[data-view="settings"] { display: none; }
 
   /* ── Page head: stack actions below title ── */
