@@ -47,7 +47,7 @@ RUN pip install --no-cache-dir \
 # in the repo root — no rebuild needed.
 RUN pip install --no-cache-dir \
         --index-url https://download.pytorch.org/whl/cu121 \
-        torch==2.4.1 torchvision==0.19.1
+        torch==2.5.1 torchvision==0.20.1
 RUN pip install --no-cache-dir \
         diffusers \
         transformers \
