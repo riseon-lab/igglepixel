@@ -49,8 +49,8 @@ RUN pip install --no-cache-dir \
         --index-url https://download.pytorch.org/whl/cu121 \
         torch==2.4.1 torchvision==0.19.1
 RUN pip install --no-cache-dir \
-        diffusers==0.34.0 \
-        transformers==4.46.3 \
+        diffusers \
+        transformers \
         accelerate==1.2.1 \
         safetensors==0.4.5 \
         sentencepiece==0.2.0 \
