@@ -1974,7 +1974,7 @@ async function runJob(job) {
       res = await api.generate({
         model_id: job.model_id,
         params:   job.params,
-        loras:    (job.loras || []).map(l => l.filename),
+        loras:    (job.loras || []).map(l => ({ filename: l.filename, strength: l.strength ?? 1.0 })),
         hf_token: state.settings.hf_token || null,
       });
     }

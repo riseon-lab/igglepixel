@@ -550,7 +550,7 @@ def get_status():
 class GenerateRequest(BaseModel):
     model_id: str
     params: dict = {}
-    loras: list[str] = []
+    loras: list = []      # [{filename: str, strength: float}]
     hf_token: Optional[str] = None
 
 

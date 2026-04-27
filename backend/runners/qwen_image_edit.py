@@ -58,13 +58,14 @@ class Runner(RunnerBase):
         print("[runner] ready", flush=True)
         self._pipe = pipe
 
-    def generate(self, params: dict, loras: Optional[list[str]] = None) -> dict:
+    def generate(self, params: dict, loras: Optional[list] = None) -> dict:
         import secrets
         import torch
 
         if self._pipe is None:
             raise RuntimeError("Runner not loaded")
         self._cancel = False
+        loras_loaded = self._load_loras(loras or [])
 
         prompt = (params.get("prompt") or "").strip()
         if not prompt:
@@ -110,24 +111,27 @@ class Runner(RunnerBase):
                     pass
             return callback_kwargs
 
-        result = self._pipe(
-            image=ref_img,
-            prompt=prompt,
-            negative_prompt=(params.get("negative_prompt") or "").strip() or None,
-            num_inference_steps=steps,
-            true_cfg_scale=cfg,
-            width=width,
-            height=height,
-            generator=gen,
-            callback_on_step_end=_on_step,
-            callback_on_step_end_tensor_inputs=["latents"],
-        )
+        try:
+            result = self._pipe(
+                image=ref_img,
+                prompt=prompt,
+                negative_prompt=(params.get("negative_prompt") or "").strip() or None,
+                num_inference_steps=steps,
+                true_cfg_scale=cfg,
+                width=width,
+                height=height,
+                generator=gen,
+                callback_on_step_end=_on_step,
+                callback_on_step_end_tensor_inputs=["latents"],
+            )
+        finally:
+            if loras_loaded:
+                self._clear_loras()
 
         if self._cancel:
             return self.asset_response([], meta={"cancelled": True, "model": self.model_id})
 
         out_path = self.new_output_path(prefix=f"{self.model_id}_{seed}")
-        # Encrypted save when FORGE_DATA_KEY is set (the normal path).
         on_disk = self.save_image(result.images[0], out_path, format="PNG")
         return self.asset_response([on_disk], meta={
             "model":  self.model_id,

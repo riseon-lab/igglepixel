@@ -68,8 +68,46 @@ class Runner(ABC):
         """Pull weights, build the pipeline, move it to GPU. Called once."""
 
     @abstractmethod
-    def generate(self, params: dict, loras: Optional[list[str]] = None) -> dict:
+    def generate(self, params: dict, loras: Optional[list] = None) -> dict:
         """Run inference. Return the dict shape described in this module's docstring."""
+
+    # ── LoRA helpers ─────────────────────────────────────────────────
+    def _load_loras(self, loras: list) -> bool:
+        """Load LoRA adapters onto self._pipe. Returns True if any were loaded.
+
+        Each entry in `loras` is {filename: str, strength: float}.
+        Resolves files against LORAS_DIR env var (default /workspace/loras).
+        """
+        pipe = getattr(self, "_pipe", None)
+        if not loras or pipe is None:
+            return False
+        loras_dir = Path(os.environ.get("LORAS_DIR", str(WORKSPACE / "loras")))
+        names, weights = [], []
+        for i, entry in enumerate(loras):
+            filename = entry.get("filename") if isinstance(entry, dict) else entry
+            strength = float(entry.get("strength", 1.0) if isinstance(entry, dict) else 1.0)
+            path = loras_dir / filename
+            if not path.exists():
+                print(f"[runner] LoRA not found, skipping: {filename}", flush=True)
+                continue
+            name = f"adapter_{i}"
+            print(f"[runner] loading LoRA {filename} @ {strength:.2f}", flush=True)
+            pipe.load_lora_weights(str(path.parent), weight_name=path.name, adapter_name=name)
+            names.append(name)
+            weights.append(strength)
+        if names:
+            pipe.set_adapters(names, weights)
+            print(f"[runner] {len(names)} LoRA(s) active", flush=True)
+            return True
+        return False
+
+    def _clear_loras(self) -> None:
+        pipe = getattr(self, "_pipe", None)
+        if pipe is not None:
+            try:
+                pipe.unload_lora_weights()
+            except Exception:
+                pass
 
     # ── Helpers shared by subclasses ─────────────────────────────────
     @staticmethod

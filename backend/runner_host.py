@@ -23,7 +23,7 @@ import uvicorn
 
 class GenerateRequest(BaseModel):
     params: dict = {}
-    loras:  list[str] = []
+    loras:  list = []     # [{filename: str, strength: float}]
     hf_token: Optional[str] = None
 
 

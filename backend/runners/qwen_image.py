@@ -61,13 +61,14 @@ class Runner(RunnerBase):
         self._pipe = pipe
 
     # ── Inference ────────────────────────────────────────────────────
-    def generate(self, params: dict, loras: Optional[list[str]] = None) -> dict:
+    def generate(self, params: dict, loras: Optional[list] = None) -> dict:
         import secrets
         import torch
 
         if self._pipe is None:
             raise RuntimeError("Runner not loaded")
         self._cancel = False
+        loras_loaded = self._load_loras(loras or [])
 
         prompt = (params.get("prompt") or "").strip()
         if not prompt:
@@ -104,17 +105,21 @@ class Runner(RunnerBase):
                     pass
             return callback_kwargs
 
-        result = self._pipe(
-            prompt=prompt,
-            negative_prompt=negative,
-            num_inference_steps=steps,
-            true_cfg_scale=cfg,
-            width=width,
-            height=height,
-            generator=gen,
-            callback_on_step_end=_on_step,
-            callback_on_step_end_tensor_inputs=["latents"],
-        )
+        try:
+            result = self._pipe(
+                prompt=prompt,
+                negative_prompt=negative,
+                num_inference_steps=steps,
+                true_cfg_scale=cfg,
+                width=width,
+                height=height,
+                generator=gen,
+                callback_on_step_end=_on_step,
+                callback_on_step_end_tensor_inputs=["latents"],
+            )
+        finally:
+            if loras_loaded:
+                self._clear_loras()
 
         if self._cancel:
             return self.asset_response([], meta={"cancelled": True, "model": self.model_id})
