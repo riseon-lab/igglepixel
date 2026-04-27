@@ -1,0 +1,13 @@
+# ── Runtime-installed Python deps ──────────────────────────────────────────
+# docker/entrypoint.sh pip-installs this file on every pod boot if present.
+# Keep packages here that are feature-flag deps or that we want to be able
+# to update without rebuilding the Docker image. Anything that breaks the
+# image base (torch, CUDA-pinned packages, etc.) belongs in the Dockerfile.
+#
+# Why peft is here, not in the image:
+#   diffusers >= 0.21 requires peft for any LoRA loading / set_adapters call.
+#   Without it, pipe.load_lora_weights raises "PEFT backend is required for
+#   this method." Adding it via runtime install gets the fix to live pods
+#   without the 25-min image rebuild + push cycle for new CUDA bases.
+
+peft
