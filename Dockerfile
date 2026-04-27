@@ -3,7 +3,7 @@
 # The backend, UI, and runners are pulled from the public Git repo at boot
 # by /entrypoint.sh, so model code can be iterated without a rebuild.
 
-FROM nvidia/cuda:12.1.1-cudnn8-devel-ubuntu22.04
+FROM nvidia/cuda:12.8.1-cudnn-devel-ubuntu22.04
 
 LABEL maintainer="Forge Launcher"
 LABEL description="Universal open-source model launcher for RunPod"
@@ -42,19 +42,22 @@ RUN pip install --no-cache-dir \
         cryptography==44.0.0
 
 # ── ML stack (used by backend/runners/*) ──
-# Torch is pinned to the CUDA-12.1 wheels matching the base image.
+# Torch is built against CUDA 12.8 (cu128 wheels) so the binary fatbin
+# includes sm_120 kernels for Blackwell (RTX PRO 6000, B100, B200) while
+# still covering older arches (sm_70 → sm_90 for Ampere/Hopper).
+# Older cu121 wheels did NOT have sm_120 and refused to launch on Blackwell.
 # New runners can pull extra packages at boot via requirements-runtime.txt
 # in the repo root — no rebuild needed.
 RUN pip install --no-cache-dir \
-        --index-url https://download.pytorch.org/whl/cu121 \
-        torch==2.5.1 torchvision==0.20.1
+        --index-url https://download.pytorch.org/whl/cu128 \
+        torch torchvision
 RUN pip install --no-cache-dir \
         diffusers \
         transformers \
-        accelerate==1.2.1 \
-        safetensors==0.4.5 \
-        sentencepiece==0.2.0 \
-        Pillow==11.0.0 \
+        accelerate \
+        safetensors \
+        sentencepiece \
+        Pillow \
         bitsandbytes \
         spandrel
 
