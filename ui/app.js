@@ -1044,6 +1044,10 @@ function bindParamInputs(rootEl) {
       state.params[key] = v;
       const valEl = rootEl.querySelector(`#val_${key}`);
       if (valEl) valEl.textContent = v;
+      // Keep aspect chips in sync when user manually edits width or height.
+      if ((key === 'width' || key === 'height') && state.selected) {
+        renderAspectChips(state.selected, true);
+      }
     });
   });
   rootEl.querySelectorAll('[data-toggle]').forEach(el => {
