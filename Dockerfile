@@ -20,15 +20,17 @@ ENV FORGE_BRANCH=main
 ENV FORGE_CACHE_DIR=/workspace/forge-src
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        python3.11 python3.11-dev python3-pip \
+        python3.11 python3.11-dev \
         git curl wget git-lfs jq unzip p7zip-full \
         libgl1-mesa-glx libglib2.0-0 libsm6 libxext6 libxrender-dev \
         ffmpeg libavcodec-dev libavformat-dev \
-        rocm-smi \
     && rm -rf /var/lib/apt/lists/*
 
-RUN ln -sf python3.11 /usr/bin/python && ln -sf pip3 /usr/bin/pip \
- && git lfs install
+RUN curl -sS https://bootstrap.pypa.io/get-pip.py | python3.11
+
+RUN ln -sf /usr/bin/python3.11 /usr/bin/python && \
+    ln -sf /usr/local/bin/pip3.11 /usr/bin/pip && \
+    git lfs install
 
 # ── Python base deps (API + runner host) ──
 RUN pip install --no-cache-dir \
