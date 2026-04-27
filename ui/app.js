@@ -645,9 +645,14 @@ function bindShell() {
     const id = state.workspace;
     if (!id) return;
     if (!await confirmModal('Stop Runner', 'Stop the runner? Weights will stay cached for next time.', 'Stop', true)) return;
-    await api.stop(id);
-    setModelState(id, { ready: false, starting: false, generating: false });
     toast('Stopping…', 'info');
+    try {
+      await api.stop(id);
+      markModelStopped(id);
+      toast('Runner stopped', 'success');
+    } catch (e) {
+      toast(`Stop failed: ${e.message || 'unknown'}`, 'error');
+    }
   });
   $('#wsGenerate').addEventListener('click', onGenerate);
   $('#wsCancel').addEventListener('click', cancelGenerate);
@@ -915,8 +920,13 @@ function openModelMenu(id) {
     closeModal();
     if (!await confirmModal('Delete Weights', `Delete cached weights for ${mName}? This cannot be undone.`, 'Delete', true)) return;
     try {
+      if (state.running[mId] || modelStateOf(mId).ready || modelStateOf(mId).starting) {
+        try { await api.stop(mId); } catch {}
+        markModelStopped(mId);
+      }
       const res = await api.deleteModel(mId);
       if (res.ok || res.status === 'deleted') {
+        resetModelWeightsState(mId);
         toast('Weights removed', 'success');
         closeModal();
       } else {
@@ -943,6 +953,32 @@ function modelStateOf(id) {
 
 function setModelState(id, patch) {
   state.modelStates[id] = { ...modelStateOf(id), ...patch };
+}
+
+function markModelStopped(id) {
+  delete state.running[id];
+  setModelState(id, { ready: false, starting: false, generating: false });
+  if (state.workspace === id) updateWsStatus();
+  if (state.selected?.id === id) renderDrawerBody();
+  renderModels();
+  if ($('.view.active')?.dataset.view === 'running') renderRunning();
+}
+
+function resetModelWeightsState(id) {
+  delete state.running[id];
+  setModelState(id, {
+    downloaded: false,
+    downloading: false,
+    ready: false,
+    starting: false,
+    generating: false,
+    error: null,
+    progress: 0,
+  });
+  if (state.workspace === id) updateWsStatus();
+  if (state.selected?.id === id) renderDrawerBody();
+  renderModels();
+  if ($('.view.active')?.dataset.view === 'running') renderRunning();
 }
 
 // Pick the highest-quality variant the GPU can run. Variants are model
@@ -1056,7 +1092,12 @@ async function openDrawer(id) {
   // Reconcile weight + runner state so reopening the drawer never shows stale "starting".
   try {
     const ws = await api.weightStatus(m.id);
-    if (ws.downloaded) setModelState(m.id, { downloaded: true });
+    setModelState(m.id, {
+      downloaded: !!ws.downloaded,
+      downloading: !!ws.downloading,
+      progress: ws.progress || 0,
+      ...(ws.error ? { error: ws.error } : {}),
+    });
   } catch {}
   try {
     const h = await api.runnerHealth(m.id);
@@ -3321,6 +3362,9 @@ async function pollRunning() {
   try {
     state.running = await api.status();
     const live = Object.values(state.running).filter(r => r.status === 'running').length;
+    const liveIds = new Set(Object.entries(state.running)
+      .filter(([, info]) => info.status === 'running')
+      .map(([id]) => id));
     $('#runningDot').style.display = live > 0 ? 'block' : 'none';
     // Sync modelStates so a runner that became ready while the drawer was closed
     // shows as ready immediately on reopen, without needing a manual interaction.
@@ -3328,11 +3372,15 @@ async function pollRunning() {
       if (info.status === 'running') {
         const s = modelStateOf(id);
         if (!s.ready) setModelState(id, { ready: true, starting: false, downloaded: true, error: null });
-      } else if (info.status === 'exited') {
-        const s = modelStateOf(id);
-        if (s.ready) setModelState(id, { ready: false });
       }
     }
+    for (const [id, s] of Object.entries(state.modelStates)) {
+      if (!liveIds.has(id) && (s.ready || s.starting || s.generating)) {
+        setModelState(id, { ready: false, starting: false, generating: false });
+      }
+    }
+    if (state.workspace) updateWsStatus();
+    if ($('.view.active')?.dataset.view === 'models') renderModels();
     if ($('.view.active')?.dataset.view === 'running') renderRunning();
   } catch {}
   setTimeout(pollRunning, 3000);
@@ -3370,8 +3418,14 @@ function renderRunning() {
   }));
   list.querySelectorAll('[data-act="stop"]').forEach(b => b.addEventListener('click', async (e) => {
     e.stopPropagation();
-    await api.stop(b.dataset.id);
     toast('Stopping…', 'info');
+    try {
+      await api.stop(b.dataset.id);
+      markModelStopped(b.dataset.id);
+      toast('Runner stopped', 'success');
+    } catch (err) {
+      toast(`Stop failed: ${err.message || 'unknown'}`, 'error');
+    }
   }));
 }
 

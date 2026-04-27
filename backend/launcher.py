@@ -130,17 +130,31 @@ class ModelLauncher:
         info = self._procs.get(model_id)
         if not info:
             return {"status": "not_running"}
+        proc = info["proc"]
+        info["status"] = "stopping"
         try:
-            os.killpg(os.getpgid(info["proc"].pid), signal.SIGTERM)
+            os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
         except ProcessLookupError:
             pass
-        info["status"] = "stopped"
+        try:
+            await asyncio.wait_for(asyncio.to_thread(proc.wait), timeout=8)
+        except asyncio.TimeoutError:
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            try:
+                await asyncio.wait_for(asyncio.to_thread(proc.wait), timeout=3)
+            except asyncio.TimeoutError:
+                pass
+        self._procs.pop(model_id, None)
         return {"status": "stopped", "pid": info["pid"]}
 
     def status(self) -> dict:
         for mid, info in list(self._procs.items()):
             if info["status"] == "running" and not self._is_alive(info["proc"]):
                 info["status"] = "exited"
+                self._procs.pop(mid, None)
         return {
             mid: {k: v for k, v in info.items() if k != "proc"}
             for mid, info in self._procs.items()

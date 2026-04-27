@@ -639,13 +639,15 @@ async def runner_preview(model_id: str):
 
 
 @app.delete("/api/models/{model_id}")
-def delete_model_weights(model_id: str):
+async def delete_model_weights(model_id: str):
     """Remove cached weights for a model so the pod can free disk."""
     with open(REGISTRY_PATH) as f:
         registry = json.load(f)
     model = next((m for m in registry["models"] if m["id"] == model_id), None)
     if not model:
         raise HTTPException(404, "Model not found")
+
+    await launcher.stop(model_id)
 
     removed = []
     repo = model.get("hf_repo", "")
@@ -661,6 +663,7 @@ def delete_model_weights(model_id: str):
         if local.exists():
             shutil.rmtree(local, ignore_errors=True)
             removed.append(str(local))
+    downloads.set(model_id, downloading=False, downloaded=False, progress=0.0, error=None)
     return {"status": "deleted", "removed": removed}
 
 
