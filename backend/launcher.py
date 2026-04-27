@@ -55,7 +55,7 @@ class ModelLauncher:
         self._downloads: dict[str, subprocess.Popen] = {}
 
     # ── Launch ──────────────────────────────────────────────────────────
-    async def launch(self, model: dict, loras: list[str], hf_token: Optional[str], quant: Optional[str] = None) -> dict:
+    async def launch(self, model: dict, loras: list[str], hf_token: Optional[str], quant: Optional[str] = None, variant: Optional[str] = None) -> dict:
         mid = model["id"]
         if mid in self._procs and self._is_alive(self._procs[mid]["proc"]):
             return {
@@ -80,6 +80,10 @@ class ModelLauncher:
         # bf16 in the runner if not set.
         if quant:
             env["FORGE_QUANT"] = quant
+        # Size variant for models with multiple sizes (e.g. Wan 2.2 14B vs 5B).
+        # Runner reads FORGE_VARIANT in load() and resolves the right HF repo.
+        if variant:
+            env["FORGE_VARIANT"] = variant
         # Pass the at-rest data key to the runner subprocess (hex-encoded).
         # Without this, the runner can't decrypt user refs or encrypt outputs.
         # Use sys.modules['__main__'] — the backend runs as __main__ (not 'main'),

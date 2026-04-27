@@ -49,7 +49,7 @@ def main() -> None:
             # Pre-load the moderation model so it's in VRAM by the time
             # the first image generate() call fires. Text runners should not
             # pay this VRAM/dependency cost.
-            if getattr(runner, "category", None) == "image":
+            if getattr(runner, "category", None) in ("image", "video"):
                 from backend import moderator
                 moderator.init()
             state["ready"] = True

@@ -40,6 +40,79 @@
   ],
   "models": [
     {
+      "id": "wan22-i2v",
+      "name": "Wan 2.2 — Image to Video",
+      "category": "video",
+      "description": "Alibaba's Wan 2.2 image-to-video. Animates a still into ~3.4 s of motion at 480p or 720p. 14B variant for high-VRAM cards (best motion fidelity), 5B for consumer GPUs.",
+      "runner_module": "backend.runners.wan22_i2v",
+      "hf_repo": "Wan-AI/Wan2.2-TI2V-5B-Diffusers",
+      "license": {
+        "type": "commercial",
+        "label": "Apache 2.0",
+        "url": "https://www.apache.org/licenses/LICENSE-2.0"
+      },
+      "min_vram_gb": 8,
+      "recommended_vram_gb": 24,
+      "supports_lora": true,
+      "gpu_support": ["nvidia"],
+      "dual_expert": true,
+      "variants": [
+        {
+          "id": "14b",
+          "label": "14B — workhorse",
+          "description": "Best motion fidelity. ~80 GB at BF16; needs INT8 for Blackwell-class workstations and below.",
+          "hf_repo": "Wan-AI/Wan2.2-I2V-A14B-Diffusers",
+          "auto_min_vram_gb": 48,
+          "quants": [
+            { "id": "bf16", "label": "BF16", "description": "Best quality",     "vram_gb": 80, "auto_min_vram_gb": 80 },
+            { "id": "int8", "label": "INT8", "description": "Faster, near-bf16","vram_gb": 40, "auto_min_vram_gb": 48 },
+            { "id": "nf4",  "label": "NF4",  "description": "Smallest 14B",     "vram_gb": 22, "auto_min_vram_gb": 0  }
+          ]
+        },
+        {
+          "id": "5b",
+          "label": "5B — consumer",
+          "description": "TI2V-5B unified model. Fast and fits modern consumer GPUs.",
+          "hf_repo": "Wan-AI/Wan2.2-TI2V-5B-Diffusers",
+          "auto_min_vram_gb": 0,
+          "quants": [
+            { "id": "bf16", "label": "BF16", "description": "Best quality",     "vram_gb": 27, "auto_min_vram_gb": 36 },
+            { "id": "int8", "label": "INT8", "description": "Faster, near-bf16","vram_gb": 14, "auto_min_vram_gb": 16 },
+            { "id": "nf4",  "label": "NF4",  "description": "Fits 12 GB cards", "vram_gb": 8,  "auto_min_vram_gb": 0  }
+          ]
+        }
+      ],
+      "default_size_by_vram": [
+        { "min_gb": 80, "w": 1280, "h": 720 },
+        { "min_gb": 36, "w": 832,  "h": 480 },
+        { "min_gb": 0,  "w": 640,  "h": 384 }
+      ],
+      "param_groups": ["prompt", "generation", "dimensions", "video"],
+      "param_keys":   ["prompt", "negative_prompt", "seed", "steps", "cfg", "cfg_low", "width", "height", "num_frames", "fps"],
+      "param_overrides": {
+        "steps":      { "default": 30 },
+        "cfg":        { "default": 5.0, "min": 0, "max": 10, "step": 0.1, "label": "Guidance (high-noise)" },
+        "cfg_low":    { "default": 5.0, "min": 0, "max": 10, "step": 0.1, "label": "Guidance (low-noise)" },
+        "width":      { "default": 832,  "step": 16, "min": 256, "max": 1280 },
+        "height":     { "default": 480,  "step": 16, "min": 256, "max": 720 },
+        "num_frames": { "default": 81,   "step": 1,  "min": 16,  "max": 121 },
+        "fps":        { "default": 24,   "step": 1,  "min": 8,   "max": 30 }
+      },
+      "aspect_presets": [
+        { "label": "16:9 480p",  "w": 832,  "h": 480 },
+        { "label": "16:9 720p",  "w": 1280, "h": 720 },
+        { "label": "Square",     "w": 624,  "h": 624 },
+        { "label": "9:16 480p",  "w": 480,  "h": 832 }
+      ],
+      "image_inputs": [
+        { "key": "ref", "label": "Source frame", "required": true, "hint": "First frame of the video" }
+      ],
+      "default_loras": [
+        { "filename": "Wan2.2-I2V-A14B-NFE4-V1.safetensors",  "label": "Lightning · 4 steps (14B)", "strength_high": 1.0, "strength_low": 1.0, "default_on": false },
+        { "filename": "Wan2.2-T2V-A14B-NFE4-V1.1.safetensors", "label": "Lightning · 4 steps (T2V)", "strength_high": 1.0, "strength_low": 1.0, "default_on": false }
+      ]
+    },
+    {
       "id": "tinyllama-chat",
       "name": "TinyLlama Chat 1.1B",
       "category": "llm",

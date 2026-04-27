@@ -81,6 +81,7 @@ const PARAM_GROUPS = {
       { key: 'seed',      label: 'Seed',      type: 'number', default: -1,   hint: '-1 = random' },
       { key: 'steps',     label: 'Steps',     type: 'slider', min: 1,  max: 100, step: 1,    default: 25 },
       { key: 'cfg',       label: 'CFG',       type: 'slider', min: 0,  max: 20,  step: 0.1,  default: 7 },
+      { key: 'cfg_low',   label: 'CFG (low-noise)', type: 'slider', min: 0, max: 20, step: 0.1, default: 5 },
       { key: 'sampler',   label: 'Sampler',   type: 'select',
         options: ['euler', 'euler_a', 'dpmpp_2m', 'dpmpp_3m_sde', 'ddim', 'unipc', 'lcm'],
         default: 'dpmpp_2m' },
@@ -88,6 +89,14 @@ const PARAM_GROUPS = {
         options: ['normal', 'karras', 'simple', 'sgm_uniform', 'exponential'],
         default: 'karras' },
     ],
+  },
+  video: {
+    title: 'Video',
+    fields: [
+      { key: 'num_frames', label: 'Frames', type: 'slider', min: 16, max: 121, step: 1,  default: 81, hint: '~3.4s @ 24 fps' },
+      { key: 'fps',        label: 'FPS',    type: 'slider', min: 8,  max: 60,  step: 1,  default: 24 },
+    ],
+    layout: 'grid-2',
   },
   dimensions: {
     title: 'Dimensions',

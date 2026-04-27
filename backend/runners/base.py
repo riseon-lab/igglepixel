@@ -75,7 +75,15 @@ class Runner(ABC):
     def _load_loras(self, loras: list) -> bool:
         """Load LoRA adapters onto self._pipe. Returns True if any were loaded.
 
-        Each entry in `loras` is {filename: str, strength: float}.
+        Each entry is either:
+          {filename, strength}                              — single-strength (most pipelines)
+          {filename, strength_high, strength_low}           — dual-expert (Wan 2.2 MoE etc.)
+
+        Dual-strength uses diffusers' per-component weight dict so the high-
+        noise expert (`transformer`) gets one strength and the low-noise
+        expert (`transformer_2`) gets the other. Single-strength is applied
+        uniformly across whatever components the pipeline has.
+
         Resolves files against LORAS_DIR env var (default /workspace/loras).
         """
         pipe = getattr(self, "_pipe", None)
@@ -85,16 +93,23 @@ class Runner(ABC):
         names, weights = [], []
         for i, entry in enumerate(loras):
             filename = entry.get("filename") if isinstance(entry, dict) else entry
-            strength = float(entry.get("strength", 1.0) if isinstance(entry, dict) else 1.0)
             path = loras_dir / filename
             if not path.exists():
                 print(f"[runner] LoRA not found, skipping: {filename}", flush=True)
                 continue
             name = f"adapter_{i}"
-            print(f"[runner] loading LoRA {filename} @ {strength:.2f}", flush=True)
+            if isinstance(entry, dict) and ("strength_high" in entry or "strength_low" in entry):
+                sh = float(entry.get("strength_high", 1.0))
+                sl = float(entry.get("strength_low",  sh))
+                weight = {"transformer": sh, "transformer_2": sl}
+                print(f"[runner] loading LoRA {filename} (high={sh:.2f}, low={sl:.2f})", flush=True)
+            else:
+                strength = float(entry.get("strength", 1.0) if isinstance(entry, dict) else 1.0)
+                weight = strength
+                print(f"[runner] loading LoRA {filename} @ {strength:.2f}", flush=True)
             pipe.load_lora_weights(str(path.parent), weight_name=path.name, adapter_name=name)
             names.append(name)
-            weights.append(strength)
+            weights.append(weight)
         if names:
             pipe.set_adapters(names, weights)
             print(f"[runner] {len(names)} LoRA(s) active", flush=True)
@@ -211,6 +226,40 @@ class Runner(ABC):
             return fcrypto.write_encrypted(key, dest, plaintext)
         # Legacy fallback (encryption disabled): plaintext on disk.
         dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(plaintext)
+        return dest
+
+    @staticmethod
+    def save_video(frames, dest: Path, fps: int = 24) -> Path:
+        """Encode a list of PIL frames to mp4 — encrypted if FORGE_DATA_KEY is set.
+
+        Uses diffusers' export_to_video helper (ffmpeg under the hood). Writes
+        to a tmp mp4 first, then either encrypts in place or moves to dest.
+        Returns the on-disk path with `.enc` suffix when encrypted.
+        """
+        import tempfile
+        from diffusers.utils import export_to_video
+
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        # diffusers.export_to_video expects a real filesystem path; tmpfs in
+        # /workspace keeps the plaintext mp4 out of the persistent volume
+        # except as ciphertext.
+        with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp:
+            tmp_path = tmp.name
+        try:
+            export_to_video(frames, tmp_path, fps=fps)
+            with open(tmp_path, "rb") as f:
+                plaintext = f.read()
+        finally:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+
+        key = _data_key()
+        if key:
+            import backend.crypto as fcrypto
+            return fcrypto.write_encrypted(key, dest, plaintext)
         dest.write_bytes(plaintext)
         return dest
 
