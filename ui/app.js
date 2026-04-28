@@ -835,6 +835,32 @@ function renderGPU(gpu) {
   pill.innerHTML = `<div class="dot"></div><span>${name}${vram ? ' · ' + vram : ''}</span>`;
 }
 
+function modelVramValues(m) {
+  const values = [];
+  if (Number.isFinite(Number(m.min_vram_gb))) values.push(Number(m.min_vram_gb));
+  if (Number.isFinite(Number(m.recommended_vram_gb))) values.push(Number(m.recommended_vram_gb));
+  for (const q of (m.quants || [])) {
+    if (Number.isFinite(Number(q.vram_gb))) values.push(Number(q.vram_gb));
+  }
+  for (const v of (m.variants || [])) {
+    for (const q of (v.quants || [])) {
+      if (Number.isFinite(Number(q.vram_gb))) values.push(Number(q.vram_gb));
+    }
+  }
+  return values;
+}
+
+function modelVramProfile(m) {
+  const values = modelVramValues(m);
+  const min = Number(m.min_vram_gb) || (values.length ? Math.min(...values) : 0);
+  const max = values.length ? Math.max(...values) : (Number(m.recommended_vram_gb) || min);
+  return {
+    min,
+    max,
+    label: max && max !== min ? `${min}–${max} GB` : `${min}+ GB`,
+  };
+}
+
 function renderModels() {
   const grid = $('#modelGrid');
   const search = $('#modelSearch').value.toLowerCase();
@@ -850,17 +876,18 @@ function renderModels() {
   const gpu = state.gpu;
   grid.innerHTML = filtered.map(m => {
     const vram = gpu?.vram_gb || 0;
+    const vramProfile = modelVramProfile(m);
     const phase = drawerPhase(m.id);
     let btnText = 'Configure';
     if (phase === 'ready') btnText = 'Open';
     else if (phase === 'downloaded') btnText = 'Start';
-    const pct = gpu ? Math.min(100, (m.recommended_vram_gb / Math.max(vram, 1)) * 100) : 50;
-    const vramClass = !gpu ? '' : vram >= m.recommended_vram_gb ? '' : vram >= m.min_vram_gb ? 'warn' : 'bad';
-    const vramTag = !gpu ? '' : vram >= m.recommended_vram_gb
-      ? `<span class="tag solid">✓ ${m.recommended_vram_gb} GB</span>`
-      : vram >= m.min_vram_gb
-        ? `<span class="tag warn">${m.min_vram_gb} GB min</span>`
-        : `<span class="tag bad">need ${m.min_vram_gb} GB</span>`;
+    const pct = gpu && vramProfile.max ? Math.min(100, (vram / Math.max(vramProfile.max, 1)) * 100) : 50;
+    const vramClass = !gpu ? '' : vram >= vramProfile.max ? '' : vram >= vramProfile.min ? 'warn' : 'bad';
+    const vramTag = !gpu ? '' : vram >= vramProfile.max
+      ? `<span class="tag solid">✓ ${vramProfile.max} GB</span>`
+      : vram >= vramProfile.min
+        ? `<span class="tag warn">${vramProfile.min} GB min</span>`
+        : `<span class="tag bad">need ${vramProfile.min} GB</span>`;
     const gpuOk = !gpu || gpu.type === 'cpu' || (m.gpu_support || []).includes(gpu.type);
     const dim = gpu && !gpuOk;
     return `
@@ -880,7 +907,7 @@ function renderModels() {
         </div>
         <div class="vram-bar"><div class="vram-fill ${vramClass}" style="width:${Math.min(pct,100)}%"></div></div>
         <div class="mc-foot">
-          <span class="mc-vram">${m.min_vram_gb}–${m.recommended_vram_gb} GB</span>
+          <span class="mc-vram">${vramProfile.label}</span>
           <button class="btn sm" data-action="configure" data-id="${m.id}" ${dim ? 'disabled' : ''}>${btnText}</button>
         </div>
       </article>`;
@@ -1128,9 +1155,7 @@ function renderDrawerBody() {
   const m = state.selected;
   if (!m) return;
   const phase = drawerPhase(m.id);
-  const sizeStr = m.recommended_vram_gb
-    ? `${m.min_vram_gb}–${m.recommended_vram_gb} GB`
-    : `${m.min_vram_gb}+ GB`;
+  const sizeStr = modelVramProfile(m).label;
 
   // State block — short status with subtitle. Icon + colour shift per phase.
   const stateBlocks = {
