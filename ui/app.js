@@ -2843,14 +2843,23 @@ function closeAssetMenu() {
   pop.setAttribute('aria-hidden', 'true');
 }
 
-function downloadAsset(asset) {
+async function downloadAsset(asset) {
   if (!asset?.url) return;
-  const a = document.createElement('a');
-  a.href = asset.url;
-  a.download = asset.name || 'download';
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
+  try {
+    const res = await fetch(asset.url, { credentials: 'same-origin' });
+    if (!res.ok) throw new Error(`Download failed (${res.status})`);
+    const blob = await res.blob();
+    const objUrl = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = objUrl;
+    a.download = asset.name || asset.path?.split('/').pop() || 'download';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(objUrl), 30_000);
+  } catch (e) {
+    toast(`Download failed: ${e.message || 'unknown error'}`, 'error');
+  }
 }
 
 async function deleteAssetAnywhere(asset) {
@@ -2936,7 +2945,7 @@ async function generateLLMReply(m, session, prompt, options = {}) {
       text = previewLLMText(prompt, state.params.thinking !== false);
     } else {
       const history = messagesForLLMPayload(session, assistant);
-      const res = await api.generate({
+      const res = await generateWithBackendJob({
         model_id: m.id,
         params: {
           ...state.params,
@@ -3361,12 +3370,7 @@ function _renderLightbox() {
     : `<img src="${u}" alt="${esc(asset.name || '')}">`) + navArrows;
   $('#lightboxFoot').textContent = asset.path || '';
   $('#lightboxDownload').onclick = () => {
-    const a = document.createElement('a');
-    a.href = asset.url;
-    a.download = asset.name || 'download';
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
+    downloadAsset(asset);
   };
   $('#lightboxPrev')?.addEventListener('click', (e) => { e.stopPropagation(); _lightboxStep(-1); });
   $('#lightboxNext')?.addEventListener('click', (e) => { e.stopPropagation(); _lightboxStep(1);  });

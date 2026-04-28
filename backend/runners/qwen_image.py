@@ -21,9 +21,9 @@ class Runner(RunnerBase):
     model_id            = "qwen-image"
     model_name          = "Qwen-Image"
     category            = "image"
-    supports_lora       = False
-    min_vram_gb         = 24
-    recommended_vram_gb = 48
+    supports_lora       = True
+    min_vram_gb         = 14
+    recommended_vram_gb = 47
 
     HF_REPO = "Qwen/Qwen-Image"
 

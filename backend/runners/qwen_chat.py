@@ -39,7 +39,7 @@ class Runner(RunnerBase):
     category            = "llm"
     supports_lora       = False
     min_vram_gb         = 4
-    recommended_vram_gb = 14
+    recommended_vram_gb = 64
 
     def __init__(self) -> None:
         self._model = None

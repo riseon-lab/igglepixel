@@ -39,8 +39,8 @@ class Runner(RunnerBase):
     model_name          = "Wan 2.2 — Image to Video"
     category            = "video"
     supports_lora       = True
-    min_vram_gb         = 8
-    recommended_vram_gb = 24
+    min_vram_gb         = 16
+    recommended_vram_gb = 80
 
     def __init__(self) -> None:
         self._pipe = None

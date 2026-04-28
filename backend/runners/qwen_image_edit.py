@@ -23,8 +23,8 @@ class Runner(RunnerBase):
     model_name          = "Qwen-Image-Edit"
     category            = "image"
     supports_lora       = True
-    min_vram_gb         = 24
-    recommended_vram_gb = 48
+    min_vram_gb         = 14
+    recommended_vram_gb = 47
 
     HF_REPO = "Qwen/Qwen-Image-Edit"
 
