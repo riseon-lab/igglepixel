@@ -30,6 +30,7 @@ const state = {
   recents:       {},          // model_id -> [asset, …] (this session only)
   imgInputs:     {},          // { model_id -> { ref:{img,enabled}, pose:{...}, ... } }
   loraStates:    {},          // { model_id -> { filename -> { on, strength } } }
+  components:    [],          // installed split-file components: [{target, filename, size_mb, path}]
   chats:         {},          // { model_id -> [{role, text, thinking?, streaming?}] }
   chatSessions:  {},          // { model_id -> [{id,title,messages,compact_summary,…}] }
   activeChat:    {},          // { model_id -> session_id }
@@ -311,6 +312,8 @@ const api = {
     body: JSON.stringify(body),
   })),
   installLoras:  (b) => json(apiCall('/api/loras/install', jsonBody(b))),
+  components:        () => json(apiCall('/api/components')),
+  installComponents: (b) => json(apiCall('/api/components/install', jsonBody(b))),
   deleteAsset:   (path) => json(apiCall(`/api/assets?path=${encodeURIComponent(path)}`, { method: 'DELETE' })),
   // Phase 3: encrypt the file in the browser BEFORE upload when we have the
   // data key. Backend stores the bytes as-is (sees ciphertext, period).
@@ -380,7 +383,7 @@ async function bootApp() {
   }
   await ensureServiceWorker();   // register SW so <img> requests get decrypted
   await primeBrowserKey();       // hand the IDB-cached CryptoKey to the SW
-  await Promise.all([loadModels(), loadLoras(), loadAssets()]);
+  await Promise.all([loadModels(), loadLoras(), loadAssets(), loadComponents()]);
   const initialView = window.location.hash.replace('#', '');
   const canRestoreView = initialView
     && initialView !== 'workspace'
@@ -1285,6 +1288,46 @@ function renderDrawerBody() {
       <label class="field-label">HF token <span class="hint">gated repos</span></label>
       <input class="text-input" id="drawerHFToken" type="password" placeholder="hf_…" value="${state.settings.hf_token || ''}">
     </div>
+
+    ${(() => {
+      // Components (split-file transformer / VAE / text-encoder swaps).
+      // Only renders when the model declares m.components.options.
+      // Each target gets a "Default" option (load from base HF repo) plus
+      // the curated options. Installed options can be selected; uninstalled
+      // ones show an Install button. Selection persists in modelState.components.
+      const comp = m.components;
+      if (!comp?.options?.length) return '';
+      const sel = modelStateOf(m.id).components || {};
+      const byTarget = {};
+      for (const o of comp.options) (byTarget[o.target] = byTarget[o.target] || []).push(o);
+      const targetLabel = { transformer: 'Transformer', vae: 'VAE', text_encoder: 'Text encoder' };
+      const sections = Object.keys(byTarget).map(target => {
+        const opts = byTarget[target];
+        const cur  = sel[target] || '';
+        const optHtml = opts.map(o => {
+          const installed = isComponentInstalled(o);
+          const basename  = String(o.filename).split('/').pop();
+          const label     = `${o.label}${installed ? '' : ' · not installed'}`;
+          return `<option value="${esc(basename)}" ${cur === basename ? 'selected' : ''} ${installed ? '' : 'disabled'}>${esc(label)}</option>`;
+        }).join('');
+        return `
+          <div class="field" style="margin-top:10px">
+            <label class="field-label">${esc(targetLabel[target] || target)} <span class="hint">component</span></label>
+            <select class="select" data-component-target="${esc(target)}">
+              <option value="" ${cur === '' ? 'selected' : ''}>Default (from base repo)</option>
+              ${optHtml}
+            </select>
+            ${opts.filter(o => !isComponentInstalled(o)).map(o =>
+              `<button class="btn sm" style="margin-top:6px" data-component-install="${esc(o.id)}"><svg><use href="#i-down"/></svg>Install · ${esc(o.label)}</button>`
+            ).join('')}
+          </div>`;
+      }).join('');
+      return `
+        <div class="field" style="margin-top:18px">
+          <label class="field-label">Components <span class="hint">${esc(comp.description || 'split-file weight swaps')}</span></label>
+          ${sections}
+        </div>`;
+    })()}
   `;
 
   // Persist the quant choice immediately on change so reopening the drawer
@@ -1300,6 +1343,49 @@ function renderDrawerBody() {
     renderDrawerBody();
   });
   $('#drawerHFToken')?.addEventListener('change', e => saveHFToken(e.target.value));
+
+  // Component picker: persist selected filename per target on change.
+  $$('[data-component-target]', $('#drawer')).forEach(sel => {
+    sel.addEventListener('change', () => {
+      const target = sel.dataset.componentTarget;
+      const cur = modelStateOf(m.id).components || {};
+      cur[target] = sel.value || '';
+      setModelState(m.id, { components: { ...cur } });
+    });
+  });
+  // Install button — pulls the file via /api/components/install, then
+  // refreshes state.components and re-renders the drawer so the dropdown
+  // option enables and a fresh-installed component can be selected.
+  $$('[data-component-install]', $('#drawer')).forEach(btn => btn.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    const optId = btn.dataset.componentInstall;
+    const opt = (m.components.options || []).find(o => o.id === optId);
+    if (!opt) return;
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner"></span><span>Installing…</span>';
+    try {
+      const res = await api.installComponents({
+        files: [{ target: opt.target, hf_repo: opt.hf_repo, filename: opt.filename }],
+        hf_token: state.settings.hf_token || null,
+      });
+      const errors = (res.results || []).filter(r => r.status === 'error');
+      if (errors.length) {
+        toast(`Install failed: ${errors[0].error || 'unknown'}`, 'error');
+      } else {
+        toast(`${opt.label} installed`, 'success');
+        // Auto-select the freshly-installed component.
+        const cur = modelStateOf(m.id).components || {};
+        cur[opt.target] = String(opt.filename).split('/').pop();
+        setModelState(m.id, { components: { ...cur } });
+      }
+      await loadComponents();
+      renderDrawerBody();
+    } catch (err) {
+      toast(`Install failed: ${err.message || 'unknown'}`, 'error');
+      btn.disabled = false;
+      btn.innerHTML = `<svg><use href="#i-down"/></svg>Install · ${esc(opt.label)}`;
+    }
+  }));
 
   renderDrawerPrimary();
 }
@@ -1524,7 +1610,12 @@ async function startRunner(m) {
   renderDrawerBody();
   let logEs = null;
   try {
-    const launched = await api.launch({ model_id: m.id, loras: [], hf_token: hfToken, quant, variant });
+    // Strip empty/default ('' = use base repo) entries so the backend only
+    // gets explicit overrides — keeps the launch request tidy and avoids
+    // the runner trying to load a path that doesn't exist.
+    const compSel = modelStateOf(m.id).components || {};
+    const components = Object.fromEntries(Object.entries(compSel).filter(([, v]) => v));
+    const launched = await api.launch({ model_id: m.id, loras: [], hf_token: hfToken, quant, variant, components });
     if (launched.status !== 'launched' && launched.status !== 'already_running') {
       throw new Error(launched.message || 'Launch failed');
     }
@@ -3624,6 +3715,20 @@ async function loadLoras() {
   } catch { state.loras = []; }
   $('#loraNavCount').textContent = state.loras.length;
   renderLoraPanel();
+}
+
+// ── Components (transformer / VAE / text-encoder split-file swaps) ──────
+async function loadComponents() {
+  try {
+    const data = await api.components();
+    state.components = data.components || [];
+  } catch { state.components = []; }
+}
+
+function isComponentInstalled(opt) {
+  if (!opt?.filename || !opt?.target) return false;
+  const basename = String(opt.filename).split('/').pop();
+  return (state.components || []).some(c => c.target === opt.target && c.filename === basename);
 }
 
 function renderLoraPanel() {

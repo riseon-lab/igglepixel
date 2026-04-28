@@ -55,7 +55,7 @@ class ModelLauncher:
         self._downloads: dict[str, subprocess.Popen] = {}
 
     # ── Launch ──────────────────────────────────────────────────────────
-    async def launch(self, model: dict, loras: list[str], hf_token: Optional[str], quant: Optional[str] = None, variant: Optional[str] = None) -> dict:
+    async def launch(self, model: dict, loras: list[str], hf_token: Optional[str], quant: Optional[str] = None, variant: Optional[str] = None, components: Optional[dict] = None) -> dict:
         mid = model["id"]
         if mid in self._procs and self._is_alive(self._procs[mid]["proc"]):
             return {
@@ -84,6 +84,20 @@ class ModelLauncher:
         # Runner reads FORGE_VARIANT in load() and resolves the right HF repo.
         if variant:
             env["FORGE_VARIANT"] = variant
+        # Split-component swaps. `components` is {target: filename} — we
+        # resolve each to an absolute path under <WORKSPACE>/components/<target>/
+        # and pass via FORGE_COMPONENT_<TARGET>. Runner reads these and uses
+        # `from_single_file` to load the component, then injects it into the
+        # pipeline's from_pretrained call.
+        if components:
+            comp_root = WORKSPACE / "components"
+            for target, fname in components.items():
+                if not fname:
+                    continue
+                tgt = str(target).strip().lower()
+                p = comp_root / tgt / Path(fname).name
+                if p.exists():
+                    env[f"FORGE_COMPONENT_{tgt.upper()}"] = str(p)
         # Pass the at-rest data key to the runner subprocess (hex-encoded).
         # Without this, the runner can't decrypt user refs or encrypt outputs.
         # Use sys.modules['__main__'] — the backend runs as __main__ (not 'main'),

@@ -54,6 +54,56 @@ class Runner(RunnerBase):
         else:
             print("[runner] loading QwenImageEditPipeline (bf16)…", flush=True)
 
+        # Optional split-file component swaps. The launcher passes absolute
+        # paths via FORGE_COMPONENT_<TARGET> when the user picked a curated
+        # component (e.g. the Comfy-Org 2511 transformer). When set, we load
+        # via from_single_file and inject the resulting object into
+        # from_pretrained — this lets us run Comfy's exact 2511 weights while
+        # keeping diffusers' tokenizer + scheduler config from the base repo.
+        # bnb quantisation can't be combined with custom-loaded sub-modules
+        # because the BitsAndBytesConfig only applies to weights pulled by
+        # from_pretrained, so we ignore swaps when quant != bf16 and warn.
+        component_overrides: dict = {}
+        if quant == "bf16":
+            try:
+                from diffusers import (
+                    QwenImageTransformer2DModel,
+                    AutoencoderKLQwenImage,
+                )
+                # Some diffusers builds expose AutoencoderKLQwenImage; older ones
+                # only have AutoencoderKL. Fall back if the specific class is
+                # missing so this never blocks the whole launch.
+            except ImportError:
+                from diffusers import QwenImageTransformer2DModel  # type: ignore
+                from diffusers import AutoencoderKL as AutoencoderKLQwenImage  # type: ignore
+
+            tx_path = os.environ.get("FORGE_COMPONENT_TRANSFORMER")
+            if tx_path:
+                try:
+                    print(f"[runner] loading transformer from split file: {tx_path}", flush=True)
+                    component_overrides["transformer"] = QwenImageTransformer2DModel.from_single_file(
+                        tx_path, torch_dtype=torch.bfloat16
+                    )
+                except Exception as e:
+                    print(f"[runner] WARN: transformer split-file load failed ({e}); falling back to base repo", flush=True)
+
+            vae_path = os.environ.get("FORGE_COMPONENT_VAE")
+            if vae_path:
+                try:
+                    print(f"[runner] loading VAE from split file: {vae_path}", flush=True)
+                    component_overrides["vae"] = AutoencoderKLQwenImage.from_single_file(
+                        vae_path, torch_dtype=torch.bfloat16
+                    )
+                except Exception as e:
+                    print(f"[runner] WARN: VAE split-file load failed ({e}); falling back to base repo", flush=True)
+
+            # Text encoder swap is left for a follow-up — it requires picking
+            # the right Qwen2.5-VL class + tokenizer pairing, which differs
+            # from the standard transformers loader path. Falls through silently.
+        elif os.environ.get("FORGE_COMPONENT_TRANSFORMER") or os.environ.get("FORGE_COMPONENT_VAE"):
+            print(f"[runner] WARN: component swaps ignored (FORGE_QUANT={quant}; only bf16 supported with custom components)", flush=True)
+
+        kwargs.update(component_overrides)
         pipe = QwenImageEditPipeline.from_pretrained(self.HF_REPO, **kwargs)
 
         if torch.cuda.is_available() and quant == "bf16":

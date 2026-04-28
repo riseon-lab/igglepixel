@@ -31,12 +31,17 @@ REGISTRY_PATH = BACKEND_DIR / "model_registry.json"
 WORKSPACE = Path(os.environ.get("WORKSPACE", "/workspace"))
 LORAS_DIR        = WORKSPACE / "loras"
 MODELS_DIR       = WORKSPACE / "models"
+COMPONENTS_DIR   = WORKSPACE / "components"     # split-file transformer/VAE/text-encoder swaps
 ASSETS_DIR       = WORKSPACE / "assets"
 ASSET_UPLOADS    = ASSETS_DIR / "uploads"
 ASSET_GENERATED  = ASSETS_DIR / "generated"
 COMFY_OUTPUT     = WORKSPACE / "ComfyUI" / "output"  # also scanned as 'generated'
 
-for d in (LORAS_DIR, MODELS_DIR, ASSET_UPLOADS, ASSET_GENERATED):
+# Components live one dir per target so collisions across models can't happen
+# and the launcher resolves a path by target+filename without ambiguity.
+COMPONENT_TARGETS = ("transformer", "vae", "text_encoder")
+
+for d in (LORAS_DIR, MODELS_DIR, COMPONENTS_DIR, ASSET_UPLOADS, ASSET_GENERATED):
     try:
         d.mkdir(parents=True, exist_ok=True)
     except OSError:
@@ -527,6 +532,11 @@ class LaunchRequest(BaseModel):
     hf_token: Optional[str] = None
     quant: Optional[str] = None      # bf16 | int8 | nf4 — runner reads FORGE_QUANT
     variant: Optional[str] = None    # 14b | 5b etc. — runner reads FORGE_VARIANT
+    # {target: filename} for split-file component swaps (e.g.
+    # {"transformer": "qwen_image_edit_2511_bf16.safetensors", "vae": "..."}).
+    # Launcher resolves each to a path under WORKSPACE/components/<target>/
+    # and passes via FORGE_COMPONENT_<TARGET>.
+    components: Optional[dict] = None
 
 
 @app.post("/api/launch")
@@ -539,7 +549,7 @@ async def launch_model(req: LaunchRequest):
     model = next((m for m in registry["models"] if m["id"] == req.model_id), None)
     if not model:
         raise HTTPException(404, "Model not found")
-    return await launcher.launch(model, req.loras, req.hf_token, req.quant, req.variant)
+    return await launcher.launch(model, req.loras, req.hf_token, req.quant, req.variant, req.components)
 
 
 @app.post("/api/stop/{model_id}")
@@ -994,6 +1004,121 @@ def delete_lora(filename: str):
     if meta.exists():
         meta.unlink()
     return {"status": "deleted"}
+
+
+# ── Components (split-file transformer / VAE / text-encoder swaps) ────────
+# Each component lives at WORKSPACE/components/<target>/<basename>. Targets
+# match diffusers component names so the runner can pass the loaded object
+# straight into Pipeline.from_pretrained(transformer=…, vae=…). The registry
+# entry on a model declares which components it supports; the user installs
+# them via /api/components/install (HF) and the launcher passes the chosen
+# paths through env vars (FORGE_COMPONENT_<TARGET>) to the runner.
+
+def _component_path(target: str, filename: str) -> Path:
+    """Resolve a component file by target and basename. Filename can be a
+    nested path (e.g. 'split_files/diffusion_models/foo.safetensors') — we
+    strip directories and store flat under components/<target>/."""
+    if target not in COMPONENT_TARGETS:
+        raise HTTPException(400, f"Unknown component target: {target}")
+    return COMPONENTS_DIR / target / Path(filename).name
+
+
+def _find_component(target: str, filename: str) -> Optional[Path]:
+    p = _component_path(target, filename)
+    return p if p.exists() else None
+
+
+class ComponentInstallBody(BaseModel):
+    files:    list      # [{target, hf_repo, filename}, ...]
+    hf_token: Optional[str] = None
+
+
+@app.post("/api/components/install")
+def install_components(body: ComponentInstallBody):
+    """Pull split-file model components (transformer / VAE / text-encoder)
+    from HuggingFace into COMPONENTS_DIR/<target>/. Skips files already
+    on disk. Same shape as /api/loras/install with an extra `target` field."""
+    from huggingface_hub import hf_hub_download
+    token = body.hf_token or os.environ.get("HF_TOKEN")
+    results = []
+    for entry in body.files or []:
+        target   = (entry.get("target") or "").strip()
+        repo     = entry.get("hf_repo")
+        filename = entry.get("filename")
+        if target not in COMPONENT_TARGETS:
+            results.append({"filename": filename or "", "target": target, "status": "error",
+                            "error": f"target must be one of {COMPONENT_TARGETS}"})
+            continue
+        if not repo or not filename:
+            results.append({"filename": filename or "", "target": target, "status": "error",
+                            "error": "missing hf_repo or filename"})
+            continue
+        dest_dir = COMPONENTS_DIR / target
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        basename = Path(filename).name
+        dest = dest_dir / basename
+        if dest.exists():
+            results.append({"filename": basename, "target": target, "status": "already_installed",
+                            "path": str(dest)})
+            continue
+        try:
+            # hf_hub_download writes into local_dir preserving the repo's
+            # internal path. We then move the file flat into <target>/ so
+            # the launcher always finds it at a predictable location.
+            staged = hf_hub_download(repo_id=repo, filename=filename,
+                                     local_dir=str(dest_dir), token=token)
+            staged_path = Path(staged)
+            if staged_path != dest:
+                staged_path.rename(dest)
+                # Best-effort cleanup of empty parent dirs HF created.
+                try:
+                    parent = staged_path.parent
+                    while parent != dest_dir and not any(parent.iterdir()):
+                        parent.rmdir()
+                        parent = parent.parent
+                except OSError:
+                    pass
+            results.append({"filename": basename, "target": target, "status": "installed",
+                            "path": str(dest)})
+        except Exception as e:
+            results.append({"filename": basename, "target": target, "status": "error",
+                            "error": f"{type(e).__name__}: {e}"})
+    return {"results": results}
+
+
+@app.get("/api/components")
+def list_components():
+    """Return installed components grouped by target — UI uses this to mark
+    registry entries as installed and show file size."""
+    items = []
+    for target in COMPONENT_TARGETS:
+        d = COMPONENTS_DIR / target
+        if not d.exists():
+            continue
+        for f in d.glob("*.safetensors"):
+            try:
+                size_mb = round(f.stat().st_size / 1024 / 1024, 1)
+            except OSError:
+                size_mb = 0
+            items.append({
+                "target":   target,
+                "filename": f.name,
+                "size_mb":  size_mb,
+                "path":     str(f),
+            })
+    items.sort(key=lambda c: (c["target"], c["filename"]))
+    return {"components": items}
+
+
+@app.delete("/api/components/{target}/{filename}")
+def delete_component(target: str, filename: str):
+    if target not in COMPONENT_TARGETS:
+        raise HTTPException(400, f"Unknown component target: {target}")
+    p = _component_path(target, filename)
+    if not p.exists():
+        raise HTTPException(404, "Component not found")
+    p.unlink()
+    return {"status": "deleted", "path": str(p)}
 
 
 class LoraTagRequest(BaseModel):
