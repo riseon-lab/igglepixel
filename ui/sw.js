@@ -38,7 +38,12 @@ self.addEventListener("fetch", (event) => {
 });
 
 async function handle(req) {
-  const upstream = await fetch(req);
+  // Video elements commonly request byte ranges. AES-GCM ciphertext cannot be
+  // decrypted from an arbitrary partial range, so for encrypted assets we
+  // intentionally fetch the complete blob from the backend, decrypt it, and
+  // return a normal 200 response to the media element.
+  const upstreamReq = req.headers.has("range") ? withoutRange(req) : req;
+  const upstream = await fetch(upstreamReq);
   if (!upstream.ok) return upstream;
 
   // Backend marks .enc-served files with this header. Plaintext / legacy
@@ -89,6 +94,24 @@ async function handle(req) {
   return new Response(pt, {
     status:  200,
     headers: { "content-type": mime, "x-forge-decrypted": "1" },
+  });
+}
+
+function withoutRange(req) {
+  const headers = new Headers(req.headers);
+  headers.delete("range");
+  headers.delete("if-range");
+  return new Request(req.url, {
+    method: req.method,
+    headers,
+    mode: req.mode,
+    credentials: req.credentials,
+    cache: req.cache,
+    redirect: req.redirect,
+    referrer: req.referrer,
+    referrerPolicy: req.referrerPolicy,
+    integrity: req.integrity,
+    keepalive: req.keepalive,
   });
 }
 
