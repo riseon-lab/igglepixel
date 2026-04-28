@@ -90,6 +90,40 @@ Runner subprocess on 127.0.0.1:17000+
 
 Only the main FastAPI app is exposed. Runner subprocesses bind to localhost and are reached only by the backend.
 
+## Encryption & Asset Privacy
+
+IgglePixel encrypts uploaded and generated assets at rest on the workspace volume. The goal is to protect persistent storage, backups, and accidentally exposed asset URLs while keeping the normal image/video workflow usable in the browser.
+
+Asset encryption is built around one data key:
+
+- The data key is derived from the user's password with PBKDF2-SHA256.
+- The derived key is 32 bytes and is used for AES-256-GCM.
+- Encrypted files are written as `<visible-filename>.enc`.
+- The encrypted file format is `[12-byte nonce][ciphertext + 16-byte GCM tag]`.
+- The user-facing asset path stays as the original filename, so the UI works with `photo.png` while disk stores `photo.png.enc`.
+
+During setup/login, the backend stores the username, password hash, session token, signing key, PBKDF2 salt, and an encrypted canary in the auth file. It does not store the raw data key. On login or unlock, the password derives the key again and verifies it against the canary. The data key then lives in process memory until the backend restarts or the user logs out.
+
+Uploads can be encrypted in the browser before they reach the backend. The UI derives a non-extractable Web Crypto `CryptoKey`, encrypts the file, and sends it with `X-Forge-Encrypted: 1`. In that path, the backend stores the ciphertext directly and does not need to see the plaintext upload. If browser-side encryption is unavailable but the backend is unlocked, the backend falls back to server-side encryption before writing the file. A plaintext fallback exists only for local/dev situations where no key is available.
+
+Generated outputs are encrypted by the runner helpers. When the backend launches a model runner, it passes the unlocked data key to the subprocess through `FORGE_DATA_KEY`. Runners use that key to read encrypted references and write generated images/videos back as encrypted assets.
+
+Viewing assets works through signed URLs and the service worker:
+
+- Asset URLs are served from `/api/assets/file/...` with a short-lived signature.
+- The backend returns the encrypted bytes and marks encrypted responses with `X-Forge-Encrypted: 1`.
+- `ui/sw.js` intercepts those asset requests, decrypts the blob in the browser, and returns normal media bytes to `<img>` and `<video>`.
+- Encrypted videos are fetched as complete blobs rather than byte ranges because AES-GCM cannot decrypt an arbitrary partial range safely.
+
+Important trust boundary: this is encryption at rest, not a zero-knowledge hosted system. While a pod is unlocked, the backend and runner processes must be able to decrypt assets to generate, edit, preview, and serve media. Plaintext can also exist briefly in GPU memory, process memory, browser memory, and temporary encode buffers. If a running pod is compromised while unlocked, the attacker may be able to access decrypted data.
+
+Operational notes:
+
+- If the password is lost, encrypted assets cannot be recovered.
+- After a pod/backend restart, users may need to unlock again before encrypted assets can be viewed or used as references.
+- Do not commit `/workspace/assets`, `.forge_auth.json`, tokens, generated outputs, model weights, or local workspace data.
+- PRs that touch auth, encryption, downloads, uploads, service-worker asset handling, or runner asset I/O should test upload, preview, download, generated output, locked state, and post-restart unlock.
+
 ## Model Registry
 
 Models live in `backend/model_registry.json`. The registry describes:
