@@ -9,5 +9,11 @@
 #   Without it, pipe.load_lora_weights raises "PEFT backend is required for
 #   this method." Adding it via runtime install gets the fix to live pods
 #   without the 25-min image rebuild + push cycle for new CUDA bases.
+#
+# Why ftfy:
+#   Several text encoders (CLIP, Qwen2.5-VL preprocessing, etc.) call
+#   ftfy.fix_text() on prompts to normalise unicode. Without it generation
+#   fails with "NameError: name 'ftfy' is not defined".
 
 peft
+ftfy

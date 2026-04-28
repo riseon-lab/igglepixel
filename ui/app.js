@@ -3046,9 +3046,15 @@ function snapshotJob() {
         };
       }
       const filename = entry.filename || key;
+      // For dual-expert models, forward the per-LoRA `target` (the user's
+      // explicit high/low tag, or the filename auto-detect) so the runner
+      // applies the file to the matching expert. Falls back to "high" when
+      // unknown — single-transformer pipes ignore it anyway.
       if (m.dual_expert) {
+        const target = entry.target || entry.target_guess || undefined;
         return {
           filename,
+          target,
           strength_high: v.strength_high ?? v.strength ?? 1.0,
           strength_low:  v.strength_low  ?? v.strength ?? 1.0,
         };
@@ -3168,13 +3174,17 @@ async function runJob(job) {
               strength_low:  l.strength_low  ?? 1.0,
             };
           }
-          // Dual-expert (single file with per-expert strengths)
+          // Dual-expert (single file with per-expert strengths). The user's
+          // explicit `target` (high/low from CivitAI Wan LoRA tagging) is
+          // forwarded so the runner loads the file onto the matching expert.
           if (l.strength_high !== undefined || l.strength_low !== undefined) {
-            return {
+            const out = {
               filename: l.filename,
               strength_high: l.strength_high ?? 1.0,
               strength_low:  l.strength_low  ?? 1.0,
             };
+            if (l.target) out.target = l.target;
+            return out;
           }
           // Standard single-strength
           return { filename: l.filename, strength: l.strength ?? 1.0 };
@@ -3517,9 +3527,22 @@ function renderLoraPanel() {
   }
   list.innerHTML = state.loras.map(l => {
     const fn = esc(l.filename);
+    // Dual-expert target: explicit user setting wins; otherwise show the
+    // filename-based guess so the user can confirm or override. Wan
+    // CivitAI LoRAs ship as paired _high.safetensors / _low.safetensors,
+    // so the auto-detect handles the common case for free.
+    const cur = l.target || '';
+    const guess = l.target_guess || '';
+    const opt = (val, label) =>
+      `<option value="${val}" ${cur === val ? 'selected' : ''}>${label}${!cur && guess === val ? ' · auto' : ''}</option>`;
     return `<div class="lora-row">
       <span class="name" title="${fn}">${fn}</span>
       <span class="size">${l.size_mb}MB</span>
+      <select class="lora-target-select" data-target-for="${fn}" title="Dual-expert target (Wan etc.)">
+        <option value="" ${!cur ? 'selected' : ''}>—${guess ? ` (auto: ${guess})` : ''}</option>
+        ${opt('high', 'high')}
+        ${opt('low',  'low')}
+      </select>
       <button class="del" data-del="${fn}" title="Delete"><svg style="width:13px;height:13px"><use href="#i-trash"/></svg></button>
     </div>`;
   }).join('');
@@ -3528,6 +3551,22 @@ function renderLoraPanel() {
     await api.deleteLora(b.dataset.del);
     await loadLoras();
     toast('LoRA deleted');
+  }));
+  // Persist target choice via PATCH so the runner sees it on the next launch.
+  list.querySelectorAll('[data-target-for]').forEach(s => s.addEventListener('change', async () => {
+    const fn  = s.dataset.targetFor;
+    const lora = state.loras.find(x => x.filename === fn);
+    try {
+      await api.patchLora(fn, {
+        tags: lora?.tags || [],
+        target: s.value,                  // empty string clears
+      });
+      // Refresh local state so the workspace immediately knows.
+      if (lora) lora.target = s.value || undefined;
+      toast(s.value ? `Set ${fn} → ${s.value}-noise` : 'Cleared target', 'success');
+    } catch (e) {
+      toast(`Failed to update target: ${e.message || 'unknown'}`, 'error');
+    }
   }));
 }
 

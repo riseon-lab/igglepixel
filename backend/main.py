@@ -826,6 +826,23 @@ async def civitai_download(req: CivitaiDownloadRequest):
 
 
 # ── LoRAs ────────────────────────────────────────────────────────────────
+def _guess_lora_target(name: str) -> Optional[str]:
+    """Best-effort high/low detection from a Wan-style filename.
+
+    CivitAI ships dual-expert Wan LoRAs as a pair like ``foo_high.safetensors``
+    + ``foo_low.safetensors`` (or ``high_noise`` / ``low_noise``). When the
+    user hasn't manually tagged the file we surface a guess so the workspace
+    can apply it to the right expert without forcing a manual step.
+    """
+    n = name.lower()
+    # Order matters — match the more-specific patterns first.
+    if "high_noise" in n or "highnoise" in n or "_high" in n or "-high" in n or n.endswith("high.safetensors"):
+        return "high"
+    if "low_noise"  in n or "lownoise"  in n or "_low"  in n or "-low"  in n or n.endswith("low.safetensors"):
+        return "low"
+    return None
+
+
 @app.get("/api/loras")
 def list_loras():
     """List every .safetensors under LORAS_DIR (recursive).
@@ -848,15 +865,19 @@ def list_loras():
             rel = f.relative_to(LORAS_DIR).as_posix()
         except ValueError:
             rel = f.name
+        # Auto-detect dual-expert target from filename when the user hasn't
+        # set one explicitly. UI can show this as a guess they can override.
+        target_guess = _guess_lora_target(f.name)
         loras.append(
             {
                 # `filename` stays the basename so DELETE/PATCH routes (which
                 # can't span slashes) keep working. `rel_path` carries the
                 # full subpath for display when nested.
-                "filename":   f.name,
-                "rel_path":   rel,
-                "size_mb":    round(f.stat().st_size / 1024 / 1024, 1),
-                "path":       str(f),
+                "filename":     f.name,
+                "rel_path":     rel,
+                "size_mb":      round(f.stat().st_size / 1024 / 1024, 1),
+                "path":         str(f),
+                "target_guess": target_guess,
                 **meta,
             }
         )
@@ -927,6 +948,9 @@ def delete_lora(filename: str):
 class LoraTagRequest(BaseModel):
     tags: list[str] = []
     model_id: Optional[str] = None
+    # Dual-expert (MoE) target. CivitAI Wan LoRAs ship as one file per expert
+    # and the user has to tell us which is which. Values: "high" | "low" | None.
+    target: Optional[str] = None
 
 
 @app.patch("/api/loras/{filename}")
@@ -949,6 +973,12 @@ def update_lora(filename: str, req: LoraTagRequest):
             meta.pop("model_id", None)
         else:
             meta["model_id"] = req.model_id
+    if req.target is not None:
+        # Empty string clears; "high"/"low" set; anything else rejected.
+        if req.target == "":
+            meta.pop("target", None)
+        elif req.target in ("high", "low"):
+            meta["target"] = req.target
     with open(meta_path, "w") as f:
         json.dump(meta, f)
     return {"status": "updated", "meta": meta}

@@ -185,24 +185,32 @@ class Runner(ABC):
                 print(f"[runner] LoRA not found, skipping: {filename}", flush=True)
                 continue
             adapter = f"{run_prefix}_{i}"
+            # Explicit target on the entry (e.g. CivitAI Wan LoRA the user
+            # tagged as high-noise) — load straight onto that submodule.
+            # Defaults to "high" since single-transformer pipes (Qwen, Flux)
+            # only have `transformer`, and "high" maps there.
+            entry_target = (entry.get("target") or "high").lower()
+            if entry_target not in ("high", "low"):
+                entry_target = "high"
             if "strength_high" in entry or "strength_low" in entry:
                 sh = float(entry.get("strength_high", 1.0))
                 sl = float(entry.get("strength_low",  sh))
-                print(f"[runner] loading LoRA {filename} (high={sh:.2f}, low={sl:.2f})", flush=True)
-                # Try high-targeted submodule first; if it works, the same
-                # adapter on the same submodule gets weight sh. The low side
-                # wouldn't match anyway with a single file.
-                if _load_to_submodule(path, adapter, "high"):
-                    adapters.append({"name": adapter, "weight": sh, "target": "high"})
+                print(f"[runner] loading LoRA {filename} (target={entry_target}, high={sh:.2f}, low={sl:.2f})", flush=True)
+                # Pick the strength matching the explicit target.
+                strength = sl if entry_target == "low" else sh
+                if _load_to_submodule(path, adapter, entry_target):
+                    adapters.append({"name": adapter, "weight": strength, "target": entry_target})
                 else:
-                    weight = {"transformer": sh, "transformer_2": sl}
+                    weight = ({"transformer": 0.0, "transformer_2": sl}
+                              if entry_target == "low"
+                              else {"transformer": sh, "transformer_2": sl})
                     pipe.load_lora_weights(str(path.parent), weight_name=path.name, adapter_name=adapter)
                     adapters.append({"name": adapter, "weight": weight, "target": "pipe"})
             else:
                 strength = float(entry.get("strength", 1.0))
-                print(f"[runner] loading LoRA {filename} @ {strength:.2f}", flush=True)
-                if _load_to_submodule(path, adapter, "high"):
-                    adapters.append({"name": adapter, "weight": strength, "target": "high"})
+                print(f"[runner] loading LoRA {filename} (target={entry_target}, strength={strength:.2f})", flush=True)
+                if _load_to_submodule(path, adapter, entry_target):
+                    adapters.append({"name": adapter, "weight": strength, "target": entry_target})
                 else:
                     pipe.load_lora_weights(str(path.parent), weight_name=path.name, adapter_name=adapter)
                     adapters.append({"name": adapter, "weight": strength, "target": "pipe"})

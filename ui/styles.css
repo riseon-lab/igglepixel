@@ -2108,6 +2108,20 @@ body::before {
   padding: 4px 0 2px;
   letter-spacing: 0.01em;
 }
+
+/* Per-LoRA dual-expert target selector in the LoRAs library page */
+.lora-target-select {
+  font-size: 10.5px;
+  height: 22px;
+  background: var(--glass-1);
+  color: var(--t-2);
+  border: 1px solid var(--line-1);
+  border-radius: var(--r-sm);
+  padding: 0 4px;
+  font-family: var(--font-mono);
+  flex-shrink: 0;
+}
+.lora-target-select:hover { border-color: var(--line-2); color: var(--t-1); }
 .lora-card.detailed .slider {
   flex: 1;
   min-width: 0;
