@@ -125,10 +125,84 @@
       ]
     },
     {
+      "id": "qwen25-chat",
+      "name": "Qwen 2.5 Chat",
+      "category": "llm",
+      "description": "Alibaba's Qwen 2.5 instruct family. Strong general chat, code, and reasoning. 7B fits any modern card; 14B and 32B for higher quality on bigger GPUs. Native 32K context.",
+      "runner_module": "backend.runners.qwen_chat",
+      "hf_repo": "Qwen/Qwen2.5-7B-Instruct",
+      "license": {
+        "type": "commercial",
+        "label": "Apache 2.0",
+        "url": "https://www.apache.org/licenses/LICENSE-2.0"
+      },
+      "min_vram_gb": 4,
+      "recommended_vram_gb": 14,
+      "context_window": 32768,
+      "context_by_vram": [
+        { "min_gb": 36, "tokens": 32768, "label": "full 32K" },
+        { "min_gb": 14, "tokens": 16384, "label": "comfortable" },
+        { "min_gb": 0,  "tokens":  8192, "label": "safe default" }
+      ],
+      "context_policy": {
+        "mode": "workspace",
+        "auto_compact_at": 0.82,
+        "keep_recent_messages": 16
+      },
+      "supports_lora": false,
+      "gpu_support": ["nvidia"],
+      "variants": [
+        {
+          "id": "32b",
+          "label": "32B — workstation",
+          "description": "Best quality. ~64 GB at BF16; INT8 fits 32 GB cards.",
+          "hf_repo": "Qwen/Qwen2.5-32B-Instruct",
+          "auto_min_vram_gb": 36,
+          "quants": [
+            { "id": "bf16", "label": "BF16", "description": "Best quality",      "vram_gb": 64, "auto_min_vram_gb": 80 },
+            { "id": "int8", "label": "INT8", "description": "Faster, near-bf16", "vram_gb": 32, "auto_min_vram_gb": 36 },
+            { "id": "nf4",  "label": "NF4",  "description": "Smallest 32B",      "vram_gb": 16, "auto_min_vram_gb": 0  }
+          ]
+        },
+        {
+          "id": "14b",
+          "label": "14B — capable",
+          "description": "Step up from 7B. Better at long-form and code.",
+          "hf_repo": "Qwen/Qwen2.5-14B-Instruct",
+          "auto_min_vram_gb": 16,
+          "quants": [
+            { "id": "bf16", "label": "BF16", "description": "Best quality",      "vram_gb": 28, "auto_min_vram_gb": 36 },
+            { "id": "int8", "label": "INT8", "description": "Faster, near-bf16", "vram_gb": 14, "auto_min_vram_gb": 16 },
+            { "id": "nf4",  "label": "NF4",  "description": "Fits 8 GB cards",   "vram_gb": 7,  "auto_min_vram_gb": 0  }
+          ]
+        },
+        {
+          "id": "7b",
+          "label": "7B — fast",
+          "description": "Strong baseline. Fits any modern card.",
+          "hf_repo": "Qwen/Qwen2.5-7B-Instruct",
+          "auto_min_vram_gb": 0,
+          "quants": [
+            { "id": "bf16", "label": "BF16", "description": "Best quality",      "vram_gb": 14, "auto_min_vram_gb": 16 },
+            { "id": "int8", "label": "INT8", "description": "Faster, near-bf16", "vram_gb": 7,  "auto_min_vram_gb": 8  },
+            { "id": "nf4",  "label": "NF4",  "description": "Fits 6 GB cards",   "vram_gb": 4,  "auto_min_vram_gb": 0  }
+          ]
+        }
+      ],
+      "param_groups": ["llm"],
+      "param_keys": ["thinking", "max_new_tokens", "temperature", "top_p"],
+      "param_overrides": {
+        "max_new_tokens": { "default": 1024, "min": 64, "max": 8192, "step": 64 },
+        "temperature":    { "default": 0.7, "min": 0, "max": 2, "step": 0.05 },
+        "top_p":          { "default": 0.9, "min": 0, "max": 1, "step": 0.01 },
+        "thinking":       { "default": true }
+      }
+    },
+    {
       "id": "tinyllama-chat",
       "name": "TinyLlama Chat 1.1B",
       "category": "llm",
-      "description": "Lightweight local chat model for prototyping the text workspace UI. Small enough for quick iteration; not intended as the final quality bar.",
+      "description": "Tiny 1.1B chat model — useful as a smoke test for the chat workspace on cards with no VRAM headroom. Quality is poor; pick Qwen 2.5 for actual use.",
       "runner_module": "backend.runners.tinyllama_chat",
       "hf_repo": "TinyLlama/TinyLlama-1.1B-Chat-v1.0",
       "license": {
