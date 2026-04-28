@@ -121,18 +121,19 @@ addition forces a build + push + template-tag bump cycle.
 
 Three layered approaches, increasing complexity:
 
-### 1. Persistent pip cache (cheap, do first)
-Move pip's cache onto the persistent `/workspace` volume so reinstalls hit
-local disk instead of re-downloading. Add to `docker/entrypoint.sh`:
+### 1. Persistent pip cache (✅ shipped)
+Done in `docker/entrypoint.sh`:
 
 ```bash
-export PIP_CACHE_DIR=/workspace/.pip-cache
-mkdir -p "$PIP_CACHE_DIR"
+export PIP_CACHE_DIR=/workspace/.cache/pip
+mkdir -p /workspace/.cache/pip
+pip install -r requirements-runtime.txt   # no --no-cache-dir
 ```
 
 First boot fills the cache; subsequent boots install instantly from local
-files even if the *image* doesn't carry the package. This is the foundation
-for the next two approaches — it makes runtime installs cheap.
+files even if the *image* doesn't carry the package or the pod is recreated
+on the same volume. This is the foundation for (2) and (3) — it makes any
+runtime install effectively free on warm pods.
 
 ### 2. Move feature-flag deps to `requirements-runtime.txt` (medium win)
 Currently the Dockerfile installs `bitsandbytes` (quant only) and `spandrel`

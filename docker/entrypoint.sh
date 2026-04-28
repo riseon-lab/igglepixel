@@ -69,29 +69,36 @@ fi
 cd "$CACHE_DIR"
 log "HEAD: $(git log -1 --pretty='%h %s')"
 
-# ── Per-deployment dep installs ────────────────────────────────────────
-# A new runner can declare extra Python packages by adding them to
-# requirements-runtime.txt at the repo root. Installed on every boot
-# (cheap if already present) so we don't have to rebuild the image
-# for new model deps.
-if [ -f "requirements-runtime.txt" ]; then
-    log "installing requirements-runtime.txt"
-    pip install --no-cache-dir -r requirements-runtime.txt || \
-        log "WARN: requirements-runtime.txt install failed; continuing"
-fi
-
-# ── Redirect HuggingFace cache to the persistent volume ───────────────
-# By default HF writes to ~/.cache/huggingface which is on the ephemeral
-# container disk (typically 10–20 GB). Models are tens of GB, so they must
-# land on /workspace (the persistent network volume, 90+ GB).
+# ── Persistent caches on the workspace volume ─────────────────────────
+# Both HF and pip caches live on /workspace so subsequent boots can
+# reuse them. The pip cache in particular is the foundation for the
+# smart-deps strategy: per-model `pip_requirements` (when we add them)
+# and any future runtime adds become near-instant on warm pods.
+#
+# HF_HOME redirect is here too because the default ~/.cache/huggingface
+# sits on the 10–20 GB ephemeral container disk, and a single model is
+# tens of GB. Pin everything model-shaped to /workspace.
 export HF_HOME=/workspace/.cache/huggingface
-export TRANSFORMERS_CACHE=/workspace/.cache/huggingface/hub   # older transformers compat
+export TRANSFORMERS_CACHE=/workspace/.cache/huggingface/hub
 export HF_DATASETS_CACHE=/workspace/.cache/huggingface/datasets
+export PIP_CACHE_DIR=/workspace/.cache/pip
 
 # ── Workspace skeleton (the volume may be empty on first boot) ─────────
 mkdir -p /workspace/models /workspace/loras /workspace/checkpoints \
          /workspace/assets/uploads /workspace/assets/generated /workspace/logs \
-         /workspace/.cache/huggingface
+         /workspace/.cache/huggingface /workspace/.cache/pip
+
+# ── Per-deployment dep installs ────────────────────────────────────────
+# requirements-runtime.txt at the repo root lists feature-flag deps
+# (peft, ftfy, opencv-python-headless, …) the image doesn't carry.
+# We install with the persistent pip cache enabled — first cold boot
+# downloads, every later boot installs in seconds from the cache, even
+# if the image is rebuilt or the pod is recreated on the same volume.
+if [ -f "requirements-runtime.txt" ]; then
+    log "installing requirements-runtime.txt (pip cache: $PIP_CACHE_DIR)"
+    pip install -r requirements-runtime.txt || \
+        log "WARN: requirements-runtime.txt install failed; continuing"
+fi
 
 # ── Run ────────────────────────────────────────────────────────────────
 log "starting Forge (port ${UI_PORT:-3000})"
