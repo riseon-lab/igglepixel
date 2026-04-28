@@ -2135,6 +2135,9 @@ body::before {
   padding: 4px 0 2px;
   letter-spacing: 0.01em;
 }
+.lora-card.detailed .lora-hint.warn {
+  color: var(--warn);
+}
 
 /* Per-LoRA dual-expert target selector in the LoRAs library page */
 .lora-target-select {

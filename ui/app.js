@@ -1600,15 +1600,24 @@ async function startRunner(m) {
     const auto = pickAutoQuant(m, state.gpu?.vram_gb || 0);
     quant = auto?.id || 'bf16';
   }
+  // Strip empty/default ('' = use base repo) entries so the backend only
+  // gets explicit overrides. Split-component swaps are only supported on
+  // BF16 in the runner; launching them with int8/nf4 silently falls back to
+  // base weights and makes any 2511 LoRA selection look broken.
+  const compSel = modelStateOf(m.id).components || {};
+  const components = Object.fromEntries(Object.entries(compSel).filter(([, v]) => v));
+  if (Object.keys(components).length && quant !== 'bf16') {
+    setModelState(m.id, {
+      error: 'Split components require BF16. Choose BF16 or clear the component override.',
+    });
+    renderDrawerBody();
+    toast('Split components require BF16', 'error');
+    return;
+  }
   setModelState(m.id, { starting: true, error: null });
   renderDrawerBody();
   let logEs = null;
   try {
-    // Strip empty/default ('' = use base repo) entries so the backend only
-    // gets explicit overrides — keeps the launch request tidy and avoids
-    // the runner trying to load a path that doesn't exist.
-    const compSel = modelStateOf(m.id).components || {};
-    const components = Object.fromEntries(Object.entries(compSel).filter(([, v]) => v));
     const launched = await api.launch({ model_id: m.id, loras: [], hf_token: hfToken, quant, variant, components });
     if (launched.status !== 'launched' && launched.status !== 'already_running') {
       throw new Error(launched.message || 'Launch failed');
@@ -2536,6 +2545,27 @@ function bindSeedField() {
   });
 }
 
+function componentRequirementStatus(modelId, entry) {
+  const req = entry?.requires_component;
+  if (!req || typeof req !== 'object') return { ok: true, label: '' };
+  const selected = modelStateOf(modelId).components || {};
+  const targetLabel = { transformer: 'Transformer', vae: 'VAE', text_encoder: 'Text encoder' };
+  for (const [target, required] of Object.entries(req)) {
+    const allowed = (Array.isArray(required) ? required : [required])
+      .filter(Boolean)
+      .map(v => String(v).split('/').pop());
+    const cur = selected[target] || '';
+    if (!cur || !allowed.includes(cur)) {
+      const pretty = allowed.map(v => v.replace(/\.safetensors$/i, '')).join(' or ');
+      return {
+        ok: false,
+        label: `${targetLabel[target] || target}: ${pretty}`,
+      };
+    }
+  }
+  return { ok: true, label: '' };
+}
+
 function renderWorkspaceLoras(m) {
   if (!m.supports_lora) {
     $('#wsLoraPane').style.display = 'none';
@@ -2623,6 +2653,7 @@ function loraDetailedHtml(modelId, key, opts = {}) {
   const lstate = state.loraStates[modelId][key];
   if (!lstate) return '';
   const installed = opts.installed !== false;
+  const compReq = componentRequirementStatus(modelId, lstate.entry);
   const cls = lstate.bundled ? 'lora-card detailed bundled' : 'lora-card detailed';
   const m = state.models.find(x => x.id === modelId);
   const dual = !!m?.dual_expert;
@@ -2641,7 +2672,10 @@ function loraDetailedHtml(modelId, key, opts = {}) {
   // When uninstalled, the toggle is disabled and we surface an Install
   // button instead. Strength sliders are also disabled until installed.
   const disabledByMissing = !installed;
-  const enabledForSlider = lstate.on && installed;
+  const disabledByRequirement = !compReq.ok;
+  const disabled = disabledByMissing || disabledByRequirement;
+  const effectiveOn = lstate.on && !disabled;
+  const enabledForSlider = effectiveOn;
   const targetSet = new Set();
   if (Array.isArray(lstate.entry?.files) && lstate.entry.files.length) {
     lstate.entry.files.forEach(f => targetSet.add((f.target || 'high').toLowerCase()));
@@ -2674,13 +2708,17 @@ function loraDetailedHtml(modelId, key, opts = {}) {
     ? `<div class="row"><button class="btn sm" data-lora-install="${eKey}"><svg><use href="#i-down"/></svg>Install</button>
         <span style="font-size:11px;color:var(--t-3)">Files not on disk</span></div>`
     : '';
-  return `<div class="${cls} ${lstate.on ? 'on' : ''}${disabledByMissing ? ' missing' : ''}" data-lora="${eKey}">
+  const reqRow = disabledByRequirement
+    ? `<div class="lora-hint warn">Requires ${esc(compReq.label)} selected in Components.</div>`
+    : '';
+  return `<div class="${cls} ${effectiveOn ? 'on' : ''}${disabled ? ' missing' : ''}" data-lora="${eKey}">
     <div class="row">
       <span class="label" title="${eLbl}">${eLbl}</span>
-      <button class="toggle ${lstate.on ? 'on' : ''}" data-lora-toggle="${eKey}" ${disabledByMissing ? 'disabled title="Install before enabling"' : ''}></button>
+      <button class="toggle ${effectiveOn ? 'on' : ''}" data-lora-toggle="${eKey}" ${disabled ? `disabled title="${disabledByMissing ? 'Install before enabling' : 'Select required component before enabling'}"` : ''}></button>
     </div>
     <div class="filename" title="${esc(filesNote)}">${filesNote}</div>
     ${hintRow}
+    ${reqRow}
     ${installRow}
     ${sliderRow}
   </div>`;
@@ -3230,7 +3268,7 @@ function snapshotJob() {
   // (Wan Lightning ships as paired high+low files) forward their `files`
   // array verbatim so the runner loads each piece as its own adapter.
   const loras = Object.entries(lstate)
-    .filter(([_, v]) => v.on)
+    .filter(([_, v]) => v.on && componentRequirementStatus(m.id, v.entry).ok)
     .map(([key, v]) => {
       const entry = v.entry || {};
       const hasFiles = Array.isArray(entry.files) && entry.files.length;
@@ -4219,15 +4257,25 @@ function mockModels() {
       description: "Alibaba's Qwen-Image text-to-image. Strong prompt adherence, native 1328×1328. ~40 GB on first download.",
       runner_module: 'backend.runners.qwen_image',
       hf_repo: 'Qwen/Qwen-Image',
-      min_vram_gb: 24, recommended_vram_gb: 48,
+      min_vram_gb: 14, recommended_vram_gb: 47,
       supports_lora: true, gpu_support: ['nvidia'],
+      default_size_by_vram: [
+        { min_gb: 47, w: 1328, h: 1328 },
+        { min_gb: 36, w: 1024, h: 1024 },
+        { min_gb: 0,  w: 768,  h: 768  },
+      ],
+      quants: [
+        { id: 'bf16', label: 'BF16', description: 'Best quality',        vram_gb: 47, auto_min_vram_gb: 47 },
+        { id: 'int8', label: 'INT8', description: 'Faster, near-bf16',   vram_gb: 24, auto_min_vram_gb: 36 },
+        { id: 'nf4',  label: 'NF4',  description: 'Fits any modern card',vram_gb: 14, auto_min_vram_gb: 0  },
+      ],
       param_groups: ['prompt', 'generation', 'dimensions'],
       param_keys:   ['prompt', 'negative_prompt', 'seed', 'steps', 'cfg', 'width', 'height'],
       param_overrides: {
-        steps:  { default: 50 },
+        steps:  { default: 30 },
         cfg:    { default: 4.0, min: 0, max: 10, step: 0.1 },
-        width:  { default: 1328, step: 16, min: 256, max: 2048 },
-        height: { default: 1328, step: 16, min: 256, max: 2048 },
+        width:  { default: 1024, step: 16, min: 256, max: 2048 },
+        height: { default: 1024, step: 16, min: 256, max: 2048 },
       },
       aspect_presets: [
         { label: 'Square',          w: 1328, h: 1328 },
@@ -4246,23 +4294,78 @@ function mockModels() {
       description: "Alibaba's Qwen-Image-Edit — image-to-image with reference, pose and style conditioning.",
       runner_module: 'backend.runners.qwen_image_edit',
       hf_repo: 'Qwen/Qwen-Image-Edit',
-      min_vram_gb: 24, recommended_vram_gb: 48,
+      min_vram_gb: 14, recommended_vram_gb: 47,
       supports_lora: true, gpu_support: ['nvidia'],
-      image_inputs: [
-        { key: 'ref',   label: 'Reference', required: true,  hint: 'What to keep from the original' },
-        { key: 'pose',  label: 'Pose',      required: false, hint: 'Copy the pose from this image' },
-        { key: 'style', label: 'Style',     required: false, hint: "Match this image's style" },
+      default_size_by_vram: [
+        { min_gb: 47, w: 1328, h: 1328 },
+        { min_gb: 36, w: 1024, h: 1024 },
+        { min_gb: 0,  w: 768,  h: 768  },
       ],
-      param_groups: ['prompt', 'generation'],
-      param_keys:   ['prompt', 'negative_prompt', 'seed', 'steps', 'cfg'],
-      param_overrides: {
-        steps: { default: 50 },
-        cfg:   { default: 4.0, min: 0, max: 10, step: 0.1 },
+      quants: [
+        { id: 'bf16', label: 'BF16', description: 'Best quality',        vram_gb: 47, auto_min_vram_gb: 47 },
+        { id: 'int8', label: 'INT8', description: 'Faster, near-bf16',   vram_gb: 24, auto_min_vram_gb: 36 },
+        { id: 'nf4',  label: 'NF4',  description: 'Fits any modern card',vram_gb: 14, auto_min_vram_gb: 0  },
+      ],
+      image_inputs: [
+        { key: 'ref', label: 'Reference', required: true, hint: 'What to keep from the original' },
+      ],
+      components: {
+        description: 'Experimental 2511 transformer swap from Comfy-Org split-file weights. Requires BF16 launch.',
+        options: [
+          {
+            id: 'qwen-edit-2511-bf16',
+            target: 'transformer',
+            label: 'Qwen-Image-Edit 2511 · BF16',
+            hf_repo: 'Comfy-Org/Qwen-Image-Edit_ComfyUI',
+            filename: 'split_files/diffusion_models/qwen_image_edit_2511_bf16.safetensors',
+            recommended_vram_gb: 47,
+          },
+          {
+            id: 'qwen-edit-2511-fp8mixed',
+            target: 'transformer',
+            label: 'Qwen-Image-Edit 2511 · FP8 mixed',
+            hf_repo: 'Comfy-Org/Qwen-Image-Edit_ComfyUI',
+            filename: 'split_files/diffusion_models/qwen_image_edit_2511_fp8mixed.safetensors',
+            recommended_vram_gb: 24,
+          },
+        ],
       },
+      param_groups: ['prompt', 'generation', 'dimensions'],
+      param_keys:   ['prompt', 'negative_prompt', 'seed', 'steps', 'cfg', 'width', 'height'],
+      param_overrides: {
+        steps:  { default: 30 },
+        cfg:    { default: 4.0, min: 0, max: 10, step: 0.1 },
+        width:  { default: 1024, step: 16, min: 256, max: 2048 },
+        height: { default: 1024, step: 16, min: 256, max: 2048 },
+      },
+      aspect_presets: [
+        { label: 'Square',          w: 1328, h: 1328 },
+        { label: 'Landscape 16:9',  w: 1664, h: 928  },
+        { label: 'Portrait 9:16',   w: 928,  h: 1664 },
+        { label: '3:4',             w: 1152, h: 1536 },
+        { label: '4:3',             w: 1536, h: 1152 },
+      ],
       default_loras: [
-        { filename: 'Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors', label: 'Lightning · 4 steps', strength: 1.0, default_on: false },
-        { filename: 'Qwen-Image-Edit-2511-Lightning-8steps-V1.0-bf16.safetensors', label: 'Lightning · 8 steps', strength: 1.0, default_on: false },
-        { filename: 'qwen-image-edit-2511-multiple-angles-lora.safetensors',       label: 'Multiple angles',     strength: 0.8, default_on: false },
+        {
+          filename: 'Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors',
+          label: 'Lightning · 4 steps',
+          usage_hint: 'Set Steps to 4 and CFG to 1.0',
+          requires_component: { transformer: ['qwen_image_edit_2511_bf16.safetensors', 'qwen_image_edit_2511_fp8mixed.safetensors'] },
+          strength: 1.0, default_on: false,
+        },
+        {
+          filename: 'Qwen-Image-Edit-2511-Lightning-8steps-V1.0-bf16.safetensors',
+          label: 'Lightning · 8 steps',
+          usage_hint: 'Set Steps to 8 and CFG to 1.0',
+          requires_component: { transformer: ['qwen_image_edit_2511_bf16.safetensors', 'qwen_image_edit_2511_fp8mixed.safetensors'] },
+          strength: 1.0, default_on: false,
+        },
+        {
+          filename: 'qwen-image-edit-2511-multiple-angles-lora.safetensors',
+          label: 'Multiple angles',
+          requires_component: { transformer: ['qwen_image_edit_2511_bf16.safetensors', 'qwen_image_edit_2511_fp8mixed.safetensors'] },
+          strength: 0.8, default_on: false,
+        },
       ],
     },
   ];

@@ -303,7 +303,7 @@
         { "min_gb": 0,  "w": 768,  "h": 768  }
       ],
       "quants": [
-        { "id": "bf16", "label": "BF16", "description": "Best quality",       "vram_gb": 47, "auto_min_vram_gb": 80 },
+        { "id": "bf16", "label": "BF16", "description": "Best quality",       "vram_gb": 47, "auto_min_vram_gb": 47 },
         { "id": "int8", "label": "INT8", "description": "Faster, near-bf16",  "vram_gb": 24, "auto_min_vram_gb": 36 },
         { "id": "nf4",  "label": "NF4",  "description": "Fits any modern card","vram_gb": 14, "auto_min_vram_gb": 0  }
       ],
@@ -363,7 +363,7 @@
         { "min_gb": 0,  "w": 768,  "h": 768  }
       ],
       "quants": [
-        { "id": "bf16", "label": "BF16", "description": "Best quality",       "vram_gb": 47, "auto_min_vram_gb": 80 },
+        { "id": "bf16", "label": "BF16", "description": "Best quality",       "vram_gb": 47, "auto_min_vram_gb": 47 },
         { "id": "int8", "label": "INT8", "description": "Faster, near-bf16",  "vram_gb": 24, "auto_min_vram_gb": 36 },
         { "id": "nf4",  "label": "NF4",  "description": "Fits any modern card","vram_gb": 14, "auto_min_vram_gb": 0  }
       ],
@@ -371,7 +371,7 @@
         { "key": "ref", "label": "Reference", "required": true, "hint": "What to keep from the original" }
       ],
       "components": {
-        "description": "Swap individual model components (transformer / VAE / text encoder) for the Comfy-Org split-file weights — closer to ComfyUI output and uses 2511 transformer.",
+        "description": "Experimental 2511 transformer swap from Comfy-Org split-file weights. Requires BF16 launch.",
         "options": [
           {
             "id": "qwen-edit-2511-bf16",
@@ -392,24 +392,6 @@
             "filename": "split_files/diffusion_models/qwen_image_edit_2511_fp8mixed.safetensors",
             "recommended_vram_gb": 24,
             "tier": "lvram"
-          },
-          {
-            "id": "qwen-image-vae",
-            "target": "vae",
-            "label": "Qwen-Image VAE (FP16)",
-            "description": "Original Qwen-Image VAE — keeps colour and texture fidelity that bnb int8 loses.",
-            "hf_repo":  "Comfy-Org/Qwen-Image_ComfyUI",
-            "filename": "split_files/vae/qwen_image_vae.safetensors",
-            "recommended_vram_gb": 0
-          },
-          {
-            "id": "qwen-vl-7b-fp8-scaled",
-            "target": "text_encoder",
-            "label": "Qwen 2.5 VL 7B · FP8 scaled",
-            "description": "Multimodal text encoder used by Comfy. Per-channel scaled FP8 — much sharper prompt adherence than uniform int8.",
-            "hf_repo":  "Comfy-Org/HunyuanVideo_1.5_repackaged",
-            "filename": "split_files/text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetensors",
-            "recommended_vram_gb": 0
           }
         ]
       },
@@ -428,6 +410,9 @@
           "hf_repo": "lightx2v/Qwen-Image-Edit-2511-Lightning",
           "label": "Lightning · 4 steps",
           "usage_hint": "Set Steps to 4 and CFG to 1.0",
+          "requires_component": {
+            "transformer": ["qwen_image_edit_2511_bf16.safetensors", "qwen_image_edit_2511_fp8mixed.safetensors"]
+          },
           "strength": 1.0, "default_on": false
         },
         {
@@ -436,6 +421,9 @@
           "hf_repo": "lightx2v/Qwen-Image-Edit-2511-Lightning",
           "label": "Lightning · 8 steps",
           "usage_hint": "Set Steps to 8 and CFG to 1.0",
+          "requires_component": {
+            "transformer": ["qwen_image_edit_2511_bf16.safetensors", "qwen_image_edit_2511_fp8mixed.safetensors"]
+          },
           "strength": 1.0, "default_on": false
         },
         {
@@ -443,6 +431,9 @@
           "filename": "qwen-image-edit-2511-multiple-angles-lora.safetensors",
           "hf_repo": "fal/Qwen-Image-Edit-2511-Multiple-Angles-LoRA",
           "label": "Multiple angles",
+          "requires_component": {
+            "transformer": ["qwen_image_edit_2511_bf16.safetensors", "qwen_image_edit_2511_fp8mixed.safetensors"]
+          },
           "strength": 0.8, "default_on": false
         }
       ]
