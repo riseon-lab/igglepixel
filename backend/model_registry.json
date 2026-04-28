@@ -298,7 +298,7 @@
       "supports_lora": true,
       "gpu_support": ["nvidia"],
       "default_size_by_vram": [
-        { "min_gb": 80, "w": 1328, "h": 1328 },
+        { "min_gb": 47, "w": 1328, "h": 1328 },
         { "min_gb": 36, "w": 1024, "h": 1024 },
         { "min_gb": 0,  "w": 768,  "h": 768  }
       ],
@@ -358,7 +358,7 @@
       "supports_lora": true,
       "gpu_support": ["nvidia"],
       "default_size_by_vram": [
-        { "min_gb": 80, "w": 1328, "h": 1328 },
+        { "min_gb": 47, "w": 1328, "h": 1328 },
         { "min_gb": 36, "w": 1024, "h": 1024 },
         { "min_gb": 0,  "w": 768,  "h": 768  }
       ],

@@ -54,6 +54,7 @@
   /* Layout */
   --topbar-h:    44px;
   --sidebar-w:   188px;
+  --mobile-nav-h: calc(56px + env(safe-area-inset-bottom, 0px));
 }
 
 /* ── Reset ─────────────────────────────────────────────────────────────── */
@@ -133,12 +134,20 @@ body::before {
   gap: 6px;
   height: 26px;
   padding: 0 10px;
+  max-width: min(46vw, 420px);
+  min-width: 0;
   border-radius: 999px;
   background: var(--glass-1);
   border: 1px solid var(--line-1);
   font-size: 11.5px;
   color: var(--t-2);
   letter-spacing: 0;
+}
+.gpu-pill span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .gpu-pill .dot {
   width: 6px; height: 6px;
@@ -627,6 +636,23 @@ body::before {
 }
 .slider::-moz-range-track { height: 3px; border-radius: 2px; background: var(--glass-3); }
 .slider::-moz-range-thumb { width: 14px; height: 14px; border-radius: 50%; background: #fff; border: 1px solid rgba(0,0,0,0.4); }
+.slider-control {
+  display: grid;
+  grid-template-columns: minmax(72px, 1fr) 72px;
+  gap: 8px;
+  align-items: center;
+}
+.slider-number {
+  height: 30px;
+  padding: 0 8px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  text-align: right;
+}
+.slider-number::-webkit-outer-spin-button,
+.slider-number::-webkit-inner-spin-button {
+  margin: 0;
+}
 
 /* Checkbox row */
 .check-row {
@@ -2128,6 +2154,15 @@ body::before {
   min-width: 0;
   margin: 0;
 }
+.lora-card.detailed .lora-strength-number {
+  width: 64px;
+  height: 28px;
+  padding: 0 6px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-align: right;
+  flex-shrink: 0;
+}
 .lora-card.detailed.bundled .label::before {
   content: '★';
   color: var(--t-3);
@@ -2138,6 +2173,7 @@ body::before {
 /* Disabled-look when the LoRA is toggled off */
 .lora-card.detailed:not(.on) .filename,
 .lora-card.detailed:not(.on) .slider,
+.lora-card.detailed:not(.on) .lora-strength-number,
 .lora-card.detailed:not(.on) .strength { opacity: 0.45; }
 
 /* ── Queue status line ────────────────────────────────────────────────── */
@@ -2206,6 +2242,19 @@ body::before {
   text-align: left;
   pointer-events: none;
 }
+.asset.queued .q-model {
+  position: absolute;
+  inset: 24px 8px auto 8px;
+  font-size: 10.5px;
+  font-family: var(--font-mono);
+  color: var(--t-2);
+  text-align: left;
+  pointer-events: none;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.asset.queued .q-meta + .q-model { inset-block-start: 42px; }
 .asset.queued .q-progress {
   position: absolute;
   left: 8px; right: 8px; bottom: 30px;
@@ -2598,7 +2647,7 @@ body::before {
   display: none;
   position: fixed;
   bottom: 0; left: 0; right: 0;
-  height: 56px;
+  height: var(--mobile-nav-h);
   padding-bottom: env(safe-area-inset-bottom, 0px);
   background: rgba(8,8,10,0.96);
   backdrop-filter: blur(24px) saturate(160%);
@@ -2644,12 +2693,16 @@ body::before {
 
   /* ── Main: full width, pad bottom, clip horizontal overflow ── */
   .main {
-    padding: 10px 10px calc(56px + env(safe-area-inset-bottom, 0px) + 10px);
+    padding: 10px 10px calc(var(--mobile-nav-h) + 28px);
+    scroll-padding-bottom: calc(var(--mobile-nav-h) + 28px);
     overflow-y: auto;
     overflow-x: hidden;
     width: 100%;
     min-width: 0;
     max-width: 100vw;
+  }
+  .view.active {
+    padding-bottom: calc(var(--mobile-nav-h) + 12px);
   }
   .view,
   .ws-grid,
@@ -2666,7 +2719,7 @@ body::before {
   /* ── Topbar: compact, settings stays here while bottom nav carries Downloads ── */
   .topbar { padding: 0 10px; }
   .topbar-logo { height: 14px; }
-  .gpu-pill { font-size: 11px; padding: 0 8px; gap: 5px; }
+  .gpu-pill { font-size: 11px; padding: 0 8px; gap: 5px; max-width: 48vw; }
 
   /* ── Page head: stack actions below title ── */
   .page-head { flex-direction: column; align-items: flex-start; gap: 6px; }
@@ -2799,6 +2852,15 @@ body::before {
     height: 32px;
     box-sizing: border-box;
   }
+  .ws-settings .slider-control {
+    grid-template-columns: minmax(52px, 1fr) minmax(58px, 72px);
+    gap: 6px;
+  }
+  .ws-settings .slider-number {
+    height: 32px;
+    font-size: 11px;
+    padding: 0 6px;
+  }
   .ws-settings .segmented {
     flex: 0 0 auto;
   }
@@ -2822,6 +2884,16 @@ body::before {
   /* ── Modal ── */
   .modal { margin: 8px; max-width: calc(100vw - 16px); max-height: calc(100dvh - 80px); }
   .modal-body { max-height: calc(60dvh); }
+
+  .toasts {
+    right: 10px;
+    bottom: calc(var(--mobile-nav-h) + 10px);
+    left: 10px;
+  }
+  .toast {
+    max-width: none;
+    width: 100%;
+  }
 
   /* ── Auth card ── */
   .auth-card { max-width: calc(100vw - 24px); padding: 20px 16px; }

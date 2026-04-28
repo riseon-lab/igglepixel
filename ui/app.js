@@ -26,6 +26,7 @@ const state = {
 
   // Workspace
   workspace:     null,        // model_id of currently-open workspace, or null
+  workspaceParams: {},        // model_id -> persisted prompt/settings while app is open
   recents:       {},          // model_id -> [asset, …] (this session only)
   imgInputs:     {},          // { model_id -> { ref:{img,enabled}, pose:{...}, ... } }
   loraStates:    {},          // { model_id -> { filename -> { on, strength } } }
@@ -1002,15 +1003,18 @@ function setModelState(id, patch) {
 
 function markModelStopped(id) {
   delete state.running[id];
+  clearWorkspaceMemory(id);
   setModelState(id, { ready: false, starting: false, generating: false });
   if (state.workspace === id) updateWsStatus();
   if (state.selected?.id === id) renderDrawerBody();
+  renderQueue();
   renderModels();
   if ($('.view.active')?.dataset.view === 'running') renderRunning();
 }
 
 function resetModelWeightsState(id) {
   delete state.running[id];
+  clearWorkspaceMemory(id);
   setModelState(id, {
     downloaded: false,
     downloading: false,
@@ -1022,8 +1026,22 @@ function resetModelWeightsState(id) {
   });
   if (state.workspace === id) updateWsStatus();
   if (state.selected?.id === id) renderDrawerBody();
+  renderQueue();
   renderModels();
   if ($('.view.active')?.dataset.view === 'running') renderRunning();
+}
+
+function clearWorkspaceMemory(id) {
+  delete state.workspaceParams[id];
+  delete state.imgInputs[id];
+  delete state.loraStates[id];
+  delete state.recents[id];
+  delete state.lastSeed[id];
+  state.queue = state.queue.filter(j => j.model_id !== id);
+  if (state.workspace === id) {
+    const m = state.models.find(x => x.id === id);
+    if (m) state.params = state.workspaceParams[id] = defaultParamsForModel(m);
+  }
 }
 
 // Pick the highest-quality variant the GPU can run. Variants are model
@@ -1338,7 +1356,10 @@ function renderField(f) {
         <div class="slider-head">
           <span>${f.label}</span><span class="val" id="val_${f.key}">${v}</span>
         </div>
-        <input class="slider" type="range" min="${min}" max="${max}" step="${step}" value="${v}" data-key="${f.key}" data-slider>
+        <div class="slider-control">
+          <input class="slider" type="range" min="${min}" max="${max}" step="${step}" value="${v}" data-key="${f.key}" data-slider>
+          <input class="text-input slider-number" type="number" min="${min}" max="${max}" step="${step}" value="${v}" data-key="${f.key}" data-slider-number>
+        </div>
       </div>`;
     }
     case 'asset':
@@ -1368,10 +1389,16 @@ function bindParamInputs(rootEl) {
     el.addEventListener('input', () => {
       const key = el.dataset.key;
       let v = el.value;
-      if (el.type === 'number' || el.dataset.slider) v = el.value === '' ? '' : Number(el.value);
+      if (el.type === 'number' || el.dataset.slider || el.dataset.sliderNumber) v = el.value === '' ? '' : Number(el.value);
       state.params[key] = v;
       const valEl = rootEl.querySelector(`#val_${key}`);
       if (valEl) valEl.textContent = v;
+      const field = el.closest('[data-control-key]');
+      if (field) {
+        field.querySelectorAll(`[data-key="${CSS.escape(key)}"]`).forEach(peer => {
+          if (peer !== el && (peer.dataset.slider || peer.dataset.sliderNumber)) peer.value = el.value;
+        });
+      }
       // Keep aspect chips in sync when user manually edits width or height.
       if ((key === 'width' || key === 'height') && state.selected) {
         renderAspectChips(state.selected, true);
@@ -1531,27 +1558,12 @@ function openWorkspace(modelId, push = true) {
   if (!m) return;
   state.workspace = modelId;
   state.selected  = m;
-  state.params    = {};
-  // Seed defaults from resolved fields.
   const sections = resolveFields(m);
-  for (const s of sections) for (const f of s.fields) {
-    if (f.default !== undefined) state.params[f.key] = f.default;
-  }
-  // VRAM-aware size override — registry can declare default_size_by_vram so a
-  // 96 GB card lands on native 1328 instead of the 1024 fallback. Tiers are
-  // listed largest-first; first match wins.
-  if (Array.isArray(m.default_size_by_vram)) {
-    const vram = state.gpu?.vram_gb || 0;
-    const tier = m.default_size_by_vram.find(t => vram >= (t.min_gb || 0));
-    if (tier) {
-      state.params.width  = tier.w;
-      state.params.height = tier.h;
-    }
-  }
+  state.params = state.workspaceParams[modelId] || (state.workspaceParams[modelId] = defaultParamsForModel(m, sections));
   if (m.category === 'llm') {
     const cfg = resolveContextConfig(m);
-    state.params.max_model_len = cfg.tokens;
-    state.params.context_policy = {
+    state.params.max_model_len ??= cfg.tokens;
+    state.params.context_policy ??= {
       mode: cfg.mode || 'workspace',
       auto_compact_at: cfg.auto_compact_at ?? 0.82,
       keep_recent_messages: cfg.keep_recent_messages ?? 8,
@@ -1560,6 +1572,25 @@ function openWorkspace(modelId, push = true) {
   closeDrawer();
   renderWorkspace(m, sections);
   switchView('workspace', push);
+}
+
+function defaultParamsForModel(m, sections = resolveFields(m)) {
+  const params = {};
+  // Seed defaults from resolved fields.
+  for (const s of sections) for (const f of s.fields) {
+    if (f.default !== undefined) params[f.key] = f.default;
+  }
+  // VRAM-aware size override — registry can declare default_size_by_vram so a
+  // high-VRAM card lands on native size instead of the 1024 fallback.
+  if (Array.isArray(m.default_size_by_vram)) {
+    const vram = state.gpu?.vram_gb || 0;
+    const tier = m.default_size_by_vram.find(t => vram >= (t.min_gb || 0));
+    if (tier) {
+      params.width  = tier.w;
+      params.height = tier.h;
+    }
+  }
+  return params;
 }
 
 function closeWorkspace() {
@@ -2544,12 +2575,14 @@ function loraDetailedHtml(modelId, key, opts = {}) {
         return `<div class="row">
           <span class="lora-tier">${label}</span>
           <input class="slider" type="range" min="0" max="2" step="0.05" value="${value}" ${attr}="${eKey}" ${enabledForSlider ? '' : 'disabled'}>
+          <input class="text-input lora-strength-number" type="number" min="0" max="2" step="0.05" value="${value}" ${attr}="${eKey}" ${enabledForSlider ? '' : 'disabled'}>
           <span class="strength" ${valAttr}="${eKey}">×${Number(value).toFixed(2)}</span>
         </div>`;
       }).join('')
     : `
       <div class="row">
         <input class="slider" type="range" min="0" max="2" step="0.05" value="${lstate.strength}" data-lora-strength="${eKey}" ${enabledForSlider ? '' : 'disabled'}>
+        <input class="text-input lora-strength-number" type="number" min="0" max="2" step="0.05" value="${lstate.strength}" data-lora-strength="${eKey}" ${enabledForSlider ? '' : 'disabled'}>
         <span class="strength" data-lora-strength-val="${eKey}">×${lstate.strength.toFixed(2)}</span>
       </div>`;
   const installRow = !installed
@@ -2612,6 +2645,9 @@ function bindLoraCards(m) {
     s.addEventListener('input', () => {
       const fn = s.dataset.loraStrength;
       lstate[fn].strength = Number(s.value);
+      $$(`[data-lora-strength="${CSS.escape(fn)}"]`, $('#wsLoraPane')).forEach(peer => {
+        if (peer !== s) peer.value = s.value;
+      });
       const out = $(`[data-lora-strength-val="${CSS.escape(fn)}"]`);
       if (out) out.textContent = `×${Number(s.value).toFixed(2)}`;
     });
@@ -2621,6 +2657,9 @@ function bindLoraCards(m) {
     s.addEventListener('input', () => {
       const fn = s.dataset.loraStrengthHigh;
       lstate[fn].strength_high = Number(s.value);
+      $$(`[data-lora-strength-high="${CSS.escape(fn)}"]`, $('#wsLoraPane')).forEach(peer => {
+        if (peer !== s) peer.value = s.value;
+      });
       const out = $(`[data-lora-strength-high-val="${CSS.escape(fn)}"]`);
       if (out) out.textContent = `×${Number(s.value).toFixed(2)}`;
     });
@@ -2629,6 +2668,9 @@ function bindLoraCards(m) {
     s.addEventListener('input', () => {
       const fn = s.dataset.loraStrengthLow;
       lstate[fn].strength_low = Number(s.value);
+      $$(`[data-lora-strength-low="${CSS.escape(fn)}"]`, $('#wsLoraPane')).forEach(peer => {
+        if (peer !== s) peer.value = s.value;
+      });
       const out = $(`[data-lora-strength-low-val="${CSS.escape(fn)}"]`);
       if (out) out.textContent = `×${Number(s.value).toFixed(2)}`;
     });
@@ -2648,29 +2690,7 @@ function renderRecents(modelId) {
     return;
   }
 
-  const queuedHtml = queued.map(j => {
-    const stateLabel = j.status === 'running'    ? 'Generating'
-                     : j.status === 'cancelling' ? 'Cancelling'
-                     :                             'Queued';
-    const pct = Math.max(0, Math.min(100, Math.round((j.progress || 0) * 100)));
-    const hasProgress = pct > 0 && j.status !== 'pending';
-    const eta = j.etaMs != null && pct < 100 ? ` · ${formatETA(j.etaMs)}` : '';
-    const metaText = j.status === 'running'
-      ? (hasProgress ? `${pct}%${eta}` : 'Estimating')
-      : '';
-    // Prompt is user-typed; escape before injecting.
-    const promptText = esc((j.params.prompt || '(no prompt)').slice(0, 80));
-    return `<div class="asset queued${j.status === 'running' ? ' active' : ''}${hasProgress ? ' has-progress' : ''}" data-queue-job="${esc(j.id)}">
-      <div class="q-state">${stateLabel}</div>
-      ${metaText ? `<div class="q-meta">${esc(metaText)}</div>` : ''}
-      <div class="qspinner"></div>
-      <button class="asset-menu-btn" data-queue-menu="${esc(j.id)}" title="Actions">
-        <svg><use href="#i-dots"/></svg>
-      </button>
-      ${hasProgress ? `<div class="q-progress"><span style="width:${pct}%"></span></div>` : ''}
-      <div class="q-prompt">${promptText}</div>
-    </div>`;
-  }).join('');
+  const queuedHtml = queueCardsHtml(queued);
 
   const recentHtml = items.slice().reverse().map((_, i) => {
     const idx = items.length - 1 - i;
@@ -2698,8 +2718,39 @@ function renderRecents(modelId) {
     const idx = Number(b.dataset.assetMenu);
     showAssetMenu(items[idx], b);
   }));
-  // Queue tile 3-dot → Cancel only (separate menu so we don't leak Download/Delete).
-  $$('[data-queue-menu]', grid).forEach(b => b.addEventListener('click', (e) => {
+  bindQueueCardMenus(grid);
+}
+
+function queueCardsHtml(jobs, opts = {}) {
+  const showModel = !!opts.showModel;
+  return jobs.map(j => {
+    const stateLabel = j.status === 'running'    ? 'Generating'
+                     : j.status === 'cancelling' ? 'Cancelling'
+                     :                             'Queued';
+    const pct = Math.max(0, Math.min(100, Math.round((j.progress || 0) * 100)));
+    const hasProgress = pct > 0 && j.status !== 'pending';
+    const eta = j.etaMs != null && pct < 100 ? ` · ${formatETA(j.etaMs)}` : '';
+    const metaText = j.status === 'running'
+      ? (hasProgress ? `${pct}%${eta}` : 'Estimating')
+      : '';
+    const promptText = esc((j.params.prompt || '(no prompt)').slice(0, 80));
+    const modelText = showModel ? `<div class="q-model">${esc(j.model_name || j.model_id)}</div>` : '';
+    return `<div class="asset queued${j.status === 'running' ? ' active' : ''}${hasProgress ? ' has-progress' : ''}" data-queue-job="${esc(j.id)}">
+      <div class="q-state">${stateLabel}</div>
+      ${metaText ? `<div class="q-meta">${esc(metaText)}</div>` : ''}
+      ${modelText}
+      <div class="qspinner"></div>
+      <button class="asset-menu-btn" data-queue-menu="${esc(j.id)}" title="Actions">
+        <svg><use href="#i-dots"/></svg>
+      </button>
+      ${hasProgress ? `<div class="q-progress"><span style="width:${pct}%"></span></div>` : ''}
+      <div class="q-prompt">${promptText}</div>
+    </div>`;
+  }).join('');
+}
+
+function bindQueueCardMenus(root) {
+  $$('[data-queue-menu]', root).forEach(b => b.addEventListener('click', (e) => {
     e.stopPropagation();
     showQueueMenu(b.dataset.queueMenu, b);
   }));
@@ -2846,6 +2897,7 @@ function closeAssetMenu() {
 async function downloadAsset(asset) {
   if (!asset?.url) return;
   try {
+    toast(`Preparing ${asset.name || 'download'}…`, 'info');
     const res = await fetch(asset.url, { credentials: 'same-origin' });
     if (!res.ok) throw new Error(`Download failed (${res.status})`);
     const blob = await res.blob();
@@ -2857,6 +2909,7 @@ async function downloadAsset(asset) {
     a.click();
     a.remove();
     setTimeout(() => URL.revokeObjectURL(objUrl), 30_000);
+    toast(`Saved ${asset.name || 'asset'}`, 'success');
   } catch (e) {
     toast(`Download failed: ${e.message || 'unknown error'}`, 'error');
   }
@@ -3312,6 +3365,7 @@ function renderQueue() {
   }
   // Queue cards live inside the recents grid (prepended), so re-render that.
   if (state.workspace) renderRecents(state.workspace);
+  if ($('.view.active')?.dataset.view === 'assets') renderAssets();
 }
 
 async function cancelQueueJob(jobId) {
@@ -3861,16 +3915,18 @@ async function loadAssets() {
 function renderAssets() {
   const grid = $('#assetGrid');
   const f = state.assetFilter;
+  const queued = state.queue.filter(j => j.status !== 'done');
   const items = state.assets.filter(a => {
     if (f === 'all') return true;
     if (f === 'image' || f === 'video') return a.kind === f;
     return a.source === f;
   });
-  if (!items.length) {
+  if (!items.length && !queued.length) {
     grid.innerHTML = `<div class="empty" style="grid-column:1/-1">Nothing here yet.</div>`;
     return;
   }
-  grid.innerHTML = items.map((a, i) => {
+  const queueHtml = queueCardsHtml(queued, { showModel: true });
+  const assetHtml = items.map((a, i) => {
     const u = esc(a.url), n = esc(a.name);
     return `<div class="asset" data-asset-idx="${i}">
       ${a.kind === 'video'
@@ -3883,6 +3939,8 @@ function renderAssets() {
       <div class="asset-meta">${n}</div>
     </div>`;
   }).join('');
+  grid.innerHTML = queueHtml + assetHtml;
+  bindQueueCardMenus(grid);
   // Click an asset → lightbox; click the 3-dot → menu
   $$('.asset[data-asset-idx]', grid).forEach(el => el.addEventListener('click', (e) => {
     if (e.target.closest('[data-asset-menu]')) return;
