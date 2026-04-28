@@ -359,26 +359,80 @@ class Runner(ABC):
     def save_video(frames, dest: Path, fps: int = 24) -> Path:
         """Encode a list of PIL frames to mp4 — encrypted if FORGE_DATA_KEY is set.
 
-        Uses diffusers' export_to_video helper (ffmpeg under the hood). Writes
-        to a tmp mp4 first, then either encrypts in place or moves to dest.
-        Returns the on-disk path with `.enc` suffix when encrypted.
+        Two-stage encode with a sanity check between them. diffusers'
+        export_to_video uses cv2.VideoWriter under the hood, which fails
+        SILENTLY when the cv2 build doesn't have the requested codec or the
+        frame dimensions aren't even (H.264 requires that). When that
+        happens you get a 0-byte mp4 and an asset that "exists" but won't
+        play. Catching the empty result here surfaces the failure and lets
+        us fall back to a direct ffmpeg subprocess (which always works on
+        our image since we apt-install ffmpeg in the Dockerfile).
         """
+        import subprocess
         import tempfile
-        from diffusers.utils import export_to_video
+
+        if not frames:
+            raise ValueError("save_video: empty frames list")
 
         dest.parent.mkdir(parents=True, exist_ok=True)
-        # diffusers.export_to_video expects a real filesystem path; tmpfs in
-        # /workspace keeps the plaintext mp4 out of the persistent volume
-        # except as ciphertext.
         with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp:
-            tmp_path = tmp.name
+            tmp_path = Path(tmp.name)
+
         try:
-            export_to_video(frames, tmp_path, fps=fps)
-            with open(tmp_path, "rb") as f:
-                plaintext = f.read()
+            # First attempt: diffusers' helper (cv2 backend). Fast when it works.
+            try:
+                from diffusers.utils import export_to_video
+                export_to_video(frames, str(tmp_path), fps=fps)
+            except Exception as e:
+                print(f"[save_video] export_to_video raised: {type(e).__name__}: {e}", flush=True)
+
+            # Sanity-check: 0-byte means cv2 silently failed. Fall back to ffmpeg.
+            ok = tmp_path.exists() and tmp_path.stat().st_size > 0
+            if not ok:
+                w, h = frames[0].size
+                print(f"[save_video] cv2 produced 0-byte mp4; falling back to ffmpeg ({len(frames)} frames @ {w}×{h}, fps={fps})", flush=True)
+                # Pipe RGB frames into ffmpeg as raw video, encode H.264 at the
+                # frame dimensions. ffmpeg is in the image so this always works.
+                # yuv420p + even dimensions are required for browser playback.
+                ew = w if w % 2 == 0 else w - 1
+                eh = h if h % 2 == 0 else h - 1
+                proc = subprocess.Popen(
+                    [
+                        "ffmpeg", "-y",
+                        "-f", "rawvideo",
+                        "-vcodec", "rawvideo",
+                        "-pix_fmt", "rgb24",
+                        "-s", f"{w}x{h}",
+                        "-r", str(fps),
+                        "-i", "-",
+                        "-an",
+                        "-vcodec", "libx264",
+                        "-pix_fmt", "yuv420p",
+                        "-vf", f"crop={ew}:{eh}:0:0",
+                        "-movflags", "+faststart",
+                        str(tmp_path),
+                    ],
+                    stdin=subprocess.PIPE,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.PIPE,
+                )
+                for frame in frames:
+                    proc.stdin.write(frame.convert("RGB").tobytes())
+                proc.stdin.close()
+                _, err = proc.communicate(timeout=120)
+                if proc.returncode != 0 or not tmp_path.exists() or tmp_path.stat().st_size == 0:
+                    raise RuntimeError(
+                        f"save_video: ffmpeg fallback failed "
+                        f"(exit={proc.returncode}). stderr tail: "
+                        f"{err.decode('utf-8', errors='replace')[-500:]}"
+                    )
+
+            plaintext = tmp_path.read_bytes()
+            if not plaintext:
+                raise RuntimeError("save_video: encoded mp4 is empty")
         finally:
             try:
-                os.unlink(tmp_path)
+                tmp_path.unlink()
             except OSError:
                 pass
 

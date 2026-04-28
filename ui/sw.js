@@ -88,12 +88,21 @@ async function handle(req) {
   // The visible filename's extension drives the MIME. Backend sets
   // content-type for us, but we override with what the URL's filename says
   // because FileResponse hands back octet-stream for .enc paths.
-  const mime = upstream.headers.get("content-type")
-    || guessMime(req.url)
+  const mime = guessMime(req.url)
+    || upstream.headers.get("content-type")
     || "application/octet-stream";
+  // Explicit Content-Length + Accept-Ranges:none stops <video> elements
+  // from re-issuing range requests in a loop. We only ever serve the full
+  // decrypted blob, so the video element can treat it as a complete stream.
   return new Response(pt, {
     status:  200,
-    headers: { "content-type": mime, "x-forge-decrypted": "1" },
+    headers: {
+      "content-type":   mime,
+      "content-length": String(pt.byteLength),
+      "accept-ranges":  "none",
+      "cache-control":  "no-store",
+      "x-forge-decrypted": "1",
+    },
   });
 }
 
