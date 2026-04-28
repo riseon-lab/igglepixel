@@ -186,10 +186,18 @@ function toast(msg, kind = 'info') {
   const c = $('#toasts');
   const el = document.createElement('div');
   el.className = `toast ${kind}`;
-  el.textContent = msg;
+  const close = kind === 'error'
+    ? '<button class="toast-close" type="button" title="Dismiss">×</button>'
+    : '';
+  el.innerHTML = `<div class="toast-message">${esc(msg)}</div>${close}`;
   c.appendChild(el);
   requestAnimationFrame(() => requestAnimationFrame(() => el.classList.add('show')));
-  setTimeout(() => { el.classList.remove('show'); setTimeout(() => el.remove(), 240); }, 2800);
+  const dismiss = () => {
+    el.classList.remove('show');
+    setTimeout(() => el.remove(), 240);
+  };
+  el.querySelector('.toast-close')?.addEventListener('click', dismiss);
+  if (kind !== 'error') setTimeout(dismiss, 2800);
 }
 
 // Resolve which groups a model uses, in order

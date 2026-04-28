@@ -2544,11 +2544,33 @@ body::before {
   box-shadow: 0 8px 32px rgba(0,0,0,0.5);
   transform: translateX(120%);
   transition: transform 220ms var(--ease);
-  max-width: 320px;
+  max-width: min(520px, calc(100vw - 32px));
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
 }
 .toast.show { transform: translateX(0); }
 .toast.success { border-color: rgba(207,234,214,0.25); }
 .toast.error   { border-color: rgba(240,200,200,0.25); color: var(--bad); }
+.toast-message {
+  min-width: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.toast-close {
+  width: 22px; height: 22px;
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  margin: -3px -6px 0 0;
+  border: 1px solid var(--line-1);
+  border-radius: var(--r-sm);
+  color: var(--t-2);
+  background: var(--glass-1);
+  font-size: 16px;
+  line-height: 1;
+}
+.toast-close:hover { color: var(--t-1); background: var(--glass-2); }
 
 /* ── Scrollbars ────────────────────────────────────────────────────────── */
 ::-webkit-scrollbar { width: 8px; height: 8px; }
