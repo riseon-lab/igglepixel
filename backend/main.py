@@ -638,33 +638,100 @@ async def runner_preview(model_id: str):
                         headers={"Cache-Control": "no-store"})
 
 
+def _dir_size_bytes(p: Path) -> int:
+    """Sum of sizes of every file under p, following symlinks (HF caches use them)."""
+    total = 0
+    if not p.exists():
+        return 0
+    for f in p.rglob("*"):
+        try:
+            if f.is_file() or f.is_symlink():
+                total += f.stat().st_size
+        except OSError:
+            pass
+    return total
+
+
+def _purge_dir(p: Path) -> tuple[int, Optional[str]]:
+    """Delete a directory and return (freed_bytes, error). Doesn't swallow errors —
+    ignore_errors hid real failures and made delete look like it worked when it didn't."""
+    if not p.exists():
+        return (0, None)
+    before = _dir_size_bytes(p)
+    try:
+        shutil.rmtree(p)
+    except Exception as e:
+        # If something is holding a file (a still-alive runner subprocess for
+        # example), report it. The UI surfaces this so the user knows what
+        # to do.
+        return (before - _dir_size_bytes(p), f"{type(e).__name__}: {e}")
+    return (before, None)
+
+
 @app.delete("/api/models/{model_id}")
 async def delete_model_weights(model_id: str):
-    """Remove cached weights for a model so the pod can free disk."""
+    """Remove cached weights for a model so the pod can free disk.
+
+    Stops the runner first (a live runner holds open handles to weight files
+    and rm will fail on those). Then deletes the HF cache directory for the
+    repo, plus any workspace-local mirror, and tracks bytes freed so the UI
+    can show real numbers — not just "deleted" while the volume stays full.
+
+    Variants: a single registry entry can declare multiple HF repos via the
+    `variants` array (Wan 2.2 has 14B + 5B repos for the same model). Delete
+    sweeps all of them so "delete weights" actually clears everything that
+    model can pull.
+    """
     with open(REGISTRY_PATH) as f:
         registry = json.load(f)
     model = next((m for m in registry["models"] if m["id"] == model_id), None)
     if not model:
         raise HTTPException(404, "Model not found")
 
+    # Stop the runner first — a live process holds open handles to the
+    # weight files and rm fails silently on those.
     await launcher.stop(model_id)
 
-    removed = []
-    repo = model.get("hf_repo", "")
-    # HF cache layout: ~/.cache/huggingface/hub/models--{org}--{name}
-    if repo:
-        cache_root = Path(os.environ.get("HF_HOME", str(Path.home() / ".cache" / "huggingface"))) / "hub"
+    # Build the full set of HF repos this model owns. variants extend this
+    # so a single model card can manage multiple HF repos.
+    repos = set()
+    if model.get("hf_repo"):
+        repos.add(model["hf_repo"])
+    for v in (model.get("variants") or []):
+        if v.get("hf_repo"):
+            repos.add(v["hf_repo"])
+
+    cache_root = Path(os.environ.get("HF_HOME", str(Path.home() / ".cache" / "huggingface"))) / "hub"
+    removed: list = []
+    errors:  list = []
+    freed_bytes = 0
+
+    for repo in repos:
+        # HF cache layout: hub/models--{org}--{name}/
         cache_dir = cache_root / f"models--{repo.replace('/', '--')}"
-        if cache_dir.exists():
-            shutil.rmtree(cache_dir, ignore_errors=True)
-            removed.append(str(cache_dir))
-        # workspace-local copy if launcher mirrored it there
+        freed, err = _purge_dir(cache_dir)
+        if freed or err:
+            removed.append({"path": str(cache_dir), "freed_bytes": freed, "error": err})
+            freed_bytes += freed
+            if err:
+                errors.append(err)
+        # Workspace-local copy if a runner mirrored it there
         local = MODELS_DIR / repo.replace("/", "__")
-        if local.exists():
-            shutil.rmtree(local, ignore_errors=True)
-            removed.append(str(local))
+        freed, err = _purge_dir(local)
+        if freed or err:
+            removed.append({"path": str(local), "freed_bytes": freed, "error": err})
+            freed_bytes += freed
+            if err:
+                errors.append(err)
+
     downloads.set(model_id, downloading=False, downloaded=False, progress=0.0, error=None)
-    return {"status": "deleted", "removed": removed}
+    return {
+        "status":      "deleted" if not errors else "partial",
+        "removed":     removed,
+        "freed_bytes": freed_bytes,
+        "freed_mb":    round(freed_bytes / 1024 / 1024, 1),
+        "errors":      errors,
+    }
 
 
 # ── HuggingFace downloads ────────────────────────────────────────────────

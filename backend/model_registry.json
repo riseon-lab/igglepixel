@@ -112,6 +112,7 @@
           "id": "wan22-i2v-lightning-4step",
           "label": "Lightning · 4 steps (I2V)",
           "description": "lightx2v's 4-step distillation. Drop steps from 30→4. Requires the 14B variant.",
+          "usage_hint": "Set Steps to 4 and Guidance to 1.0",
           "hf_repo": "lightx2v/Wan2.2-Lightning",
           "files": [
             { "filename": "Wan2.2-I2V-A14B-4steps-lora-rank64-Seko-V1/high_noise_model.safetensors", "target": "high" },
@@ -253,6 +254,7 @@
           "filename": "Qwen-Image-Lightning-4steps-V2.0.safetensors",
           "hf_repo": "lightx2v/Qwen-Image-Lightning",
           "label": "Lightning · 4 steps",
+          "usage_hint": "Set Steps to 4 and CFG to 1.0",
           "strength": 1.0, "default_on": false
         },
         {
@@ -260,6 +262,7 @@
           "filename": "Qwen-Image-Lightning-8steps-V2.0.safetensors",
           "hf_repo": "lightx2v/Qwen-Image-Lightning",
           "label": "Lightning · 8 steps",
+          "usage_hint": "Set Steps to 8 and CFG to 1.0",
           "strength": 1.0, "default_on": false
         }
       ]
@@ -307,6 +310,7 @@
           "filename": "Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors",
           "hf_repo": "lightx2v/Qwen-Image-Edit-2511-Lightning",
           "label": "Lightning · 4 steps",
+          "usage_hint": "Set Steps to 4 and CFG to 1.0",
           "strength": 1.0, "default_on": false
         },
         {
@@ -314,6 +318,7 @@
           "filename": "Qwen-Image-Edit-2511-Lightning-8steps-V1.0-bf16.safetensors",
           "hf_repo": "lightx2v/Qwen-Image-Edit-2511-Lightning",
           "label": "Lightning · 8 steps",
+          "usage_hint": "Set Steps to 8 and CFG to 1.0",
           "strength": 1.0, "default_on": false
         },
         {

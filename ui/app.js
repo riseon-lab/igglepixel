@@ -688,6 +688,11 @@ function bindShell() {
       if ($('#lightbox').classList.contains('open')) closeLightbox();
       if ($('#assetPop').classList.contains('open')) closeAssetMenu();
     }
+    // Arrow keys cycle through the lightbox list when it's open.
+    if ($('#lightbox').classList.contains('open')) {
+      if (e.key === 'ArrowRight') { e.preventDefault(); _lightboxStep(1);  }
+      if (e.key === 'ArrowLeft')  { e.preventDefault(); _lightboxStep(-1); }
+    }
   });
   // Close the asset 3-dot menu when clicking anywhere outside it.
   document.addEventListener('click', (e) => {
@@ -925,14 +930,22 @@ function openModelMenu(id) {
         markModelStopped(mId);
       }
       const res = await api.deleteModel(mId);
-      if (res.ok || res.status === 'deleted') {
+      if (res.status === 'deleted' || res.ok) {
         resetModelWeightsState(mId);
-        toast('Weights removed', 'success');
+        // Show freed disk so the user knows the volume actually shrank.
+        // freed_mb of 0 is suspicious — flag it instead of pretending success.
+        const freed = res.freed_mb ?? 0;
+        toast(freed > 0 ? `Weights removed · ${freed.toLocaleString()} MB freed` : 'Weights removed (nothing to delete)', 'success');
+        closeModal();
+      } else if (res.status === 'partial') {
+        const freed = res.freed_mb ?? 0;
+        toast(`Partial delete · ${freed.toLocaleString()} MB freed · ${res.errors?.[0] || 'see logs'}`, 'error');
+        resetModelWeightsState(mId);
         closeModal();
       } else {
         toast(res.message || 'Delete failed', 'error');
       }
-    } catch { toast('Delete failed', 'error'); }
+    } catch (e) { toast(`Delete failed: ${e.message || 'unknown'}`, 'error'); }
   };
   openModal();
 }
@@ -2194,7 +2207,7 @@ function bindImgStrip(m) {
   // Zoom on the generated cell
   $$('[data-zoom]', $('#wsImgStrip')).forEach(c => c.addEventListener('click', () => {
     const recents = state.recents[m.id] || [];
-    if (recents.length) openLightbox(recents[recents.length - 1]);
+    if (recents.length) openLightbox(recents[recents.length - 1], { list: recents, index: recents.length - 1 });
   }));
 }
 
@@ -2473,6 +2486,12 @@ function loraDetailedHtml(modelId, key, opts = {}) {
   const filesNote = lstate.entry?.files?.length
     ? `${lstate.entry.files.length} files · ${esc(lstate.entry.hf_repo || 'lightx2v')}`
     : esc(lstate.entry?.filename || '');
+  // Usage hint surfaces the "set steps=4 / cfg=1.0" requirement that most
+  // Lightning LoRAs have. Without this guidance users see "messes up the
+  // gen even at 0.1" because the LoRA fights the default sampler config.
+  const hintRow = lstate.entry?.usage_hint
+    ? `<div class="lora-hint">${esc(lstate.entry.usage_hint)}</div>`
+    : '';
   // When uninstalled, the toggle is disabled and we surface an Install
   // button instead. Strength sliders are also disabled until installed.
   const disabledByMissing = !installed;
@@ -2504,6 +2523,7 @@ function loraDetailedHtml(modelId, key, opts = {}) {
       <button class="toggle ${lstate.on ? 'on' : ''}" data-lora-toggle="${eKey}" ${disabledByMissing ? 'disabled title="Install before enabling"' : ''}></button>
     </div>
     <div class="filename" title="${esc(filesNote)}">${filesNote}</div>
+    ${hintRow}
     ${installRow}
     ${sliderRow}
   </div>`;
@@ -2632,7 +2652,7 @@ function renderRecents(modelId) {
   $$('.asset[data-recent-idx]', grid).forEach(el => el.addEventListener('click', (e) => {
     if (e.target.closest('[data-asset-menu]')) return;
     const idx = Number(el.dataset.recentIdx);
-    openLightbox(items[idx]);
+    openLightbox(items[idx], { list: items, index: idx });
   }));
   $$('[data-asset-menu]', grid).forEach(b => b.addEventListener('click', (e) => {
     e.stopPropagation();
@@ -3240,17 +3260,47 @@ async function cancelQueueJob(jobId) {
 }
 
 // ── Lightbox ────────────────────────────────────────────────────────────
-function openLightbox(asset) {
+// State for the lightbox's prev/next nav. When openLightbox is called with
+// a list + index, ◀ ▶ buttons cycle through that list; otherwise it's a
+// single-image view with the buttons hidden.
+let _lightboxList = null;
+let _lightboxIdx = 0;
+
+function openLightbox(asset, opts = {}) {
   if (!asset) return;
-  $('#lightboxMeta').textContent = asset.name || asset.path || '';
+  // Backward-compat: callers can still pass just an asset. New callers can
+  // pass {list, index} so the lightbox knows what to scroll through.
+  if (Array.isArray(opts.list) && opts.list.length) {
+    _lightboxList = opts.list;
+    _lightboxIdx  = Math.max(0, Math.min(opts.list.length - 1, opts.index ?? opts.list.indexOf(asset)));
+  } else {
+    _lightboxList = null;
+    _lightboxIdx  = 0;
+  }
+  _renderLightbox();
+  const lb = $('#lightbox');
+  lb.classList.add('open');
+  lb.setAttribute('aria-hidden', 'false');
+}
+
+function _renderLightbox() {
+  const asset = _lightboxList ? _lightboxList[_lightboxIdx] : _lightboxCurrentAsset;
+  if (!asset) return;
+  _lightboxCurrentAsset = asset;
+  $('#lightboxMeta').textContent = _lightboxList
+    ? `${_lightboxIdx + 1} / ${_lightboxList.length} · ${asset.name || asset.path || ''}`
+    : (asset.name || asset.path || '');
   const stage = $('#lightboxStage');
   const u = esc(asset.url);
-  stage.innerHTML = asset.kind === 'video'
+  const navArrows = (_lightboxList && _lightboxList.length > 1) ? `
+    <button class="lightbox-nav prev" id="lightboxPrev" aria-label="Previous">‹</button>
+    <button class="lightbox-nav next" id="lightboxNext" aria-label="Next">›</button>
+  ` : '';
+  stage.innerHTML = (asset.kind === 'video'
     ? `<video src="${u}" controls autoplay loop></video>`
-    : `<img src="${u}" alt="${esc(asset.name || '')}">`;
+    : `<img src="${u}" alt="${esc(asset.name || '')}">`) + navArrows;
   $('#lightboxFoot').textContent = asset.path || '';
-  const dl = $('#lightboxDownload');
-  dl.onclick = () => {
+  $('#lightboxDownload').onclick = () => {
     const a = document.createElement('a');
     a.href = asset.url;
     a.download = asset.name || 'download';
@@ -3258,9 +3308,16 @@ function openLightbox(asset) {
     a.click();
     a.remove();
   };
-  const lb = $('#lightbox');
-  lb.classList.add('open');
-  lb.setAttribute('aria-hidden', 'false');
+  $('#lightboxPrev')?.addEventListener('click', (e) => { e.stopPropagation(); _lightboxStep(-1); });
+  $('#lightboxNext')?.addEventListener('click', (e) => { e.stopPropagation(); _lightboxStep(1);  });
+}
+
+let _lightboxCurrentAsset = null;
+
+function _lightboxStep(delta) {
+  if (!_lightboxList || !_lightboxList.length) return;
+  _lightboxIdx = (_lightboxIdx + delta + _lightboxList.length) % _lightboxList.length;
+  _renderLightbox();
 }
 function closeLightbox() {
   const lb = $('#lightbox');
@@ -3737,7 +3794,7 @@ function renderAssets() {
   $$('.asset[data-asset-idx]', grid).forEach(el => el.addEventListener('click', (e) => {
     if (e.target.closest('[data-asset-menu]')) return;
     const idx = Number(el.dataset.assetIdx);
-    openLightbox(items[idx]);
+    openLightbox(items[idx], { list: items, index: idx });
   }));
   $$('[data-asset-menu]', grid).forEach(b => b.addEventListener('click', (e) => {
     e.stopPropagation();
