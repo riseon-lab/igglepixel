@@ -1033,57 +1033,119 @@ class ComponentInstallBody(BaseModel):
     hf_token: Optional[str] = None
 
 
-@app.post("/api/components/install")
-def install_components(body: ComponentInstallBody):
-    """Pull split-file model components (transformer / VAE / text-encoder)
-    from HuggingFace into COMPONENTS_DIR/<target>/. Skips files already
-    on disk. Same shape as /api/loras/install with an extra `target` field."""
+# In-memory job table for component installs. Components are 20-40 GB so a
+# synchronous request is killed by RunPod's public-proxy timeout long before
+# hf_hub_download finishes — we run the download as a background task and
+# let the UI poll for completion.
+component_install_jobs: dict[str, dict] = {}
+
+
+def _install_one_component(entry: dict, token: Optional[str]) -> dict:
+    """Sync helper run inside a thread by the background job."""
     from huggingface_hub import hf_hub_download
+    target   = (entry.get("target") or "").strip()
+    repo     = entry.get("hf_repo")
+    filename = entry.get("filename")
+    if target not in COMPONENT_TARGETS:
+        return {"filename": filename or "", "target": target, "status": "error",
+                "error": f"target must be one of {COMPONENT_TARGETS}"}
+    if not repo or not filename:
+        return {"filename": filename or "", "target": target, "status": "error",
+                "error": "missing hf_repo or filename"}
+    dest_dir = COMPONENTS_DIR / target
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    basename = Path(filename).name
+    dest = dest_dir / basename
+    if dest.exists():
+        return {"filename": basename, "target": target, "status": "already_installed",
+                "path": str(dest)}
+    try:
+        # hf_hub_download writes into local_dir preserving the repo's internal
+        # path. We then move the file flat into <target>/ so the launcher
+        # always finds it at a predictable location.
+        staged = hf_hub_download(repo_id=repo, filename=filename,
+                                 local_dir=str(dest_dir), token=token)
+        staged_path = Path(staged)
+        if staged_path != dest:
+            staged_path.rename(dest)
+            try:
+                parent = staged_path.parent
+                while parent != dest_dir and not any(parent.iterdir()):
+                    parent.rmdir()
+                    parent = parent.parent
+            except OSError:
+                pass
+        return {"filename": basename, "target": target, "status": "installed",
+                "path": str(dest)}
+    except Exception as e:
+        return {"filename": basename, "target": target, "status": "error",
+                "error": f"{type(e).__name__}: {e}"}
+
+
+async def _run_component_install_job(job_id: str, files: list, token: Optional[str]) -> None:
+    job = component_install_jobs[job_id]
+    job["status"] = "running"
+    job["started_at"] = time.time()
+    results: list = []
+    job["results"] = results
+    try:
+        for entry in files or []:
+            target   = (entry.get("target") or "").strip()
+            basename = Path(str(entry.get("filename") or "")).name
+            job["current"] = {"target": target, "filename": basename}
+            # Run the (blocking, multi-GB) HF download in a worker thread so
+            # the FastAPI event loop stays responsive for status polls.
+            res = await asyncio.to_thread(_install_one_component, entry, token)
+            results.append(res)
+        job["status"] = "done"
+    except Exception as e:
+        job["status"] = "error"
+        job["error"] = f"{type(e).__name__}: {e}"
+    finally:
+        job["finished_at"] = time.time()
+        job.pop("current", None)
+
+
+@app.post("/api/components/install")
+async def install_components(body: ComponentInstallBody):
+    """Start a background component install job. Returns a job_id that the
+    UI polls via /api/components/install-status/{job_id} until done."""
     token = body.hf_token or os.environ.get("HF_TOKEN")
-    results = []
-    for entry in body.files or []:
-        target   = (entry.get("target") or "").strip()
-        repo     = entry.get("hf_repo")
-        filename = entry.get("filename")
-        if target not in COMPONENT_TARGETS:
-            results.append({"filename": filename or "", "target": target, "status": "error",
-                            "error": f"target must be one of {COMPONENT_TARGETS}"})
-            continue
-        if not repo or not filename:
-            results.append({"filename": filename or "", "target": target, "status": "error",
-                            "error": "missing hf_repo or filename"})
-            continue
-        dest_dir = COMPONENTS_DIR / target
-        dest_dir.mkdir(parents=True, exist_ok=True)
-        basename = Path(filename).name
-        dest = dest_dir / basename
-        if dest.exists():
-            results.append({"filename": basename, "target": target, "status": "already_installed",
-                            "path": str(dest)})
-            continue
+    job_id = secrets.token_urlsafe(12)
+    component_install_jobs[job_id] = {
+        "id":         job_id,
+        "status":     "queued",
+        "created_at": time.time(),
+        "files":      [{"target": e.get("target"),
+                        "filename": Path(str(e.get("filename") or "")).name}
+                       for e in (body.files or [])],
+    }
+    asyncio.create_task(_run_component_install_job(job_id, body.files, token))
+    return {"job_id": job_id, "status": "queued"}
+
+
+@app.get("/api/components/install-status/{job_id}")
+def install_components_status(job_id: str):
+    job = component_install_jobs.get(job_id)
+    if not job:
+        raise HTTPException(404, "Install job not found")
+    # Best-effort progress: peek at partial file size on disk for the file
+    # currently downloading. HF writes a `.tmp` or `.incomplete` sibling.
+    cur = job.get("current")
+    if cur and job.get("status") == "running":
         try:
-            # hf_hub_download writes into local_dir preserving the repo's
-            # internal path. We then move the file flat into <target>/ so
-            # the launcher always finds it at a predictable location.
-            staged = hf_hub_download(repo_id=repo, filename=filename,
-                                     local_dir=str(dest_dir), token=token)
-            staged_path = Path(staged)
-            if staged_path != dest:
-                staged_path.rename(dest)
-                # Best-effort cleanup of empty parent dirs HF created.
-                try:
-                    parent = staged_path.parent
-                    while parent != dest_dir and not any(parent.iterdir()):
-                        parent.rmdir()
-                        parent = parent.parent
-                except OSError:
-                    pass
-            results.append({"filename": basename, "target": target, "status": "installed",
-                            "path": str(dest)})
-        except Exception as e:
-            results.append({"filename": basename, "target": target, "status": "error",
-                            "error": f"{type(e).__name__}: {e}"})
-    return {"results": results}
+            d = COMPONENTS_DIR / cur["target"]
+            if d.exists():
+                # Prefer the most recently-modified non-final file.
+                partials = sorted(
+                    [p for p in d.iterdir() if p.is_file() and p.name != cur["filename"]],
+                    key=lambda p: p.stat().st_mtime, reverse=True,
+                )
+                if partials:
+                    job["downloaded_mb"] = round(partials[0].stat().st_size / 1024 / 1024, 1)
+        except OSError:
+            pass
+    return job
 
 
 @app.get("/api/components")

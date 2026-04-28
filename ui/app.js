@@ -312,8 +312,9 @@ const api = {
     body: JSON.stringify(body),
   })),
   installLoras:  (b) => json(apiCall('/api/loras/install', jsonBody(b))),
-  components:        () => json(apiCall('/api/components')),
-  installComponents: (b) => json(apiCall('/api/components/install', jsonBody(b))),
+  components:           () => json(apiCall('/api/components')),
+  installComponents:    (b)  => json(apiCall('/api/components/install', jsonBody(b))),
+  componentJobStatus:   (id) => json(apiCall(`/api/components/install-status/${encodeURIComponent(id)}`)),
   deleteAsset:   (path) => json(apiCall(`/api/assets?path=${encodeURIComponent(path)}`, { method: 'DELETE' })),
   // Phase 3: encrypt the file in the browser BEFORE upload when we have the
   // data key. Backend stores the bytes as-is (sees ciphertext, period).
@@ -1353,33 +1354,26 @@ function renderDrawerBody() {
       setModelState(m.id, { components: { ...cur } });
     });
   });
-  // Install button — pulls the file via /api/components/install, then
-  // refreshes state.components and re-renders the drawer so the dropdown
-  // option enables and a fresh-installed component can be selected.
+  // Install button — kicks off a background download job (component files
+  // are 20–40 GB, so a sync request gets killed by RunPod's public-proxy
+  // timeout). We start the job, poll status every few seconds, and only
+  // update the UI to "installed" when the backend confirms the file is on
+  // disk. Survives reload because we re-poll active jobs from
+  // state.componentJobs on next render.
   $$('[data-component-install]', $('#drawer')).forEach(btn => btn.addEventListener('click', async (e) => {
     e.stopPropagation();
     const optId = btn.dataset.componentInstall;
     const opt = (m.components.options || []).find(o => o.id === optId);
     if (!opt) return;
     btn.disabled = true;
-    btn.innerHTML = '<span class="spinner"></span><span>Installing…</span>';
+    btn.innerHTML = '<span class="spinner"></span><span>Starting…</span>';
     try {
-      const res = await api.installComponents({
+      const { job_id } = await api.installComponents({
         files: [{ target: opt.target, hf_repo: opt.hf_repo, filename: opt.filename }],
         hf_token: state.settings.hf_token || null,
       });
-      const errors = (res.results || []).filter(r => r.status === 'error');
-      if (errors.length) {
-        toast(`Install failed: ${errors[0].error || 'unknown'}`, 'error');
-      } else {
-        toast(`${opt.label} installed`, 'success');
-        // Auto-select the freshly-installed component.
-        const cur = modelStateOf(m.id).components || {};
-        cur[opt.target] = String(opt.filename).split('/').pop();
-        setModelState(m.id, { components: { ...cur } });
-      }
-      await loadComponents();
-      renderDrawerBody();
+      if (!job_id) throw new Error('No job id returned');
+      pollComponentInstall(job_id, m, opt, btn);
     } catch (err) {
       toast(`Install failed: ${err.message || 'unknown'}`, 'error');
       btn.disabled = false;
@@ -3729,6 +3723,58 @@ function isComponentInstalled(opt) {
   if (!opt?.filename || !opt?.target) return false;
   const basename = String(opt.filename).split('/').pop();
   return (state.components || []).some(c => c.target === opt.target && c.filename === basename);
+}
+
+// Poll a component-install background job until it finishes. Updates the
+// install button's label with downloaded MB, then on success refreshes
+// state.components, auto-selects the freshly-installed component, and
+// re-renders the drawer. Polling continues even if the user closes/opens
+// the drawer because we look up the button by data-component-install on
+// each tick.
+const _componentJobTimers = {};
+function pollComponentInstall(jobId, m, opt, initialBtn) {
+  if (_componentJobTimers[jobId]) return; // already polling
+  const optId = opt.id;
+  const tick = async () => {
+    let job;
+    try {
+      job = await api.componentJobStatus(jobId);
+    } catch (err) {
+      toast(`Install lost: ${err.message || 'status unreachable'}`, 'error');
+      delete _componentJobTimers[jobId];
+      return;
+    }
+    const btn = document.querySelector(`[data-component-install="${CSS.escape(optId)}"]`) || initialBtn;
+    if (job.status === 'running' || job.status === 'queued') {
+      if (btn) {
+        const mb = job.downloaded_mb;
+        const label = job.status === 'queued'
+          ? 'Queued…'
+          : (mb ? `Downloading… ${mb >= 1024 ? (mb / 1024).toFixed(1) + ' GB' : Math.round(mb) + ' MB'}` : 'Downloading…');
+        btn.disabled = true;
+        btn.innerHTML = `<span class="spinner"></span><span>${esc(label)}</span>`;
+      }
+      _componentJobTimers[jobId] = setTimeout(tick, 4000);
+      return;
+    }
+    delete _componentJobTimers[jobId];
+    if (job.status === 'done') {
+      const errors = (job.results || []).filter(r => r.status === 'error');
+      if (errors.length) {
+        toast(`Install failed: ${errors[0].error || 'unknown'}`, 'error');
+      } else {
+        toast(`${opt.label} installed`, 'success');
+        const cur = modelStateOf(m.id).components || {};
+        cur[opt.target] = String(opt.filename).split('/').pop();
+        setModelState(m.id, { components: { ...cur } });
+      }
+    } else if (job.status === 'error') {
+      toast(`Install failed: ${job.error || 'unknown'}`, 'error');
+    }
+    await loadComponents();
+    if (state.selected?.id === m.id) renderDrawerBody();
+  };
+  tick();
 }
 
 function renderLoraPanel() {
