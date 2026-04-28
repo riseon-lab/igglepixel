@@ -88,14 +88,14 @@
         { "min_gb": 0,  "w": 640,  "h": 384 }
       ],
       "param_groups": ["prompt", "generation", "dimensions", "video"],
-      "param_keys":   ["prompt", "negative_prompt", "seed", "steps", "cfg", "cfg_low", "width", "height", "num_frames", "fps"],
+      "param_keys":   ["prompt", "negative_prompt", "seed", "steps", "cfg", "cfg_low", "width", "height", "duration", "fps"],
       "param_overrides": {
         "steps":      { "default": 30 },
         "cfg":        { "default": 5.0, "min": 0, "max": 10, "step": 0.1, "label": "Guidance (high-noise)" },
         "cfg_low":    { "default": 5.0, "min": 0, "max": 10, "step": 0.1, "label": "Guidance (low-noise)" },
         "width":      { "default": 832,  "step": 16, "min": 256, "max": 1280 },
         "height":     { "default": 480,  "step": 16, "min": 256, "max": 720 },
-        "num_frames": { "default": 81,   "step": 1,  "min": 16,  "max": 121 },
+        "duration":   { "default": 3.4,  "step": 0.1, "min": 1, "max": 5, "label": "Seconds" },
         "fps":        { "default": 24,   "step": 1,  "min": 8,   "max": 30 }
       },
       "aspect_presets": [

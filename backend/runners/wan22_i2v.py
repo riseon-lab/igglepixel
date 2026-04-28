@@ -128,10 +128,18 @@ class Runner(RunnerBase):
         # uses cfg_low. If unset, diffusers reuses cfg for both.
         cfg_low = params.get("cfg_low")
         cfg_low = float(cfg_low) if cfg_low is not None else None
-        frames  = int(params.get("num_frames", 81))
         width  = int(params.get("width",  832))
         height = int(params.get("height", 480))
         fps    = int(params.get("fps", 24))
+        duration = params.get("duration")
+        if duration is not None:
+            # Wan works best with frame counts of 4n + 1. Let the UI expose
+            # seconds, then resolve to the nearest valid frame count here.
+            seconds = max(0.1, float(duration))
+            raw_frames = max(16, min(121, int(round(seconds * fps))))
+            frames = max(17, min(121, ((raw_frames - 1) // 4) * 4 + 1))
+        else:
+            frames = int(params.get("num_frames", 81))
         if seed < 0:
             seed = secrets.randbits(31)
 

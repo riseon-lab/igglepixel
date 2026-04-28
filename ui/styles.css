@@ -1157,16 +1157,17 @@ body::before {
 .ws-settings > [data-control-key="fps"],
 .ws-settings > [data-control-key="width"],
 .ws-settings > [data-control-key="height"] { grid-column: span 2; }
-.ws-settings.video-controls > [data-seed-field] { grid-column: span 2; }
-.ws-settings.video-controls > [data-control-key="steps"],
-.ws-settings.video-controls > [data-control-key="cfg"],
-.ws-settings.video-controls > [data-control-key="cfg_low"] { grid-column: span 2; }
+.ws-settings.video-controls > [data-seed-field] { grid-column: 1 / span 4; }
+.ws-settings.video-controls > [data-control-key="steps"] { grid-column: 5 / span 2; }
+.ws-settings.video-controls > [data-control-key="cfg"] { grid-column: 7 / span 3; }
+.ws-settings.video-controls > [data-control-key="cfg_low"] { grid-column: 10 / span 3; }
+.ws-settings.video-controls > [data-control-key="duration"] { grid-column: 1 / span 3; }
 .ws-settings.video-controls > [data-control-key="fps"],
 .ws-settings.video-controls > [data-control-key="width"],
 .ws-settings.video-controls > [data-control-key="height"] { grid-column: span 2; }
-.ws-settings.video-controls > [data-control-key="fps"] { grid-column: 1 / span 2; }
-.ws-settings.video-controls > [data-control-key="width"] { grid-column: 3 / span 2; }
-.ws-settings.video-controls > [data-control-key="height"] { grid-column: 5 / span 2; }
+.ws-settings.video-controls > [data-control-key="fps"] { grid-column: 4 / span 2; }
+.ws-settings.video-controls > [data-control-key="width"] { grid-column: 6 / span 3; }
+.ws-settings.video-controls > [data-control-key="height"] { grid-column: 9 / span 3; }
 
 .ws-bar {
   display: flex;

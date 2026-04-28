@@ -93,8 +93,9 @@ const PARAM_GROUPS = {
   video: {
     title: 'Video',
     fields: [
-      { key: 'num_frames', label: 'Frames', type: 'slider', min: 16, max: 121, step: 1,  default: 81, hint: '~3.4s @ 24 fps' },
-      { key: 'fps',        label: 'FPS',    type: 'slider', min: 8,  max: 60,  step: 1,  default: 24 },
+      { key: 'duration',   label: 'Seconds', type: 'slider', min: 1, max: 5, step: 0.1, default: 3.4 },
+      { key: 'fps',        label: 'FPS',     type: 'slider', min: 8, max: 60, step: 1,   default: 24 },
+      { key: 'num_frames', label: 'Frames',  type: 'slider', min: 16, max: 121, step: 1, default: 81, hint: 'Advanced' },
     ],
     layout: 'grid-2',
   },
@@ -113,15 +114,6 @@ const PARAM_GROUPS = {
       { key: 'ref_image',    label: 'Reference image', type: 'asset' },
       { key: 'ref_strength', label: 'Strength',        type: 'slider',
         min: 0, max: 1, step: 0.01, default: 0.65 },
-    ],
-  },
-  video: {
-    title: 'Video',
-    fields: [
-      { key: 'resolution', label: 'Resolution', type: 'select',
-        options: ['480p', '720p', '1080p'], default: '720p' },
-      { key: 'fps',        label: 'FPS',        type: 'number', default: 24, min: 1, max: 60 },
-      { key: 'duration',   label: 'Duration (s)', type: 'number', default: 4, min: 1, max: 60 },
     ],
   },
   precision: {
@@ -249,6 +241,9 @@ async function apiCall(url, opts = {}) {
   if (!res.ok) {
     // Extract FastAPI's detail message if available, otherwise fall back to status.
     let msg = `Server error ${res.status}`;
+    if (res.status === 524) {
+      msg = 'The public proxy timed out before the server replied. Long generations now use background jobs; please retry after refreshing the app.';
+    }
     try {
       const ct = res.headers.get('content-type') || '';
       if (ct.includes('application/json')) {
@@ -295,6 +290,8 @@ const api = {
   downloadWeights: (id, body) => json(apiCall(`/api/models/${id}/download`, jsonBody(body || {}))),
   // Inference
   generate:      (b) => json(apiCall('/api/generate', jsonBody(b))),
+  startGenerateJob: (b) => json(apiCall('/api/generate-jobs', jsonBody(b))),
+  generationJob: (id) => json(apiCall(`/api/generate-jobs/${encodeURIComponent(id)}`)),
   cancel:        (id) => json(apiCall(`/api/cancel/${id}`, { method: 'POST' })),
   // Mutations
   deleteModel:   (id)   => json(apiCall(`/api/models/${id}`, { method: 'DELETE' })),
@@ -2496,18 +2493,27 @@ function loraDetailedHtml(modelId, key, opts = {}) {
   // button instead. Strength sliders are also disabled until installed.
   const disabledByMissing = !installed;
   const enabledForSlider = lstate.on && installed;
+  const targetSet = new Set();
+  if (Array.isArray(lstate.entry?.files) && lstate.entry.files.length) {
+    lstate.entry.files.forEach(f => targetSet.add((f.target || 'high').toLowerCase()));
+  } else if (lstate.entry?.target || lstate.entry?.target_guess) {
+    targetSet.add((lstate.entry.target || lstate.entry.target_guess).toLowerCase());
+  }
+  const targets = [...targetSet].filter(t => t === 'high' || t === 'low');
+  if (!targets.length) targets.push('high');
   const sliderRow = dual
-    ? `
-      <div class="row">
-        <span class="lora-tier">High</span>
-        <input class="slider" type="range" min="0" max="2" step="0.05" value="${lstate.strength_high}" data-lora-strength-high="${eKey}" ${enabledForSlider ? '' : 'disabled'}>
-        <span class="strength" data-lora-strength-high-val="${eKey}">×${Number(lstate.strength_high).toFixed(2)}</span>
-      </div>
-      <div class="row">
-        <span class="lora-tier">Low</span>
-        <input class="slider" type="range" min="0" max="2" step="0.05" value="${lstate.strength_low}" data-lora-strength-low="${eKey}" ${enabledForSlider ? '' : 'disabled'}>
-        <span class="strength" data-lora-strength-low-val="${eKey}">×${Number(lstate.strength_low).toFixed(2)}</span>
-      </div>`
+    ? targets.map(target => {
+        const isLow = target === 'low';
+        const attr = isLow ? 'data-lora-strength-low' : 'data-lora-strength-high';
+        const valAttr = isLow ? 'data-lora-strength-low-val' : 'data-lora-strength-high-val';
+        const value = isLow ? lstate.strength_low : lstate.strength_high;
+        const label = isLow ? 'Low' : 'High';
+        return `<div class="row">
+          <span class="lora-tier">${label}</span>
+          <input class="slider" type="range" min="0" max="2" step="0.05" value="${value}" ${attr}="${eKey}" ${enabledForSlider ? '' : 'disabled'}>
+          <span class="strength" ${valAttr}="${eKey}">×${Number(value).toFixed(2)}</span>
+        </div>`;
+      }).join('')
     : `
       <div class="row">
         <input class="slider" type="range" min="0" max="2" step="0.05" value="${lstate.strength}" data-lora-strength="${eKey}" ${enabledForSlider ? '' : 'disabled'}>
@@ -3014,6 +3020,17 @@ function startJobProgress(job) {
   return es;
 }
 
+async function generateWithBackendJob(payload) {
+  const started = await api.startGenerateJob(payload);
+  if (!started.job_id) throw new Error('Generation job did not start');
+  for (;;) {
+    await delay(1500);
+    const job = await api.generationJob(started.job_id);
+    if (job.status === 'done') return job.result || {};
+    if (job.status === 'error') throw new Error(job.error || 'Generation failed');
+  }
+}
+
 // ── Queue ────────────────────────────────────────────────────────────────
 function snapshotJob() {
   // Snapshot current workspace state into a queueable job. Runs the same
@@ -3162,7 +3179,7 @@ async function runJob(job) {
         : Math.floor(Math.random() * 2147483647);
       res = { assets: [fakeAsset(m, job.params, usedSeed)], meta: { preview: true, seed: usedSeed } };
     } else {
-      res = await api.generate({
+      res = await generateWithBackendJob({
         model_id: job.model_id,
         params:   job.params,
         loras:    (job.loras || []).map(l => {

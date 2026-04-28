@@ -203,7 +203,7 @@ class Runner(ABC):
                 else:
                     weight = ({"transformer": 0.0, "transformer_2": sl}
                               if entry_target == "low"
-                              else {"transformer": sh, "transformer_2": sl})
+                              else {"transformer": sh, "transformer_2": 0.0})
                     pipe.load_lora_weights(str(path.parent), weight_name=path.name, adapter_name=adapter)
                     adapters.append({"name": adapter, "weight": weight, "target": "pipe"})
             else:

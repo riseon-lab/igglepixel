@@ -560,6 +560,9 @@ class GenerateRequest(BaseModel):
     hf_token: Optional[str] = None
 
 
+generation_jobs: dict[str, dict] = {}
+
+
 @app.get("/api/runner/{model_id}/healthz")
 async def runner_health(model_id: str):
     info = launcher.get(model_id)
@@ -573,8 +576,7 @@ async def runner_health(model_id: str):
             return {"ready": False, "loading": True, "error": str(e), "model_id": model_id}
 
 
-@app.post("/api/generate")
-async def generate(req: GenerateRequest):
+async def _generate_result(req: GenerateRequest) -> dict:
     info = launcher.get(req.model_id)
     if not info or info["status"] != "running":
         raise HTTPException(409, "Runner not running. Launch the model first.")
@@ -600,6 +602,55 @@ async def generate(req: GenerateRequest):
         except (ValueError, OSError):
             pass
     return result
+
+
+@app.post("/api/generate")
+async def generate(req: GenerateRequest):
+    return await _generate_result(req)
+
+
+async def _run_generation_job(job_id: str, req: GenerateRequest):
+    generation_jobs[job_id].update({"status": "running", "started_at": time.time()})
+    try:
+        result = await _generate_result(req)
+        generation_jobs[job_id].update({
+            "status": "done",
+            "finished_at": time.time(),
+            "result": result,
+        })
+    except HTTPException as e:
+        generation_jobs[job_id].update({
+            "status": "error",
+            "finished_at": time.time(),
+            "error": str(e.detail),
+        })
+    except Exception as e:
+        generation_jobs[job_id].update({
+            "status": "error",
+            "finished_at": time.time(),
+            "error": f"{type(e).__name__}: {e}",
+        })
+
+
+@app.post("/api/generate-jobs")
+async def start_generate_job(req: GenerateRequest):
+    job_id = secrets.token_urlsafe(12)
+    generation_jobs[job_id] = {
+        "id": job_id,
+        "model_id": req.model_id,
+        "status": "queued",
+        "created_at": time.time(),
+    }
+    asyncio.create_task(_run_generation_job(job_id, req))
+    return {"job_id": job_id, "status": "queued"}
+
+
+@app.get("/api/generate-jobs/{job_id}")
+async def get_generate_job(job_id: str):
+    job = generation_jobs.get(job_id)
+    if not job:
+        raise HTTPException(404, "Generation job not found")
+    return job
 
 
 @app.post("/api/cancel/{model_id}")
