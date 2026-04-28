@@ -65,37 +65,35 @@ class Runner(RunnerBase):
         # from_pretrained, so we ignore swaps when quant != bf16 and warn.
         component_overrides: dict = {}
         if quant == "bf16":
-            try:
-                from diffusers import (
-                    QwenImageTransformer2DModel,
-                    AutoencoderKLQwenImage,
-                )
-                # Some diffusers builds expose AutoencoderKLQwenImage; older ones
-                # only have AutoencoderKL. Fall back if the specific class is
-                # missing so this never blocks the whole launch.
-            except ImportError:
-                from diffusers import QwenImageTransformer2DModel  # type: ignore
-                from diffusers import AutoencoderKL as AutoencoderKLQwenImage  # type: ignore
+            from diffusers import QwenImageTransformer2DModel
 
             tx_path = os.environ.get("FORGE_COMPONENT_TRANSFORMER")
             if tx_path:
                 try:
                     print(f"[runner] loading transformer from split file: {tx_path}", flush=True)
+                    # `config=` + `subfolder=` tell from_single_file where to
+                    # fetch the model architecture config from. Without this,
+                    # diffusers falls back to looking up SD-1.5's config and
+                    # fails because the file isn't there. The Comfy-Org split
+                    # is *just weights* — config still has to come from the
+                    # base Qwen repo (same architecture, different training).
                     component_overrides["transformer"] = QwenImageTransformer2DModel.from_single_file(
-                        tx_path, torch_dtype=torch.bfloat16
+                        tx_path,
+                        config=self.HF_REPO,
+                        subfolder="transformer",
+                        torch_dtype=torch.bfloat16,
+                        token=token,
                     )
                 except Exception as e:
                     print(f"[runner] WARN: transformer split-file load failed ({e}); falling back to base repo", flush=True)
 
-            vae_path = os.environ.get("FORGE_COMPONENT_VAE")
-            if vae_path:
-                try:
-                    print(f"[runner] loading VAE from split file: {vae_path}", flush=True)
-                    component_overrides["vae"] = AutoencoderKLQwenImage.from_single_file(
-                        vae_path, torch_dtype=torch.bfloat16
-                    )
-                except Exception as e:
-                    print(f"[runner] WARN: VAE split-file load failed ({e}); falling back to base repo", flush=True)
+            # VAE swap is currently disabled. The Qwen-Image VAE class isn't
+            # registered with diffusers' FromOriginalModelMixin in the build
+            # we ship (only AutoencoderKL/Wan/LTX/etc. are), so from_single_file
+            # rejects the file. Falls through to the base repo's VAE — which
+            # is fine, the 2511 transformer is where the quality lives.
+            if os.environ.get("FORGE_COMPONENT_VAE"):
+                print("[runner] note: VAE split-file swap not yet supported on this diffusers build; using base repo VAE", flush=True)
 
             # Text encoder swap is left for a follow-up — it requires picking
             # the right Qwen2.5-VL class + tokenizer pairing, which differs
