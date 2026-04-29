@@ -134,15 +134,79 @@ class Runner(ABC):
         # submodule too. Some pipelines (Qwen) do not mirror direct component
         # loads into the pipe-level adapter registry, so pipe.set_adapters()
         # would see an empty adapter list and fail.
+        def _registered_adapters(module) -> set[str]:
+            names = set()
+            peft_config = getattr(module, "peft_config", None)
+            if isinstance(peft_config, dict):
+                names.update(str(k) for k in peft_config.keys())
+            for attr in ("get_list_adapters", "get_adapter_names"):
+                fn = getattr(module, attr, None)
+                if not callable(fn):
+                    continue
+                try:
+                    value = fn()
+                    if isinstance(value, dict):
+                        for v in value.values():
+                            if isinstance(v, (list, tuple, set)):
+                                names.update(str(x) for x in v)
+                    elif isinstance(value, (list, tuple, set)):
+                        names.update(str(x) for x in value)
+                except Exception:
+                    pass
+            return names
+
         def _load_to_submodule(path: Path, adapter: str, target: str) -> bool:
             sub = getattr(pipe, "transformer_2", None) if target == "low" else getattr(pipe, "transformer", None)
             if sub is None or not hasattr(sub, "load_lora_adapter"):
                 return False
+            attempts = []
+            if target in ("high", "low"):
+                # Most Qwen/Wan LoRAs are saved with transformer-prefixed
+                # keys when trained against a full pipeline. Loading straight
+                # onto the transformer needs that prefix stripped. Older
+                # diffusers builds may not accept `prefix`, so we fall back to
+                # the no-prefix call below.
+                attempts.append({"prefix": "transformer_2" if target == "low" else "transformer"})
+            attempts.append({})
+            errors = []
+            for kwargs in attempts:
+                try:
+                    sub.load_lora_adapter(str(path), adapter_name=adapter, **kwargs)
+                    registered = _registered_adapters(sub)
+                    if registered and adapter not in registered:
+                        errors.append(f"adapter {adapter} not registered; present={sorted(registered)}")
+                        continue
+                    return True
+                except TypeError as e:
+                    # Likely an older signature without `prefix`. Try the
+                    # no-prefix path next.
+                    errors.append(f"{type(e).__name__}: {e}")
+                    continue
+                except Exception as e:
+                    errors.append(f"{type(e).__name__}: {e}")
+                    continue
+            print(f"[runner] direct submodule load failed ({'; '.join(errors)}); falling back to pipe-level", flush=True)
+            return False
+
+        def _set_adapters(module, names, weights) -> bool:
             try:
-                sub.load_lora_adapter(str(path), adapter_name=adapter)
+                module.set_adapters(names, adapter_weights=weights)
                 return True
+            except TypeError as e:
+                first_error = e
+                try:
+                    module.set_adapters(names, weights)
+                    return True
+                except Exception as e:
+                    print(
+                        "[runner] set_adapters failed "
+                        f"({type(first_error).__name__}: {first_error}; "
+                        f"{type(e).__name__}: {e})",
+                        flush=True,
+                    )
+                    return False
             except Exception as e:
-                print(f"[runner] direct submodule load failed ({type(e).__name__}: {e}); falling back to pipe-level", flush=True)
+                print(f"[runner] set_adapters failed ({type(e).__name__}: {e})", flush=True)
                 return False
 
         adapters = []
@@ -216,6 +280,7 @@ class Runner(ABC):
                     adapters.append({"name": adapter, "weight": strength, "target": "pipe"})
 
         if adapters:
+            active = []
             for target in ("pipe", "high", "low"):
                 group = [a for a in adapters if a["target"] == target]
                 if not group:
@@ -226,11 +291,28 @@ class Runner(ABC):
                 elif target == "low":
                     module = getattr(pipe, "transformer_2", None)
                 if module is None or not hasattr(module, "set_adapters"):
+                    print(f"[runner] cannot activate LoRA adapter(s) on {target}: set_adapters unavailable", flush=True)
                     continue
-                module.set_adapters([a["name"] for a in group], [a["weight"] for a in group])
-            self._active_lora_adapters = [a["name"] for a in adapters]
-            print(f"[runner] {len(adapters)} LoRA adapter(s) active", flush=True)
-            return True
+                names = [a["name"] for a in group]
+                weights = [a["weight"] for a in group]
+                present = _registered_adapters(module)
+                if present:
+                    keep = [(name, weight) for name, weight in zip(names, weights) if name in present]
+                    missing = [name for name in names if name not in present]
+                    if missing:
+                        print(f"[runner] skipping missing LoRA adapter(s) on {target}: {missing}", flush=True)
+                    names = [name for name, _ in keep]
+                    weights = [weight for _, weight in keep]
+                if not names:
+                    continue
+                if _set_adapters(module, names, weights):
+                    active.extend(names)
+            self._active_lora_adapters = active
+            if active:
+                print(f"[runner] {len(active)} LoRA adapter(s) active", flush=True)
+                return True
+            print("[runner] LoRA adapter(s) loaded but none could be activated", flush=True)
+            self._clear_loras()
         return False
 
     def _clear_loras(self) -> None:
