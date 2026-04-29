@@ -1,48 +1,51 @@
-"""Qwen-Image runner — Alibaba's Qwen-Image text-to-image via diffusers.
+"""Qwen-Image-Edit 2511 runner via the official Diffusers pipeline.
 
-Repo:        Qwen/Qwen-Image     (~40 GB on first download)
-Pipeline:    diffusers.QwenImagePipeline
-CFG knob:    true_cfg_scale  (Qwen's actual classifier-free guidance scale —
-             `guidance_scale` exists too but is the *distilled* one and is
-             usually left at the default).
+Repo:     Qwen/Qwen-Image-Edit-2511
+Pipeline: diffusers.QwenImageEditPlusPipeline
 
-Imports of torch/diffusers happen inside `load()` so the host can boot and
-report `loading=true` on /healthz before paying the cold-start cost.
+This is the stable path for 2511. It loads the matching transformer, VAE,
+text encoder, tokenizer, and scheduler from the official repo instead of
+mixing a Comfy split transformer with the older Qwen-Image-Edit stack.
 """
 
 from __future__ import annotations
 
+import os
+from pathlib import Path
 from typing import Optional
 
 from .base import Runner as RunnerBase, WORKSPACE
 
 
 class Runner(RunnerBase):
-    model_id            = "qwen-image"
-    model_name          = "Qwen-Image"
+    model_id            = "qwen-image-edit-2511"
+    model_name          = "Qwen-Image-Edit 2511"
     category            = "image"
     supports_lora       = True
     min_vram_gb         = 14
     recommended_vram_gb = 47
 
-    HF_REPO = "Qwen/Qwen-Image"
+    HF_REPO = "Qwen/Qwen-Image-Edit-2511"
 
     def __init__(self) -> None:
         self._pipe = None
-        self._cancel = False   # toggled by cancel(); checked in callback
+        self._cancel = False
 
-    # ── Lifecycle ────────────────────────────────────────────────────
     def load(self) -> None:
         import torch
-        from diffusers import QwenImagePipeline
 
-        import os
+        try:
+            from diffusers import QwenImageEditPlusPipeline
+        except ImportError as e:
+            raise RuntimeError(
+                "Qwen-Image-Edit 2511 requires diffusers with "
+                "QwenImageEditPlusPipeline support. Update the runtime to "
+                "diffusers>=0.37.1 or the latest Hugging Face diffusers build."
+            ) from e
+
         token = os.environ.get("HF_TOKEN")
         quant = os.environ.get("FORGE_QUANT", "bf16").lower()
 
-        # Build quantisation config when requested. bnb auto-places the
-        # quantised model on GPU during from_pretrained, so we skip the
-        # post-load .to("cuda") / offload dance below for int8 and nf4.
         kwargs = {"torch_dtype": torch.bfloat16, "token": token}
         if quant in ("int8", "nf4"):
             from diffusers import BitsAndBytesConfig
@@ -54,11 +57,11 @@ class Runner(RunnerBase):
                     bnb_4bit_quant_type="nf4",
                     bnb_4bit_compute_dtype=torch.bfloat16,
                 )
-            print(f"[runner] loading QwenImagePipeline with {quant} quantisation…", flush=True)
+            print(f"[runner] loading QwenImageEditPlusPipeline 2511 with {quant} quantisation...", flush=True)
         else:
-            print("[runner] loading QwenImagePipeline (bf16)…", flush=True)
+            print("[runner] loading QwenImageEditPlusPipeline 2511 (bf16)...", flush=True)
 
-        pipe = QwenImagePipeline.from_pretrained(self.HF_REPO, **kwargs)
+        pipe = QwenImageEditPlusPipeline.from_pretrained(self.HF_REPO, **kwargs)
 
         if torch.cuda.is_available() and quant == "bf16":
             try:
@@ -70,12 +73,10 @@ class Runner(RunnerBase):
                     pipe.enable_sequential_cpu_offload()
             except Exception:
                 pipe.enable_sequential_cpu_offload()
-        # int8 / nf4: bnb already placed weights on GPU during from_pretrained
-        print("[runner] ready", flush=True)
 
+        print("[runner] ready", flush=True)
         self._pipe = pipe
 
-    # ── Inference ────────────────────────────────────────────────────
     def generate(self, params: dict, loras: Optional[list] = None) -> dict:
         import secrets
         import torch
@@ -88,15 +89,27 @@ class Runner(RunnerBase):
         prompt = (params.get("prompt") or "").strip()
         if not prompt:
             raise ValueError("`prompt` is required")
+        ref_path = params.get("ref_image") or params.get("ref")
+        if not ref_path:
+            raise ValueError("`ref_image` is required for Qwen-Image-Edit 2511")
+
+        ref_images = [self._load_ref_image(ref_path)]
+        extra_refs = params.get("ref_images") or []
+        if isinstance(extra_refs, str):
+            extra_refs = [extra_refs]
+        for extra in extra_refs:
+            if extra and extra != ref_path:
+                ref_images.append(self._load_ref_image(extra))
+        pipe_image = ref_images if len(ref_images) > 1 else ref_images[0]
+
         seed   = int(params.get("seed", -1))
-        steps  = int(params.get("steps", 30))
+        steps  = int(params.get("steps", 40))
         cfg    = float(params.get("cfg", 4.0))
-        width  = int(params.get("width",  1024))
-        height = int(params.get("height", 1024))
+        width  = int(params.get("width",  ref_images[0].width))
+        height = int(params.get("height", ref_images[0].height))
         negative = (params.get("negative_prompt") or "").strip()
         if not negative and cfg > 1:
             negative = " "
-
         if seed < 0:
             seed = secrets.randbits(31)
 
@@ -105,6 +118,7 @@ class Runner(RunnerBase):
         preview_path = WORKSPACE / "assets" / f".preview_{self.model_id}.jpg"
 
         runner = self
+
         def _on_step(pipe, step, timestep, callback_kwargs):
             if runner._cancel:
                 pipe._interrupt = True
@@ -123,13 +137,16 @@ class Runner(RunnerBase):
 
         try:
             result = self._pipe(
+                image=pipe_image,
                 prompt=prompt,
                 negative_prompt=negative or None,
                 num_inference_steps=steps,
                 true_cfg_scale=cfg,
+                guidance_scale=1.0,
                 width=width,
                 height=height,
                 generator=gen,
+                num_images_per_prompt=1,
                 callback_on_step_end=_on_step,
                 callback_on_step_end_tensor_inputs=["latents"],
             )
@@ -147,20 +164,26 @@ class Runner(RunnerBase):
             return self.asset_response([], meta={"flagged": True, "model": self.model_id, "reason": "moderation"})
 
         out_path = self.new_output_path(prefix=f"{self.model_id}_{seed}")
-        # save_image() encrypts when FORGE_DATA_KEY is set in the env (the
-        # backend injects it on spawn). Returned path may be `<out>.enc`.
         on_disk = self.save_image(out_image, out_path, format="PNG")
         return self.asset_response([on_disk], meta={
             "model":  self.model_id,
             "prompt": prompt,
-            "seed":   seed,            # ← actual seed used (always concrete, never -1)
+            "ref":    ref_path,
+            "seed":   seed,
             "steps":  steps,
             "cfg":    cfg,
             "width":  width,
             "height": height,
         })
 
-    # ── Cancellation ─────────────────────────────────────────────────
+    def _load_ref_image(self, ref_path: str):
+        rp = Path(ref_path)
+        if not rp.is_absolute():
+            rp = WORKSPACE / rp
+        try:
+            return self.load_image(rp).convert("RGB")
+        except FileNotFoundError:
+            raise FileNotFoundError(f"Reference image not found: {ref_path}")
+
     def cancel(self) -> None:
-        """Set a flag the inference callback reads at the next step boundary."""
         self._cancel = True

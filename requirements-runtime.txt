@@ -19,7 +19,13 @@
 #   diffusers.utils.export_to_video imports cv2 when saving generated video.
 #   The headless build is enough for server-side MP4 export and avoids GUI
 #   libraries that are unnecessary on RunPod.
+#
+# Why diffusers>=0.37.1:
+#   Qwen/Qwen-Image-Edit-2511 uses QwenImageEditPlusPipeline. Older image
+#   builds may have the original Qwen edit pipeline but not the 2511-ready
+#   Plus loader.
 
+diffusers>=0.37.1
 peft
 ftfy
 opencv-python-headless

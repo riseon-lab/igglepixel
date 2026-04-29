@@ -4291,7 +4291,7 @@ function mockModels() {
     },
     {
       id: 'qwen-image-edit', name: 'Qwen-Image-Edit', category: 'image',
-      description: "Alibaba's Qwen-Image-Edit — image-to-image with reference, pose and style conditioning.",
+      description: "Alibaba's original Qwen-Image-Edit — instruction-based image editing with one reference image. Use the 2511 card for the newer consistency model.",
       runner_module: 'backend.runners.qwen_image_edit',
       hf_repo: 'Qwen/Qwen-Image-Edit',
       min_vram_gb: 14, recommended_vram_gb: 47,
@@ -4309,27 +4309,6 @@ function mockModels() {
       image_inputs: [
         { key: 'ref', label: 'Reference', required: true, hint: 'What to keep from the original' },
       ],
-      components: {
-        description: 'Experimental 2511 transformer swap from Comfy-Org split-file weights. Requires BF16 launch.',
-        options: [
-          {
-            id: 'qwen-edit-2511-bf16',
-            target: 'transformer',
-            label: 'Qwen-Image-Edit 2511 · BF16',
-            hf_repo: 'Comfy-Org/Qwen-Image-Edit_ComfyUI',
-            filename: 'split_files/diffusion_models/qwen_image_edit_2511_bf16.safetensors',
-            recommended_vram_gb: 47,
-          },
-          {
-            id: 'qwen-edit-2511-fp8mixed',
-            target: 'transformer',
-            label: 'Qwen-Image-Edit 2511 · FP8 mixed',
-            hf_repo: 'Comfy-Org/Qwen-Image-Edit_ComfyUI',
-            filename: 'split_files/diffusion_models/qwen_image_edit_2511_fp8mixed.safetensors',
-            recommended_vram_gb: 24,
-          },
-        ],
-      },
       param_groups: ['prompt', 'generation', 'dimensions'],
       param_keys:   ['prompt', 'negative_prompt', 'seed', 'steps', 'cfg', 'width', 'height'],
       param_overrides: {
@@ -4345,25 +4324,59 @@ function mockModels() {
         { label: '3:4',             w: 1152, h: 1536 },
         { label: '4:3',             w: 1536, h: 1152 },
       ],
+      default_loras: [],
+    },
+    {
+      id: 'qwen-image-edit-2511', name: 'Qwen-Image-Edit 2511', category: 'image',
+      description: 'Official 2511 refresh of Qwen-Image-Edit. Better identity consistency, multi-person edits, reduced drift, and built-in support for popular edit behaviours.',
+      runner_module: 'backend.runners.qwen_image_edit_2511',
+      hf_repo: 'Qwen/Qwen-Image-Edit-2511',
+      min_vram_gb: 14, recommended_vram_gb: 47,
+      supports_lora: true, gpu_support: ['nvidia'],
+      default_size_by_vram: [
+        { min_gb: 47, w: 1328, h: 1328 },
+        { min_gb: 36, w: 1024, h: 1024 },
+        { min_gb: 0,  w: 768,  h: 768  },
+      ],
+      quants: [
+        { id: 'bf16', label: 'BF16', description: 'Best quality',        vram_gb: 47, auto_min_vram_gb: 47 },
+        { id: 'int8', label: 'INT8', description: 'Faster, near-bf16',   vram_gb: 24, auto_min_vram_gb: 36 },
+        { id: 'nf4',  label: 'NF4',  description: 'Fits any modern card',vram_gb: 14, auto_min_vram_gb: 0  },
+      ],
+      image_inputs: [
+        { key: 'ref', label: 'Reference', required: true, hint: 'Subject, scene or product to preserve' },
+      ],
+      param_groups: ['prompt', 'generation', 'dimensions'],
+      param_keys:   ['prompt', 'negative_prompt', 'seed', 'steps', 'cfg', 'width', 'height'],
+      param_overrides: {
+        steps:  { default: 40 },
+        cfg:    { default: 4.0, min: 0, max: 10, step: 0.1, label: 'Guidance' },
+        width:  { default: 1024, step: 16, min: 256, max: 2048 },
+        height: { default: 1024, step: 16, min: 256, max: 2048 },
+      },
+      aspect_presets: [
+        { label: 'Square',          w: 1328, h: 1328 },
+        { label: 'Landscape 16:9',  w: 1664, h: 928  },
+        { label: 'Portrait 9:16',   w: 928,  h: 1664 },
+        { label: '3:4',             w: 1152, h: 1536 },
+        { label: '4:3',             w: 1536, h: 1152 },
+      ],
       default_loras: [
         {
           filename: 'Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors',
           label: 'Lightning · 4 steps',
           usage_hint: 'Set Steps to 4 and CFG to 1.0',
-          requires_component: { transformer: ['qwen_image_edit_2511_bf16.safetensors', 'qwen_image_edit_2511_fp8mixed.safetensors'] },
           strength: 1.0, default_on: false,
         },
         {
           filename: 'Qwen-Image-Edit-2511-Lightning-8steps-V1.0-bf16.safetensors',
           label: 'Lightning · 8 steps',
           usage_hint: 'Set Steps to 8 and CFG to 1.0',
-          requires_component: { transformer: ['qwen_image_edit_2511_bf16.safetensors', 'qwen_image_edit_2511_fp8mixed.safetensors'] },
           strength: 1.0, default_on: false,
         },
         {
           filename: 'qwen-image-edit-2511-multiple-angles-lora.safetensors',
           label: 'Multiple angles',
-          requires_component: { transformer: ['qwen_image_edit_2511_bf16.safetensors', 'qwen_image_edit_2511_fp8mixed.safetensors'] },
           strength: 0.8, default_on: false,
         },
       ],

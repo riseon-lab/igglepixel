@@ -149,6 +149,9 @@ class Runner(RunnerBase):
         cfg    = float(params.get("cfg", 4.0))
         width  = int(params.get("width",  ref_img.width))
         height = int(params.get("height", ref_img.height))
+        negative = (params.get("negative_prompt") or "").strip()
+        if not negative and cfg > 1:
+            negative = " "
         if seed < 0:
             seed = secrets.randbits(31)
 
@@ -177,7 +180,7 @@ class Runner(RunnerBase):
             result = self._pipe(
                 image=ref_img,
                 prompt=prompt,
-                negative_prompt=(params.get("negative_prompt") or "").strip() or None,
+                negative_prompt=negative or None,
                 num_inference_steps=steps,
                 true_cfg_scale=cfg,
                 width=width,
