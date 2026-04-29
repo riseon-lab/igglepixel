@@ -1,0 +1,461 @@
+{
+  "_comment": "Each entry declares a Python runner_module under backend/runners/. The runner owns weight loading + inference. backend/runner_host.py wraps it behind a localhost FastAPI; backend/launcher.py spawns it.",
+  "upscalers": [
+    {
+      "id": "realesrgan-x4-plus",
+      "label": "Real-ESRGAN ×4 (general)",
+      "description": "Classic all-purpose upscaler. Strong on photoreal and illustration.",
+      "scale": 4,
+      "hf_repo": "ai-forever/Real-ESRGAN",
+      "weight_file": "RealESRGAN_x4plus.pth",
+      "compatible_with": ["image"]
+    },
+    {
+      "id": "realesrgan-x4-anime",
+      "label": "Real-ESRGAN ×4 (anime)",
+      "description": "Tuned for anime/illustration. Cleaner line edges than the general model.",
+      "scale": 4,
+      "hf_repo": "ai-forever/Real-ESRGAN",
+      "weight_file": "RealESRGAN_x4plus_anime_6B.pth",
+      "compatible_with": ["image"]
+    },
+    {
+      "id": "remacri-x4",
+      "label": "4× Remacri (photoreal)",
+      "description": "Community favourite for photographic upscales. Slightly softer than UltraSharp.",
+      "scale": 4,
+      "hf_repo": "FacehugmanIII/4x_foolhardy_Remacri",
+      "weight_file": "4x_foolhardy_Remacri.pth",
+      "compatible_with": ["image"]
+    },
+    {
+      "id": "ultrasharp-x4",
+      "label": "4× UltraSharp",
+      "description": "Sharp detail recovery. Great on faces and textures; can over-sharpen.",
+      "scale": 4,
+      "hf_repo": "Kim2091/UltraSharp",
+      "weight_file": "4x-UltraSharp.pth",
+      "compatible_with": ["image"]
+    }
+  ],
+  "models": [
+    {
+      "id": "wan22-i2v",
+      "name": "Wan 2.2 — Image to Video",
+      "category": "video",
+      "description": "Alibaba's Wan 2.2 image-to-video. Animates a still into ~3.4 s of motion at 480p or 720p. 14B variant for high-VRAM cards (best motion fidelity), 5B for consumer GPUs.",
+      "runner_module": "backend.runners.wan22_i2v",
+      "hf_repo": "Wan-AI/Wan2.2-TI2V-5B-Diffusers",
+      "license": {
+        "type": "commercial",
+        "label": "Apache 2.0",
+        "url": "https://www.apache.org/licenses/LICENSE-2.0"
+      },
+      "min_vram_gb": 16,
+      "recommended_vram_gb": 80,
+      "supports_lora": true,
+      "gpu_support": ["nvidia"],
+      "dual_expert": true,
+      "variants": [
+        {
+          "id": "14b",
+          "label": "14B — workhorse",
+          "description": "Best motion fidelity. ~80 GB at BF16; needs INT8 for Blackwell-class workstations and below.",
+          "hf_repo": "Wan-AI/Wan2.2-I2V-A14B-Diffusers",
+          "auto_min_vram_gb": 48,
+          "quants": [
+            { "id": "bf16", "label": "BF16", "description": "Best quality",     "vram_gb": 80, "auto_min_vram_gb": 80 },
+            { "id": "int8", "label": "INT8", "description": "Faster, near-bf16","vram_gb": 40, "auto_min_vram_gb": 48 },
+            { "id": "nf4",  "label": "NF4",  "description": "Smallest 14B",     "vram_gb": 22, "auto_min_vram_gb": 0  }
+          ]
+        },
+        {
+          "id": "5b",
+          "label": "5B — consumer",
+          "description": "TI2V-5B unified model. Fast and fits modern consumer GPUs.",
+          "hf_repo": "Wan-AI/Wan2.2-TI2V-5B-Diffusers",
+          "auto_min_vram_gb": 0,
+          "quants": [
+            { "id": "bf16", "label": "BF16", "description": "Best quality",     "vram_gb": 27, "auto_min_vram_gb": 36 },
+            { "id": "int8", "label": "INT8", "description": "Faster, near-bf16","vram_gb": 16, "auto_min_vram_gb": 16 },
+            { "id": "nf4",  "label": "NF4",  "description": "Fits 16 GB cards", "vram_gb": 16, "auto_min_vram_gb": 0  }
+          ]
+        }
+      ],
+      "default_size_by_vram": [
+        { "min_gb": 80, "w": 1280, "h": 720 },
+        { "min_gb": 36, "w": 832,  "h": 480 },
+        { "min_gb": 0,  "w": 640,  "h": 384 }
+      ],
+      "param_groups": ["prompt", "generation", "dimensions", "video"],
+      "param_keys":   ["prompt", "negative_prompt", "seed", "steps", "cfg", "cfg_low", "width", "height", "duration", "fps"],
+      "param_overrides": {
+        "steps":      { "default": 30 },
+        "cfg":        { "default": 5.0, "min": 0, "max": 10, "step": 0.1, "label": "Guidance (high-noise)" },
+        "cfg_low":    { "default": 5.0, "min": 0, "max": 10, "step": 0.1, "label": "Guidance (low-noise)" },
+        "width":      { "default": 832,  "step": 16, "min": 256, "max": 1280 },
+        "height":     { "default": 480,  "step": 16, "min": 256, "max": 720 },
+        "duration":   { "default": 3.4,  "step": 0.1, "min": 1, "max": 5, "label": "Seconds" },
+        "fps":        { "default": 24,   "step": 1,  "min": 8,   "max": 30 }
+      },
+      "aspect_presets": [
+        { "label": "16:9 480p",  "w": 832,  "h": 480 },
+        { "label": "16:9 720p",  "w": 1280, "h": 720 },
+        { "label": "Square",     "w": 624,  "h": 624 },
+        { "label": "9:16 480p",  "w": 480,  "h": 832 }
+      ],
+      "image_inputs": [
+        { "key": "ref", "label": "Source frame", "required": true, "hint": "First frame of the video" }
+      ],
+      "default_loras": [
+        {
+          "id": "wan22-i2v-lightning-4step",
+          "label": "Lightning · 4 steps (I2V)",
+          "description": "lightx2v's 4-step distillation. Drop steps from 30→4. Requires the 14B variant.",
+          "usage_hint": "Set Steps to 4 and Guidance to 1.0",
+          "hf_repo": "lightx2v/Wan2.2-Lightning",
+          "files": [
+            { "filename": "Wan2.2-I2V-A14B-4steps-lora-rank64-Seko-V1/high_noise_model.safetensors", "target": "high" },
+            { "filename": "Wan2.2-I2V-A14B-4steps-lora-rank64-Seko-V1/low_noise_model.safetensors",  "target": "low"  }
+          ],
+          "applies_to": ["14b"],
+          "strength_high": 1.0, "strength_low": 1.0,
+          "default_on": false
+        }
+      ]
+    },
+    {
+      "id": "qwen25-chat",
+      "name": "Qwen 2.5 Chat",
+      "category": "llm",
+      "description": "Alibaba's Qwen 2.5 instruct family. Strong general chat, code, and reasoning. 7B fits any modern card; 14B and 32B for higher quality on bigger GPUs. Native 32K context.",
+      "runner_module": "backend.runners.qwen_chat",
+      "hf_repo": "Qwen/Qwen2.5-7B-Instruct",
+      "license": {
+        "type": "commercial",
+        "label": "Apache 2.0",
+        "url": "https://www.apache.org/licenses/LICENSE-2.0"
+      },
+      "min_vram_gb": 4,
+      "recommended_vram_gb": 64,
+      "context_window": 32768,
+      "context_by_vram": [
+        { "min_gb": 36, "tokens": 32768, "label": "full 32K" },
+        { "min_gb": 14, "tokens": 16384, "label": "comfortable" },
+        { "min_gb": 0,  "tokens":  8192, "label": "safe default" }
+      ],
+      "context_policy": {
+        "mode": "workspace",
+        "auto_compact_at": 0.82,
+        "keep_recent_messages": 16
+      },
+      "supports_lora": false,
+      "gpu_support": ["nvidia"],
+      "variants": [
+        {
+          "id": "32b",
+          "label": "32B — workstation",
+          "description": "Best quality. ~64 GB at BF16; INT8 fits 32 GB cards.",
+          "hf_repo": "Qwen/Qwen2.5-32B-Instruct",
+          "auto_min_vram_gb": 36,
+          "quants": [
+            { "id": "bf16", "label": "BF16", "description": "Best quality",      "vram_gb": 64, "auto_min_vram_gb": 80 },
+            { "id": "int8", "label": "INT8", "description": "Faster, near-bf16", "vram_gb": 32, "auto_min_vram_gb": 36 },
+            { "id": "nf4",  "label": "NF4",  "description": "Smallest 32B",      "vram_gb": 16, "auto_min_vram_gb": 0  }
+          ]
+        },
+        {
+          "id": "14b",
+          "label": "14B — capable",
+          "description": "Step up from 7B. Better at long-form and code.",
+          "hf_repo": "Qwen/Qwen2.5-14B-Instruct",
+          "auto_min_vram_gb": 16,
+          "quants": [
+            { "id": "bf16", "label": "BF16", "description": "Best quality",      "vram_gb": 28, "auto_min_vram_gb": 36 },
+            { "id": "int8", "label": "INT8", "description": "Faster, near-bf16", "vram_gb": 14, "auto_min_vram_gb": 16 },
+            { "id": "nf4",  "label": "NF4",  "description": "Fits 8 GB cards",   "vram_gb": 7,  "auto_min_vram_gb": 0  }
+          ]
+        },
+        {
+          "id": "7b",
+          "label": "7B — fast",
+          "description": "Strong baseline. Fits any modern card.",
+          "hf_repo": "Qwen/Qwen2.5-7B-Instruct",
+          "auto_min_vram_gb": 0,
+          "quants": [
+            { "id": "bf16", "label": "BF16", "description": "Best quality",      "vram_gb": 14, "auto_min_vram_gb": 16 },
+            { "id": "int8", "label": "INT8", "description": "Faster, near-bf16", "vram_gb": 7,  "auto_min_vram_gb": 8  },
+            { "id": "nf4",  "label": "NF4",  "description": "Fits 6 GB cards",   "vram_gb": 4,  "auto_min_vram_gb": 0  }
+          ]
+        }
+      ],
+      "param_groups": ["llm"],
+      "param_keys": ["thinking", "max_new_tokens", "temperature", "top_p"],
+      "param_overrides": {
+        "max_new_tokens": { "default": 1024, "min": 64, "max": 8192, "step": 64 },
+        "temperature":    { "default": 0.7, "min": 0, "max": 2, "step": 0.05 },
+        "top_p":          { "default": 0.9, "min": 0, "max": 1, "step": 0.01 },
+        "thinking":       { "default": true }
+      }
+    },
+    {
+      "id": "tinyllama-chat",
+      "name": "TinyLlama Chat 1.1B",
+      "category": "llm",
+      "description": "Tiny 1.1B chat model — useful as a smoke test for the chat workspace on cards with no VRAM headroom. Quality is poor; pick Qwen 2.5 for actual use.",
+      "runner_module": "backend.runners.tinyllama_chat",
+      "hf_repo": "TinyLlama/TinyLlama-1.1B-Chat-v1.0",
+      "license": {
+        "type": "commercial",
+        "label": "Apache 2.0",
+        "url": "https://www.apache.org/licenses/LICENSE-2.0"
+      },
+      "min_vram_gb": 2,
+      "recommended_vram_gb": 4,
+      "context_window": 2048,
+      "context_by_vram": [
+        { "min_gb": 12, "tokens": 4096, "label": "extended" },
+        { "min_gb": 0,  "tokens": 2048, "label": "safe default" }
+      ],
+      "context_policy": {
+        "mode": "workspace",
+        "auto_compact_at": 0.82,
+        "keep_recent_messages": 8
+      },
+      "supports_lora": false,
+      "gpu_support": ["nvidia"],
+      "quants": [
+        { "id": "bf16", "label": "BF16", "description": "Best quality",      "vram_gb": 4, "auto_min_vram_gb": 8 },
+        { "id": "int8", "label": "INT8", "description": "Lower memory",      "vram_gb": 3, "auto_min_vram_gb": 4 },
+        { "id": "nf4",  "label": "NF4",  "description": "Smallest footprint","vram_gb": 2, "auto_min_vram_gb": 0 }
+      ],
+      "param_groups": ["llm"],
+      "param_keys": ["thinking", "max_new_tokens", "temperature", "top_p"],
+      "param_overrides": {
+        "max_new_tokens": { "default": 512, "min": 64, "max": 2048, "step": 64 },
+        "temperature":    { "default": 0.7, "min": 0, "max": 2, "step": 0.05 },
+        "top_p":          { "default": 0.9, "min": 0, "max": 1, "step": 0.01 },
+        "thinking":       { "default": true }
+      }
+    },
+    {
+      "id": "flux-dev",
+      "name": "FLUX.1-dev",
+      "category": "image",
+      "description": "Black Forest Labs' open-weight rectified-flow transformer. Excellent photorealism, hands, faces, and text-in-image. Native 1024×1024. Gated repo — accept the licence on HuggingFace and set HF_TOKEN.",
+      "runner_module": "backend.runners.flux_dev",
+      "hf_repo": "black-forest-labs/FLUX.1-dev",
+      "license": {
+        "type": "non-commercial",
+        "label": "Non-commercial",
+        "url": "https://huggingface.co/black-forest-labs/FLUX.1-dev/blob/main/LICENSE.md"
+      },
+      "min_vram_gb": 7,
+      "recommended_vram_gb": 24,
+      "supports_lora": true,
+      "gpu_support": ["nvidia"],
+      "default_size_by_vram": [
+        { "min_gb": 80, "w": 1408, "h": 1408 },
+        { "min_gb": 24, "w": 1024, "h": 1024 },
+        { "min_gb": 0,  "w": 768,  "h": 768  }
+      ],
+      "quants": [
+        { "id": "bf16", "label": "BF16", "description": "Best quality",        "vram_gb": 24, "auto_min_vram_gb": 36 },
+        { "id": "int8", "label": "INT8", "description": "Faster, near-bf16",   "vram_gb": 12, "auto_min_vram_gb": 16 },
+        { "id": "nf4",  "label": "NF4",  "description": "Fits 8 GB cards",     "vram_gb": 7,  "auto_min_vram_gb": 0  }
+      ],
+      "param_groups": ["prompt", "generation", "dimensions"],
+      "param_keys":   ["prompt", "seed", "steps", "cfg", "width", "height"],
+      "param_overrides": {
+        "steps":  { "default": 28 },
+        "cfg":    { "default": 3.5, "min": 0, "max": 10, "step": 0.1, "label": "Guidance" },
+        "width":  { "default": 1024, "step": 16, "min": 256, "max": 2048 },
+        "height": { "default": 1024, "step": 16, "min": 256, "max": 2048 }
+      },
+      "aspect_presets": [
+        { "label": "Square",          "w": 1024, "h": 1024 },
+        { "label": "Landscape 16:9",  "w": 1664, "h": 928  },
+        { "label": "Portrait 9:16",   "w": 928,  "h": 1664 },
+        { "label": "3:4",             "w": 1152, "h": 1536 },
+        { "label": "4:3",             "w": 1536, "h": 1152 }
+      ],
+      "default_loras": []
+    },
+    {
+      "id": "qwen-image",
+      "name": "Qwen-Image",
+      "category": "image",
+      "description": "Alibaba's Qwen-Image text-to-image. Strong prompt adherence, native 1328×1328. ~40 GB on first download.",
+      "runner_module": "backend.runners.qwen_image",
+      "hf_repo": "Qwen/Qwen-Image",
+      "license": {
+        "type": "commercial",
+        "label": "Apache 2.0",
+        "url": "https://www.apache.org/licenses/LICENSE-2.0"
+      },
+      "min_vram_gb": 14,
+      "recommended_vram_gb": 47,
+      "supports_lora": true,
+      "gpu_support": ["nvidia"],
+      "default_size_by_vram": [
+        { "min_gb": 47, "w": 1328, "h": 1328 },
+        { "min_gb": 36, "w": 1024, "h": 1024 },
+        { "min_gb": 0,  "w": 768,  "h": 768  }
+      ],
+      "quants": [
+        { "id": "bf16", "label": "BF16", "description": "Best quality",       "vram_gb": 47, "auto_min_vram_gb": 47 },
+        { "id": "int8", "label": "INT8", "description": "Faster, near-bf16",  "vram_gb": 24, "auto_min_vram_gb": 36 },
+        { "id": "nf4",  "label": "NF4",  "description": "Fits any modern card","vram_gb": 14, "auto_min_vram_gb": 0  }
+      ],
+      "param_groups": ["prompt", "generation", "dimensions"],
+      "param_keys":   ["prompt", "negative_prompt", "seed", "steps", "cfg", "width", "height"],
+      "param_overrides": {
+        "steps":  { "default": 30 },
+        "cfg":    { "default": 4.0, "min": 0, "max": 10, "step": 0.1 },
+        "width":  { "default": 1024, "step": 16, "min": 256, "max": 2048 },
+        "height": { "default": 1024, "step": 16, "min": 256, "max": 2048 }
+      },
+      "aspect_presets": [
+        { "label": "Square",          "w": 1328, "h": 1328 },
+        { "label": "Landscape 16:9",  "w": 1664, "h": 928  },
+        { "label": "Portrait 9:16",   "w": 928,  "h": 1664 },
+        { "label": "3:4",             "w": 1152, "h": 1536 },
+        { "label": "4:3",             "w": 1536, "h": 1152 }
+      ],
+      "default_loras": [
+        {
+          "id": "qwen-image-lightning-4step",
+          "filename": "Qwen-Image-Lightning-4steps-V2.0.safetensors",
+          "hf_repo": "lightx2v/Qwen-Image-Lightning",
+          "label": "Lightning · 4 steps",
+          "usage_hint": "Set Steps to 4 and CFG to 1.0",
+          "strength": 1.0, "default_on": false
+        },
+        {
+          "id": "qwen-image-lightning-8step",
+          "filename": "Qwen-Image-Lightning-8steps-V2.0.safetensors",
+          "hf_repo": "lightx2v/Qwen-Image-Lightning",
+          "label": "Lightning · 8 steps",
+          "usage_hint": "Set Steps to 8 and CFG to 1.0",
+          "strength": 1.0, "default_on": false
+        }
+      ]
+    },
+    {
+      "id": "qwen-image-edit",
+      "name": "Qwen-Image-Edit",
+      "category": "image",
+      "description": "Alibaba's original Qwen-Image-Edit — instruction-based image editing with one reference image. Use the 2511 card for the newer consistency model.",
+      "runner_module": "backend.runners.qwen_image_edit",
+      "hf_repo": "Qwen/Qwen-Image-Edit",
+      "license": {
+        "type": "commercial",
+        "label": "Apache 2.0",
+        "url": "https://www.apache.org/licenses/LICENSE-2.0"
+      },
+      "min_vram_gb": 14,
+      "recommended_vram_gb": 47,
+      "supports_lora": true,
+      "gpu_support": ["nvidia"],
+      "default_size_by_vram": [
+        { "min_gb": 47, "w": 1328, "h": 1328 },
+        { "min_gb": 36, "w": 1024, "h": 1024 },
+        { "min_gb": 0,  "w": 768,  "h": 768  }
+      ],
+      "quants": [
+        { "id": "bf16", "label": "BF16", "description": "Best quality",       "vram_gb": 47, "auto_min_vram_gb": 47 },
+        { "id": "int8", "label": "INT8", "description": "Faster, near-bf16",  "vram_gb": 24, "auto_min_vram_gb": 36 },
+        { "id": "nf4",  "label": "NF4",  "description": "Fits any modern card","vram_gb": 14, "auto_min_vram_gb": 0  }
+      ],
+      "image_inputs": [
+        { "key": "ref", "label": "Reference", "required": true, "hint": "What to keep from the original" }
+      ],
+      "param_groups": ["prompt", "generation", "dimensions"],
+      "param_keys":   ["prompt", "negative_prompt", "seed", "steps", "cfg", "width", "height"],
+      "param_overrides": {
+        "steps":  { "default": 30 },
+        "cfg":    { "default": 4.0, "min": 0, "max": 10, "step": 0.1 },
+        "width":  { "default": 1024, "step": 16, "min": 256, "max": 2048 },
+        "height": { "default": 1024, "step": 16, "min": 256, "max": 2048 }
+      },
+      "aspect_presets": [
+        { "label": "Square",          "w": 1328, "h": 1328 },
+        { "label": "Landscape 16:9",  "w": 1664, "h": 928  },
+        { "label": "Portrait 9:16",   "w": 928,  "h": 1664 },
+        { "label": "3:4",             "w": 1152, "h": 1536 },
+        { "label": "4:3",             "w": 1536, "h": 1152 }
+      ],
+      "default_loras": []
+    },
+    {
+      "id": "qwen-image-edit-2511",
+      "name": "Qwen-Image-Edit 2511",
+      "category": "image",
+      "description": "Official 2511 refresh of Qwen-Image-Edit. Better identity consistency, multi-person edits, reduced drift, and built-in support for popular edit behaviours.",
+      "runner_module": "backend.runners.qwen_image_edit_2511",
+      "hf_repo": "Qwen/Qwen-Image-Edit-2511",
+      "license": {
+        "type": "commercial",
+        "label": "Apache 2.0",
+        "url": "https://www.apache.org/licenses/LICENSE-2.0"
+      },
+      "min_vram_gb": 14,
+      "recommended_vram_gb": 47,
+      "supports_lora": true,
+      "gpu_support": ["nvidia"],
+      "default_size_by_vram": [
+        { "min_gb": 47, "w": 1328, "h": 1328 },
+        { "min_gb": 36, "w": 1024, "h": 1024 },
+        { "min_gb": 0,  "w": 768,  "h": 768  }
+      ],
+      "quants": [
+        { "id": "bf16", "label": "BF16", "description": "Best quality",       "vram_gb": 47, "auto_min_vram_gb": 47 },
+        { "id": "int8", "label": "INT8", "description": "Faster, near-bf16",  "vram_gb": 24, "auto_min_vram_gb": 36 },
+        { "id": "nf4",  "label": "NF4",  "description": "Fits any modern card","vram_gb": 14, "auto_min_vram_gb": 0  }
+      ],
+      "image_inputs": [
+        { "key": "ref", "label": "Reference", "required": true, "hint": "Subject, scene or product to preserve" }
+      ],
+      "param_groups": ["prompt", "generation", "dimensions"],
+      "param_keys":   ["prompt", "negative_prompt", "seed", "steps", "cfg", "width", "height"],
+      "param_overrides": {
+        "steps":  { "default": 40 },
+        "cfg":    { "default": 4.0, "min": 0, "max": 10, "step": 0.1, "label": "Guidance" },
+        "width":  { "default": 1024, "step": 16, "min": 256, "max": 2048 },
+        "height": { "default": 1024, "step": 16, "min": 256, "max": 2048 }
+      },
+      "aspect_presets": [
+        { "label": "Square",          "w": 1328, "h": 1328 },
+        { "label": "Landscape 16:9",  "w": 1664, "h": 928  },
+        { "label": "Portrait 9:16",   "w": 928,  "h": 1664 },
+        { "label": "3:4",             "w": 1152, "h": 1536 },
+        { "label": "4:3",             "w": 1536, "h": 1152 }
+      ],
+      "default_loras": [
+        {
+          "id": "qwen-edit-lightning-4step",
+          "filename": "Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors",
+          "hf_repo": "lightx2v/Qwen-Image-Edit-2511-Lightning",
+          "label": "Lightning · 4 steps",
+          "usage_hint": "Set Steps to 4 and CFG to 1.0",
+          "strength": 1.0, "default_on": false
+        },
+        {
+          "id": "qwen-edit-lightning-8step",
+          "filename": "Qwen-Image-Edit-2511-Lightning-8steps-V1.0-bf16.safetensors",
+          "hf_repo": "lightx2v/Qwen-Image-Edit-2511-Lightning",
+          "label": "Lightning · 8 steps",
+          "usage_hint": "Set Steps to 8 and CFG to 1.0",
+          "strength": 1.0, "default_on": false
+        },
+        {
+          "id": "qwen-edit-multi-angles",
+          "filename": "qwen-image-edit-2511-multiple-angles-lora.safetensors",
+          "hf_repo": "fal/Qwen-Image-Edit-2511-Multiple-Angles-LoRA",
+          "label": "Multiple angles",
+          "strength": 0.8, "default_on": false
+        }
+      ]
+    }
+  ]
+}

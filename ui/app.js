@@ -824,11 +824,15 @@ async function loadModels() {
     $('#modelCount').textContent = state.models.length;
     $('#gpuDebug').textContent   = JSON.stringify(data.gpu, null, 2);
   } catch (e) {
-    state.models    = mockModels();
-    state.upscalers = [];
-    renderModels();
-    $('#modelCount').textContent = state.models.length;
-    $('#gpuPill').innerHTML = '<div class="dot"></div><span>Dev mode (no backend)</span>';
+    if (state.preview) {
+      await loadPreviewRegistry();
+    } else {
+      state.models    = mockModels();
+      state.upscalers = [];
+      renderModels();
+      $('#modelCount').textContent = state.models.length;
+      $('#gpuPill').innerHTML = '<div class="dot"></div><span>Dev mode (no backend)</span>';
+    }
   }
   if (state.preview) {
     // Pretend everything is downloaded + running so cards click through to
@@ -837,6 +841,29 @@ async function loadModels() {
       state.modelStates[m.id] = { downloaded: true, ready: true };
     }
     renderModels();
+  }
+}
+
+async function loadPreviewRegistry() {
+  try {
+    const res = await fetch('/preview_registry.static.json', { cache: 'no-store' });
+    if (!res.ok) throw new Error(`preview registry ${res.status}`);
+    const data = await res.json();
+    state.models    = data.models || [];
+    state.upscalers = data.upscalers || [];
+    state.gpu       = { type: 'nvidia', name: 'Preview GPU', vram_gb: 80 };
+    renderGPU(state.gpu);
+    $('#modelCount').textContent = state.models.length;
+    $('#gpuDebug').textContent   = JSON.stringify(state.gpu, null, 2);
+    renderModels();
+  } catch (err) {
+    state.models    = mockModels();
+    state.upscalers = [];
+    state.gpu       = { type: 'unknown', name: 'Preview mode', vram_gb: 0 };
+    $('#modelCount').textContent = state.models.length;
+    $('#gpuPill').innerHTML = '<div class="dot"></div><span>Preview fallback models</span>';
+    renderModels();
+    console.warn('Preview registry unavailable, using mockModels()', err);
   }
 }
 

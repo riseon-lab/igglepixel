@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="styles.css?v=20260429-preview">
 </head>
 <body>
 
@@ -588,6 +588,8 @@
 <!-- ── Toasts ─────────────────────────────────────────────────────────────── -->
 <div class="toasts" id="toasts"></div>
 
-<script src="app.js" type="module"></script>
+<script type="module">
+  import(`./app.js?v=${Date.now()}`);
+</script>
 </body>
 </html>
