@@ -1,17 +1,20 @@
-"""NSFW image moderation gate for generated outputs.
+"""NSFW image/video moderation gate for generated outputs.
 
 Loads Falconsai/nsfw_image_detection (88M-param ViT, ~350 MB VRAM) once
 and keeps it on GPU. Lightweight enough that we don't bother offloading
 — the cost is noise next to a 47 GB diffusion model.
 
-Runs in the runner subprocess after the pipeline returns the PIL image
-but before save_image(). When flagged: nothing persists, runner returns
-{flagged: true} and the UI shows a neutral toast.
+Runs in the runner subprocess after the pipeline returns the PIL image or
+video frames, but before save_image()/save_video(). When flagged: nothing
+persists, runner returns {flagged: true} and the UI shows a neutral toast.
 
 Toggle via env:
     IGGLEPIXEL_MODERATION=true   (default — production)
     IGGLEPIXEL_MODERATION=false  (private dev pods, or fork operators
                                   taking their own responsibility)
+    IGGLEPIXEL_VIDEO_MODERATION_FRAMES=7
+                                  max number of evenly-spaced video frames
+                                  to score before saving
 
 Failure mode is fail-closed: if the moderation model can't load or
 errors during inference, we block the output. If you really want no
@@ -24,6 +27,7 @@ import os
 
 NSFW_THRESHOLD = 0.85         # tune after observing real flag patterns
 MODEL_REPO     = "Falconsai/nsfw_image_detection"
+DEFAULT_VIDEO_SAMPLE_FRAMES = 7
 
 _processor = None
 _model     = None
@@ -77,3 +81,45 @@ def is_flagged(image) -> bool:
     except Exception as e:
         print(f"[moderator] inference error, blocking: {e}", flush=True)
         return True
+
+
+def is_video_flagged(frames) -> bool:
+    """Run NSFW classification on sampled PIL frames from a generated video.
+
+    Video-native moderation is still overkill for our current stack. Sampling
+    evenly across the clip catches content that appears before/after the
+    middle frame while reusing the exact same image moderation model and
+    fail-closed behaviour as still image generation.
+    """
+    if not is_enabled():
+        return False
+    if not frames:
+        print("[moderator] video produced no frames, blocking", flush=True)
+        return True
+
+    sample_indices = _video_sample_indices(len(frames))
+    print(
+        f"[moderator] scanning {len(sample_indices)}/{len(frames)} video frames",
+        flush=True,
+    )
+    for idx in sample_indices:
+        if is_flagged(frames[idx]):
+            print(f"[moderator] flagged video frame {idx + 1}/{len(frames)}", flush=True)
+            return True
+    return False
+
+
+def _video_sample_indices(frame_count: int) -> list[int]:
+    if frame_count <= 0:
+        return []
+    try:
+        sample_count = int(os.environ.get("IGGLEPIXEL_VIDEO_MODERATION_FRAMES", DEFAULT_VIDEO_SAMPLE_FRAMES))
+    except ValueError:
+        sample_count = DEFAULT_VIDEO_SAMPLE_FRAMES
+    sample_count = max(1, min(frame_count, sample_count))
+    if sample_count == 1:
+        return [frame_count // 2]
+    return sorted({
+        round(i * (frame_count - 1) / (sample_count - 1))
+        for i in range(sample_count)
+    })
