@@ -484,7 +484,7 @@ def _download_plan(model: dict, variant: Optional[str] = None) -> tuple[str, lis
     selected = None
     if variant:
         selected = next((v for v in model.get("variants", []) if v.get("id") == variant), None)
-    repo = (selected or model).get("hf_repo", "")
+    repo = (selected or {}).get("hf_repo") or model.get("hf_repo", "")
     extra_files = list(model.get("download_files") or [])
     extra_repos = list(model.get("download_repos") or [])
     snapshot = bool(model.get("download_snapshot", True))
