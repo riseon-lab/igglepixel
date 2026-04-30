@@ -209,6 +209,31 @@ class Runner(ABC):
                 print(f"[runner] set_adapters failed ({type(e).__name__}: {e})", flush=True)
                 return False
 
+        def _load_to_pipe(path: Path, adapter: str, target: str) -> str:
+            """Load a LoRA through the pipeline-level loader.
+
+            Wan 2.2 has two denoisers. Diffusers loads Wan LoRAs into the
+            high-noise denoiser by default; low-noise LoRAs must opt into
+            transformer_2 explicitly. Qwen/Flux do not pass `target="low"`,
+            so they keep the normal pipeline behaviour.
+            """
+            kwargs = {}
+            if target == "low" and getattr(pipe, "transformer_2", None) is not None:
+                kwargs["load_into_transformer_2"] = True
+            pipe.load_lora_weights(str(path.parent), weight_name=path.name, adapter_name=adapter, **kwargs)
+            if target in ("high", "low"):
+                module = getattr(pipe, "transformer_2", None) if target == "low" else getattr(pipe, "transformer", None)
+                if module is not None and adapter in _registered_adapters(module):
+                    return target
+            return "pipe"
+
+        def _pipe_weight_for_target(target: str, strength: float):
+            if target == "low":
+                return {"transformer": 0.0, "transformer_2": strength}
+            if getattr(pipe, "transformer_2", None) is not None:
+                return {"transformer": strength, "transformer_2": 0.0}
+            return strength
+
         adapters = []
         for i, entry in enumerate(loras):
             if not isinstance(entry, dict):
@@ -233,11 +258,9 @@ class Runner(ABC):
                     if _load_to_submodule(path, adapter, target):
                         adapters.append({"name": adapter, "weight": strength, "target": target})
                     else:
-                        weight = ({"transformer": 0.0, "transformer_2": strength}
-                                  if target == "low"
-                                  else {"transformer": strength, "transformer_2": 0.0})
-                        pipe.load_lora_weights(str(path.parent), weight_name=path.name, adapter_name=adapter)
-                        adapters.append({"name": adapter, "weight": weight, "target": "pipe"})
+                        loaded_target = _load_to_pipe(path, adapter, target)
+                        weight = strength if loaded_target != "pipe" else _pipe_weight_for_target(target, strength)
+                        adapters.append({"name": adapter, "weight": weight, "target": loaded_target})
                 continue
 
             # Single-file entry.
@@ -265,19 +288,18 @@ class Runner(ABC):
                 if _load_to_submodule(path, adapter, entry_target):
                     adapters.append({"name": adapter, "weight": strength, "target": entry_target})
                 else:
-                    weight = ({"transformer": 0.0, "transformer_2": sl}
-                              if entry_target == "low"
-                              else {"transformer": sh, "transformer_2": 0.0})
-                    pipe.load_lora_weights(str(path.parent), weight_name=path.name, adapter_name=adapter)
-                    adapters.append({"name": adapter, "weight": weight, "target": "pipe"})
+                    loaded_target = _load_to_pipe(path, adapter, entry_target)
+                    weight = strength if loaded_target != "pipe" else _pipe_weight_for_target(entry_target, strength)
+                    adapters.append({"name": adapter, "weight": weight, "target": loaded_target})
             else:
                 strength = float(entry.get("strength", 1.0))
                 print(f"[runner] loading LoRA {filename} (target={entry_target}, strength={strength:.2f})", flush=True)
                 if _load_to_submodule(path, adapter, entry_target):
                     adapters.append({"name": adapter, "weight": strength, "target": entry_target})
                 else:
-                    pipe.load_lora_weights(str(path.parent), weight_name=path.name, adapter_name=adapter)
-                    adapters.append({"name": adapter, "weight": strength, "target": "pipe"})
+                    loaded_target = _load_to_pipe(path, adapter, entry_target)
+                    weight = strength if loaded_target != "pipe" else _pipe_weight_for_target(entry_target, strength)
+                    adapters.append({"name": adapter, "weight": weight, "target": loaded_target})
 
         if adapters:
             active = []

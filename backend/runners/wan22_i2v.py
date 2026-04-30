@@ -1,13 +1,14 @@
 """Wan 2.2 image-to-video runner.
 
-Three size variants from the same registry entry:
-  - 14B Lightning (base 14B + fused Lightx2v LoRA) — fast 8-step path
+Four size variants from the same registry entry:
+  - 14B Lightning 8 step (base 14B + fused Lightx2v LoRA)
+  - 14B Lightning 4 step (same baked LoRA, faster default)
   - 14B (Wan-AI/Wan2.2-I2V-A14B-Diffusers)       — best quality, needs ~80 GB BF16
   - 5B  (Wan-AI/Wan2.2-TI2V-5B-Diffusers)        — consumer, ~27 GB BF16
 
-The launcher passes FORGE_VARIANT (14b-lightning | 14b | 5b) and FORGE_QUANT
-(bf16 | int8 | nf4) as env vars; this runner reads them and picks the right
-HF repo + quant config.
+The launcher passes FORGE_VARIANT (14b-lightning | 14b-lightning-4 | 14b | 5b)
+and FORGE_QUANT (bf16 | int8 | nf4) as env vars; this runner reads them and
+picks the right HF repo + quant config.
 
 Outputs an mp4 written to assets/generated/. Uses diffusers.export_to_video
 (ffmpeg-backed) so the only requirement is that ffmpeg lives on the image,
@@ -35,6 +36,11 @@ VARIANTS = {
         "repo": "Wan-AI/Wan2.2-I2V-A14B-Diffusers",
         "lightning": True,
         "default_steps": 8,
+    },
+    "14b-lightning-4": {
+        "repo": "Wan-AI/Wan2.2-I2V-A14B-Diffusers",
+        "lightning": True,
+        "default_steps": 4,
     },
     "14b": {
         "repo": "Wan-AI/Wan2.2-I2V-A14B-Diffusers",
@@ -142,6 +148,7 @@ class Runner(RunnerBase):
                 LIGHTNING_REPO,
                 weight_name=LIGHTNING_WEIGHT,
                 adapter_name=low_adapter,
+                load_into_transformer_2=True,
             )
             pipe.set_adapters([high_adapter, low_adapter], adapter_weights=[1.0, 1.0])
             pipe.fuse_lora(adapter_names=[high_adapter], lora_scale=3.0, components=["transformer"])
