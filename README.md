@@ -1,6 +1,8 @@
 # IgglePixel
 
-Self-hosted AI generation for RunPod: a clean web UI, FastAPI backend, model runners, LoRA management, encrypted assets, and a registry-driven way to add image, video, and text models.
+One self-hosted UI for the open-source generation models people actually want to run: image, edit, video, and text.
+
+IgglePixel gives you a clean RunPod-ready web app over a FastAPI backend, model runners, LoRA management, encrypted assets, and a registry-driven catalogue. Download a model, start it, open the workspace, generate. No ComfyUI graph wrangling and no one-off Python scripts.
 
 IgglePixel is designed for people who want a focused alternative to stitching together separate model UIs. The Docker image provides the runtime; this public repo provides the app code, model registry, and runner implementations.
 
@@ -11,13 +13,12 @@ Forks are welcome. Pull requests are welcome. Please test before opening one.
 The easiest path is a RunPod template using the maintained image:
 
 - RunPod: [runpod.io?ref=cgt80jay](https://runpod.io?ref=cgt80jay)
-- Docker image/template: `riseonlab/igglepixel:v0.7`
-- Image family: `riseonlab/igglepixel`
+- Template/image family: `riseonlab/igglepixel`
 
-The tag changes as releases move forward, so use the current `riseonlab/igglepixel:<version>` tag where possible.
+The tag changes as releases move forward, so use the current `riseonlab/igglepixel:<version>` tag shown on the template.
 
 1. Create a RunPod GPU pod.
-2. Use the IgglePixel template or a custom Docker image based on `riseonlab/igglepixel:v0.7`.
+2. Use the IgglePixel template or a custom Docker image based on `riseonlab/igglepixel`.
 3. Expose port `3000`.
 4. Add `HF_TOKEN` if you need gated Hugging Face models.
 5. Start the pod and open the HTTP service.
@@ -25,11 +26,26 @@ The tag changes as releases move forward, so use the current `riseonlab/igglepix
 ## What It Does
 
 - Launches supported models through isolated Python runner subprocesses.
-- Provides workspace UIs for image, video, and text generation.
+- Provides workspace UIs for image, image editing, video, and text generation.
 - Manages generated and uploaded assets.
 - Supports LoRA download, assignment, and per-model strengths.
-- Uses a model registry for parameters, VRAM recommendations, context policy, quantization, and variants.
+- Supports BF16 / INT8 / NF4 where runners expose quantized loading.
+- Uses a model registry for parameters, VRAM recommendations, context policy, quantization, variants, and model-specific defaults.
 - Pulls app code from this repo at pod boot, so iteration can be `git push` plus pod restart instead of rebuilding the runtime image every time.
+
+## Supported Models
+
+The live catalogue is registry-driven, so support will keep expanding without changing the UI shell.
+
+| Category | Models | Notes |
+| --- | --- | --- |
+| Text-to-image | Qwen-Image, Qwen-Image-2512, FLUX.1-dev | Qwen is Apache 2.0; FLUX.1-dev is non-commercial. |
+| Image edit | Qwen-Image-Edit, Qwen-Image-Edit 2511 | Reference-image editing with LoRA support. |
+| Image-to-video | Wan 2.2 I2V | 14B Lightning 8-step, 14B, and 5B variants. |
+| Image-to-video | LTX-2.3 | Distilled 1.1 / 1.0 and dev variants; LTX Community License, non-commercial. |
+| Text / chat | Qwen 2.5 Chat, TinyLlama Chat 1.1B | Qwen 7B / 14B / 32B variants with VRAM-aware context defaults. |
+
+More models are coming. The intended path is simple: add a runner, add registry metadata, expose the right controls, and keep the UX consistent.
 
 ## How The Runtime Works
 
@@ -234,11 +250,12 @@ PRs that touch safety, downloads, auth, encryption, or model execution should ex
 
 ## Content Moderation
 
-Generated images pass through `Falconsai/nsfw_image_detection` before they are saved. Flagged outputs are dropped and never reach the asset library.
+Generated images and sampled video frames pass through `Falconsai/nsfw_image_detection` before they are saved. Flagged outputs are dropped and never reach the asset library.
 
 - Default: on.
 - Disable with `IGGLEPIXEL_MODERATION=false`.
-- Scope: image outputs only.
+- Scope: image outputs and sampled video frames.
+- Video sample count: `IGGLEPIXEL_VIDEO_MODERATION_FRAMES` (default `7`).
 - Threshold and behavior live in `backend/moderator.py`.
 
 Fork operators are responsible for their own deployments and outputs.
