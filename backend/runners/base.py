@@ -472,72 +472,82 @@ class Runner(ABC):
         with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp:
             tmp_path = Path(tmp.name)
 
+        def _reset_tmp() -> None:
+            try:
+                if tmp_path.exists():
+                    tmp_path.unlink()
+            except OSError:
+                pass
+
+        def _write_imageio() -> None:
+            import imageio.v2 as imageio  # type: ignore
+            import numpy as np
+
+            # imageio writes frame-by-frame so memory stays bounded by the
+            # encoder's buffer rather than holding the whole movie in RAM.
+            # macro_block_size=1 turns off imageio-ffmpeg's default 16-pixel
+            # alignment requirement; we already cropped to even dimensions.
+            writer = imageio.get_writer(
+                str(tmp_path),
+                format="FFMPEG",
+                fps=int(fps),
+                codec="libx264",
+                pixelformat="yuv420p",
+                macro_block_size=1,
+                ffmpeg_params=["-movflags", "+faststart"],
+            )
+            try:
+                for f in frames:
+                    writer.append_data(np.asarray(f.convert("RGB")))
+            finally:
+                writer.close()
+
+        def _write_ffmpeg() -> None:
+            proc = subprocess.Popen(
+                [
+                    "ffmpeg", "-y",
+                    "-f", "rawvideo",
+                    "-vcodec", "rawvideo",
+                    "-pix_fmt", "rgb24",
+                    "-s", f"{ew}x{eh}",
+                    "-r", str(fps),
+                    "-i", "-",
+                    "-an",
+                    "-vcodec", "libx264",
+                    "-pix_fmt", "yuv420p",
+                    "-movflags", "+faststart",
+                    str(tmp_path),
+                ],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+            )
+            for frame in frames:
+                proc.stdin.write(frame.convert("RGB").tobytes())
+            proc.stdin.close()
+            proc.stdin = None
+            _, err = proc.communicate(timeout=120)
+            if proc.returncode != 0:
+                raise RuntimeError(
+                    f"save_video: ffmpeg fallback failed "
+                    f"(exit={proc.returncode}). stderr tail: "
+                    f"{err.decode('utf-8', errors='replace')[-500:]}"
+                )
+
         try:
             try:
-                import imageio.v2 as imageio  # type: ignore
-                import numpy as np
-
-                # imageio writes frame-by-frame so memory stays bounded by
-                # the encoder's buffer rather than holding the whole movie
-                # in RAM. macro_block_size=1 turns off imageio-ffmpeg's
-                # default 16-pixel alignment requirement (we already cropped
-                # to even dimensions, that's all H.264 needs).
-                writer = imageio.get_writer(
-                    str(tmp_path),
-                    format="FFMPEG",
-                    fps=int(fps),
-                    codec="libx264",
-                    pixelformat="yuv420p",
-                    macro_block_size=1,
-                    ffmpeg_params=["-movflags", "+faststart"],
-                )
-                try:
-                    for f in frames:
-                        writer.append_data(np.asarray(f.convert("RGB")))
-                finally:
-                    writer.close()
+                _write_imageio()
+                Runner._assert_playable_video(tmp_path)
             except Exception as e:
-                print(f"[save_video] imageio path failed ({type(e).__name__}: {e}); falling back to ffmpeg subprocess", flush=True)
-                # Wipe any partial output before retrying so the size check
-                # below isn't fooled by a half-written file.
-                try:
-                    if tmp_path.exists():
-                        tmp_path.unlink()
-                except OSError:
-                    pass
-                proc = subprocess.Popen(
-                    [
-                        "ffmpeg", "-y",
-                        "-f", "rawvideo",
-                        "-vcodec", "rawvideo",
-                        "-pix_fmt", "rgb24",
-                        "-s", f"{ew}x{eh}",
-                        "-r", str(fps),
-                        "-i", "-",
-                        "-an",
-                        "-vcodec", "libx264",
-                        "-pix_fmt", "yuv420p",
-                        "-movflags", "+faststart",
-                        str(tmp_path),
-                    ],
-                    stdin=subprocess.PIPE,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.PIPE,
+                print(
+                    f"[save_video] imageio output failed validation "
+                    f"({type(e).__name__}: {e}); falling back to ffmpeg subprocess",
+                    flush=True,
                 )
-                for frame in frames:
-                    proc.stdin.write(frame.convert("RGB").tobytes())
-                proc.stdin.close()
-                proc.stdin = None
-                _, err = proc.communicate(timeout=120)
-                if proc.returncode != 0 or not tmp_path.exists() or tmp_path.stat().st_size == 0:
-                    raise RuntimeError(
-                        f"save_video: ffmpeg fallback failed "
-                        f"(exit={proc.returncode}). stderr tail: "
-                        f"{err.decode('utf-8', errors='replace')[-500:]}"
-                    )
+                _reset_tmp()
+                _write_ffmpeg()
+                Runner._assert_playable_video(tmp_path)
 
-            if not tmp_path.exists() or tmp_path.stat().st_size == 0:
-                raise RuntimeError("save_video: encoded mp4 is empty")
             plaintext = tmp_path.read_bytes()
         finally:
             try:
@@ -551,6 +561,57 @@ class Runner(ABC):
             return fcrypto.write_encrypted(key, dest, plaintext)
         dest.write_bytes(plaintext)
         return dest
+
+    @staticmethod
+    def _assert_playable_video(path: Path) -> None:
+        """Reject non-empty but unplayable MP4s before they are encrypted.
+
+        Browser players surface these as "0:00" or corrupt. ffprobe is the
+        ground truth here: require a video stream and a positive duration.
+        """
+        import json
+        import subprocess
+
+        if not path.exists() or path.stat().st_size == 0:
+            raise RuntimeError("encoded mp4 is empty")
+
+        proc = subprocess.run(
+            [
+                "ffprobe",
+                "-v", "error",
+                "-select_streams", "v:0",
+                "-show_entries", "stream=codec_name,width,height,duration,nb_frames:format=duration",
+                "-of", "json",
+                str(path),
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=30,
+        )
+        if proc.returncode != 0:
+            raise RuntimeError(
+                "ffprobe could not read mp4: "
+                f"{proc.stderr.strip()[-500:] or 'unknown error'}"
+            )
+
+        data = json.loads(proc.stdout or "{}")
+        streams = data.get("streams") or []
+        if not streams:
+            raise RuntimeError("ffprobe found no video stream")
+
+        def _duration(value) -> float:
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                return 0.0
+
+        duration = max(
+            _duration(streams[0].get("duration")),
+            _duration((data.get("format") or {}).get("duration")),
+        )
+        if duration <= 0:
+            raise RuntimeError("ffprobe found no positive video duration")
 
     @staticmethod
     def _normalize_video_frames(frames) -> list:
