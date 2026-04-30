@@ -1300,7 +1300,7 @@ def _run_runtime_install_job(job_id: str, spec: dict) -> None:
     try:
         venv_manager.ensure_runtime(spec, _log)
         job["status"] = "done"
-        job["python_path"] = str(venv_manager.runtime_python(spec["id"]))
+        job["python_path"] = str(venv_manager.runtime_python(spec["id"], spec))
     except Exception as e:
         job["status"] = "error"
         job["error"]  = f"{type(e).__name__}: {e}"
@@ -1319,7 +1319,7 @@ async def install_runtime(model_id: str):
 
     # Already ready? No-op success — the UI can flip its install button
     # to "Installed" without scheduling a job.
-    if venv_manager.is_runtime_ready(spec["id"]):
+    if venv_manager.is_runtime_ready(spec["id"], spec):
         return {"status": "already_installed", "runtime": spec["id"]}
 
     job_id = secrets.token_urlsafe(12)
@@ -1362,7 +1362,7 @@ def runtime_status(model_id: str):
     return {
         "required": True,
         "runtime":  spec["id"],
-        **venv_manager.runtime_status(spec["id"]),
+        **venv_manager.runtime_status(spec["id"], spec),
     }
 
 

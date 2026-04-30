@@ -131,12 +131,12 @@ class ModelLauncher:
         runtime = model.get("runtime") or {}
         runtime_id = runtime.get("id")
         if runtime_id:
-            rp = venv_manager.runtime_python(runtime_id)
+            rp = venv_manager.runtime_python(runtime_id, runtime)
             if not rp:
                 return {
                     "status":  "needs_runtime",
                     "runtime": runtime_id,
-                    "message": f"Runtime '{runtime_id}' not installed. Install via the drawer first.",
+                    "message": f"Runtime '{runtime_id}' is missing or stale. Install it from the drawer first.",
                 }
             python_bin = str(rp)
 

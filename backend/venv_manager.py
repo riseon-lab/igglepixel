@@ -26,6 +26,8 @@ app), so import once at module level from main.py — never per-request.
 from __future__ import annotations
 
 import os
+import hashlib
+import json
 import shutil
 import subprocess
 import sys
@@ -37,6 +39,7 @@ from typing import Callable, Optional
 WORKSPACE = Path(os.environ.get("WORKSPACE", "/workspace"))
 VENVS_DIR = WORKSPACE / "venvs"
 REPOS_DIR = WORKSPACE / "repos"
+SPEC_MARKER = ".igglepixel-runtime-spec.sha256"
 
 # Initialised on import so callers can rely on the dirs existing. WORKSPACE
 # may not exist locally (dev sandbox); endpoints handle that on demand.
@@ -61,34 +64,57 @@ def _venv_python(runtime_id: str) -> Path:
     return _venv_dir(runtime_id) / "bin" / "python"
 
 
-def is_runtime_ready(runtime_id: str) -> bool:
-    """True iff the venv exists and the Python binary is executable."""
+def _spec_marker(runtime_id: str) -> Path:
+    return _venv_dir(runtime_id) / SPEC_MARKER
+
+
+def _spec_hash(spec: dict) -> str:
+    payload = json.dumps(spec, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _spec_matches(runtime_id: str, spec: Optional[dict]) -> bool:
+    if not spec:
+        return True
+    marker = _spec_marker(runtime_id)
+    if not marker.exists():
+        return False
+    try:
+        return marker.read_text().strip() == _spec_hash(spec)
+    except OSError:
+        return False
+
+
+def is_runtime_ready(runtime_id: str, spec: Optional[dict] = None) -> bool:
+    """True iff the venv exists, is executable, and matches the spec."""
     p = _venv_python(runtime_id)
-    return p.exists() and os.access(p, os.X_OK)
+    return p.exists() and os.access(p, os.X_OK) and _spec_matches(runtime_id, spec)
 
 
-def runtime_python(runtime_id: str) -> Optional[Path]:
+def runtime_python(runtime_id: str, spec: Optional[dict] = None) -> Optional[Path]:
     """Returns the venv's Python path if ready, else None.
 
     Used by the launcher to decide whether to spawn a runner against its
     own venv or fall through to sys.executable.
     """
-    return _venv_python(runtime_id) if is_runtime_ready(runtime_id) else None
+    return _venv_python(runtime_id) if is_runtime_ready(runtime_id, spec) else None
 
 
-def runtime_status(runtime_id: str) -> dict:
+def runtime_status(runtime_id: str, spec: Optional[dict] = None) -> dict:
     """Snapshot for the UI: state + the resolved Python path when ready.
 
     The active install job (if any) is tracked separately in main.py's
     `runtime_install_jobs` dict — this function only reports the on-disk
     state, not in-progress work.
     """
-    if is_runtime_ready(runtime_id):
+    if is_runtime_ready(runtime_id, spec):
         return {
             "state":       "ready",
             "python_path": str(_venv_python(runtime_id)),
         }
     if _venv_dir(runtime_id).exists():
+        if _venv_python(runtime_id).exists() and spec and not _spec_matches(runtime_id, spec):
+            return {"state": "stale", "note": "runtime dependencies changed; reinstall required"}
         # Directory exists but the python binary doesn't — half-installed.
         # Treat as missing so the user can re-run install to repair it.
         return {"state": "missing", "note": "venv directory exists but python missing"}
@@ -242,5 +268,6 @@ def ensure_runtime(spec: dict, log: Callable[[str], None] = print) -> Path:
         log(f"== pip: {len(pip_packages)} package(s) ==")
         _pip_install(runtime_id, pip_packages, log)
 
+    _spec_marker(runtime_id).write_text(_spec_hash(spec))
     log("== done ==")
     return _venv_python(runtime_id)
