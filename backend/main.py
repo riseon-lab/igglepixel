@@ -288,6 +288,18 @@ def require_token(request: Request, authorization: Optional[str] = Header(None))
 _COOKIE_MAX_AGE = 30 * 24 * 3600
 
 
+def _is_secure_request(request: Request) -> bool:
+    """Treat proxied HTTPS requests as secure even if Uvicorn sees HTTP."""
+    proto = request.headers.get("x-forwarded-proto", "").split(",")[0].strip().lower()
+    forwarded = request.headers.get("forwarded", "").lower()
+    return (
+        request.url.scheme == "https"
+        or proto == "https"
+        or request.headers.get("x-forwarded-ssl", "").lower() == "on"
+        or "proto=https" in forwarded
+    )
+
+
 def _set_token_cookie(response, token: str, request: Request) -> None:
     """Set the HttpOnly+Secure cookie carrying the bearer token.
 
@@ -299,7 +311,7 @@ def _set_token_cookie(response, token: str, request: Request) -> None:
         value=token,
         max_age=_COOKIE_MAX_AGE,
         httponly=True,
-        secure=request.url.scheme == "https",
+        secure=_is_secure_request(request),
         samesite="strict",
         path="/",
     )
@@ -355,10 +367,11 @@ class AuthBody(BaseModel):
 
 
 @app.get("/api/auth/status")
-def auth_status(request: Request):
+def auth_status(request: Request, response: Response):
     # `locked` = setup has happened on disk but the data key isn't in RAM.
     # `authenticated` lets the frontend skip the gated-endpoint ping when it
     # already knows the cookie isn't valid (e.g. fresh tab, expired cookie).
+    response.headers["Cache-Control"] = "no-store"
     cookie_token = request.cookies.get("forge_token")
     return {
         "needs_setup":   not auth.is_setup(),

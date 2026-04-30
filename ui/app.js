@@ -237,15 +237,14 @@ function resolveFields(m) {
 // "same-origin"` (the default for `fetch` since 2018, but explicit here so
 // it's obvious why no Authorization header).
 async function apiCall(url, opts = {}) {
-  const res = await fetch(url, { credentials: 'same-origin', ...opts });
+  const res = await fetch(url, { credentials: 'same-origin', cache: 'no-store', ...opts });
   if (res.status === 401) {
     clearStoredAuth();
-    showAuth();
+    openAuthGate('login', 'Your pod session expired. Sign in again.');
     throw new Error('Unauthorized');
   }
   if (res.status === 423) {
-    state.auth.mode = 'unlock';
-    showAuth('unlock');
+    openAuthGate('unlock', 'The pod restarted. Re-enter your password to unlock encrypted assets.');
     throw new Error('Locked');
   }
   if (!res.ok) {
@@ -464,6 +463,21 @@ async function postKeyToServiceWorker(key) {
 }
 
 // ── Auth flow ────────────────────────────────────────────────────────────
+function authModeForStatus(status, browserKey = null) {
+  if (!status) return 'login';
+  if (status.needs_setup) return 'setup';
+  if (status.authenticated && (status.locked || !browserKey)) return 'unlock';
+  return 'login';
+}
+
+function openAuthGate(mode, message = '') {
+  const shell = $('#authShell');
+  const alreadyOpen = shell?.classList.contains('open') && state.auth.mode === mode;
+  state.auth.mode = mode;
+  if (!alreadyOpen) showAuth(mode);
+  if (message) $('#authError').textContent = message;
+}
+
 async function checkAuth() {
   // The HttpOnly cookie carries the token. JS can't read it, so we ask the
   // backend whether *this* request is authenticated (the cookie is sent
@@ -489,14 +503,37 @@ async function checkAuth() {
 
   // Pick the right screen. If we have a session but no browser key, we're
   // in "browser unlock" — same UI as backend unlock (just a password).
-  let mode;
-  if (!status)                 mode = 'setup';   // backend unreachable
-  else if (status.needs_setup) mode = 'setup';
-  else if (status.locked || (status.authenticated && !browserKey)) mode = 'unlock';
-  else                         mode = 'login';
-  state.auth.mode = mode;
+  if (!status) {
+    openAuthGate('login', 'Could not reach the pod. Refresh once it is ready.');
+    return;
+  }
+  const mode = authModeForStatus(status, browserKey);
   state.auth.username = status?.username || state.auth.username;
-  showAuth(mode);
+  openAuthGate(mode);
+}
+
+async function enforceLiveAuthGate() {
+  if (state.preview || state.auth.mode !== 'in') return false;
+  let status = null;
+  try { status = await api.authStatus(); } catch { return false; }
+
+  state.auth.username = status?.username || state.auth.username;
+  if (status.needs_setup) {
+    await clearBrowserKey();
+    openAuthGate('setup', 'The pod auth store changed. Set up access again.');
+    return true;
+  }
+  if (!status.authenticated) {
+    await clearBrowserKey();
+    openAuthGate('login', 'Your pod session expired. Sign in again.');
+    return true;
+  }
+  if (status.locked) {
+    await clearBrowserKey();
+    openAuthGate('unlock', 'The pod restarted. Re-enter your password to unlock encrypted assets.');
+    return true;
+  }
+  return false;
 }
 
 function clearStoredAuth() {
@@ -506,8 +543,8 @@ function clearStoredAuth() {
   // a still-resident CryptoKey.
   state.auth.username = null;
   localStorage.removeItem('forge_user');
-  try { api.authLogout(); } catch {}
-  try { clearBrowserKey(); } catch {}
+  try { api.authLogout().catch(() => {}); } catch {}
+  try { clearBrowserKey().catch(() => {}); } catch {}
 }
 
 function showAuth(mode = state.auth.mode) {
@@ -599,6 +636,10 @@ async function submitAuth() {
       if (res.detail || res.message) throw new Error(res.detail || res.message);
       state.auth.username = username;
       localStorage.setItem('forge_user', username);
+    }
+    if (res.username) {
+      state.auth.username = res.username;
+      localStorage.setItem('forge_user', res.username);
     }
 
     // Derive the browser-side key from password + salt and verify it
@@ -3826,28 +3867,31 @@ async function waitForRunner(modelId, maxSeconds) {
 // ── Running ──────────────────────────────────────────────────────────────
 async function pollRunning() {
   try {
-    state.running = await api.status();
-    const live = Object.values(state.running).filter(r => r.status === 'running').length;
-    const liveIds = new Set(Object.entries(state.running)
-      .filter(([, info]) => info.status === 'running')
-      .map(([id]) => id));
-    $('#runningDot').style.display = live > 0 ? 'block' : 'none';
-    // Sync modelStates so a runner that became ready while the drawer was closed
-    // shows as ready immediately on reopen, without needing a manual interaction.
-    for (const [id, info] of Object.entries(state.running)) {
-      if (info.status === 'running') {
-        const s = modelStateOf(id);
-        if (!s.ready) setModelState(id, { ready: true, starting: false, downloaded: true, error: null });
+    const gated = await enforceLiveAuthGate();
+    if (!gated) {
+      state.running = await api.status();
+      const live = Object.values(state.running).filter(r => r.status === 'running').length;
+      const liveIds = new Set(Object.entries(state.running)
+        .filter(([, info]) => info.status === 'running')
+        .map(([id]) => id));
+      $('#runningDot').style.display = live > 0 ? 'block' : 'none';
+      // Sync modelStates so a runner that became ready while the drawer was closed
+      // shows as ready immediately on reopen, without needing a manual interaction.
+      for (const [id, info] of Object.entries(state.running)) {
+        if (info.status === 'running') {
+          const s = modelStateOf(id);
+          if (!s.ready) setModelState(id, { ready: true, starting: false, downloaded: true, error: null });
+        }
       }
-    }
-    for (const [id, s] of Object.entries(state.modelStates)) {
-      if (!liveIds.has(id) && (s.ready || s.starting || s.generating)) {
-        setModelState(id, { ready: false, starting: false, generating: false });
+      for (const [id, s] of Object.entries(state.modelStates)) {
+        if (!liveIds.has(id) && (s.ready || s.starting || s.generating)) {
+          setModelState(id, { ready: false, starting: false, generating: false });
+        }
       }
+      if (state.workspace) updateWsStatus();
+      if ($('.view.active')?.dataset.view === 'models') renderModels();
+      if ($('.view.active')?.dataset.view === 'running') renderRunning();
     }
-    if (state.workspace) updateWsStatus();
-    if ($('.view.active')?.dataset.view === 'models') renderModels();
-    if ($('.view.active')?.dataset.view === 'running') renderRunning();
   } catch {}
   setTimeout(pollRunning, 3000);
 }
