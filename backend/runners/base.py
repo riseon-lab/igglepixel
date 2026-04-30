@@ -441,14 +441,17 @@ class Runner(ABC):
     def save_video(frames, dest: Path, fps: int = 24) -> Path:
         """Encode a list of PIL frames to mp4 — encrypted if FORGE_DATA_KEY is set.
 
-        Two-stage encode with a sanity check between them. diffusers'
-        export_to_video uses cv2.VideoWriter under the hood, which fails
-        SILENTLY when the cv2 build doesn't have the requested codec or the
-        frame dimensions aren't even (H.264 requires that). When that
-        happens you get a 0-byte mp4 and an asset that "exists" but won't
-        play. Catching the empty result here surfaces the failure and lets
-        us fall back to a direct ffmpeg subprocess (which always works on
-        our image since we apt-install ffmpeg in the Dockerfile).
+        Uses imageio + imageio-ffmpeg (the path diffusers' export_to_video
+        prefers when imageio is available). cv2's VideoWriter has a long
+        history of silent failures — non-zero but invalid mp4s with bad
+        moov atoms, missing faststart, fps mismatches — that produce videos
+        which "exist" but show 0 seconds. imageio shells out to the system
+        ffmpeg with libx264 + yuv420p + +faststart and never produces those
+        broken-but-non-empty outputs.
+
+        Final fallback to a direct ffmpeg subprocess remains as belt-and-
+        braces in case imageio-ffmpeg is unavailable on a pod that hasn't
+        finished its boot-time pip install yet.
         """
         import subprocess
         import tempfile
@@ -457,41 +460,63 @@ class Runner(ABC):
         if len(frames) == 0:
             raise ValueError("save_video: empty frames list")
 
+        # H.264 + yuv420p requires even dimensions. Crop one pixel rather
+        # than padding to keep the framing tight; same approach Comfy uses.
+        w0, h0 = frames[0].size
+        ew = w0 if w0 % 2 == 0 else w0 - 1
+        eh = h0 if h0 % 2 == 0 else h0 - 1
+        if (ew, eh) != (w0, h0):
+            frames = [f.crop((0, 0, ew, eh)) for f in frames]
+
         dest.parent.mkdir(parents=True, exist_ok=True)
         with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp:
             tmp_path = Path(tmp.name)
 
         try:
-            # First attempt: diffusers' helper (cv2 backend). Fast when it works.
             try:
-                from diffusers.utils import export_to_video
-                export_to_video(frames, str(tmp_path), fps=fps)
-            except Exception as e:
-                print(f"[save_video] export_to_video raised: {type(e).__name__}: {e}", flush=True)
+                import imageio.v2 as imageio  # type: ignore
+                import numpy as np
 
-            # Sanity-check: 0-byte means cv2 silently failed. Fall back to ffmpeg.
-            ok = tmp_path.exists() and tmp_path.stat().st_size > 0
-            if not ok:
-                w, h = frames[0].size
-                print(f"[save_video] cv2 produced 0-byte mp4; falling back to ffmpeg ({len(frames)} frames @ {w}×{h}, fps={fps})", flush=True)
-                # Pipe RGB frames into ffmpeg as raw video, encode H.264 at the
-                # frame dimensions. ffmpeg is in the image so this always works.
-                # yuv420p + even dimensions are required for browser playback.
-                ew = w if w % 2 == 0 else w - 1
-                eh = h if h % 2 == 0 else h - 1
+                # imageio writes frame-by-frame so memory stays bounded by
+                # the encoder's buffer rather than holding the whole movie
+                # in RAM. macro_block_size=1 turns off imageio-ffmpeg's
+                # default 16-pixel alignment requirement (we already cropped
+                # to even dimensions, that's all H.264 needs).
+                writer = imageio.get_writer(
+                    str(tmp_path),
+                    format="FFMPEG",
+                    fps=int(fps),
+                    codec="libx264",
+                    pixelformat="yuv420p",
+                    macro_block_size=1,
+                    ffmpeg_params=["-movflags", "+faststart"],
+                )
+                try:
+                    for f in frames:
+                        writer.append_data(np.asarray(f.convert("RGB")))
+                finally:
+                    writer.close()
+            except Exception as e:
+                print(f"[save_video] imageio path failed ({type(e).__name__}: {e}); falling back to ffmpeg subprocess", flush=True)
+                # Wipe any partial output before retrying so the size check
+                # below isn't fooled by a half-written file.
+                try:
+                    if tmp_path.exists():
+                        tmp_path.unlink()
+                except OSError:
+                    pass
                 proc = subprocess.Popen(
                     [
                         "ffmpeg", "-y",
                         "-f", "rawvideo",
                         "-vcodec", "rawvideo",
                         "-pix_fmt", "rgb24",
-                        "-s", f"{w}x{h}",
+                        "-s", f"{ew}x{eh}",
                         "-r", str(fps),
                         "-i", "-",
                         "-an",
                         "-vcodec", "libx264",
                         "-pix_fmt", "yuv420p",
-                        "-vf", f"crop={ew}:{eh}:0:0",
                         "-movflags", "+faststart",
                         str(tmp_path),
                     ],
@@ -511,9 +536,9 @@ class Runner(ABC):
                         f"{err.decode('utf-8', errors='replace')[-500:]}"
                     )
 
-            plaintext = tmp_path.read_bytes()
-            if not plaintext:
+            if not tmp_path.exists() or tmp_path.stat().st_size == 0:
                 raise RuntimeError("save_video: encoded mp4 is empty")
+            plaintext = tmp_path.read_bytes()
         finally:
             try:
                 tmp_path.unlink()

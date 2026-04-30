@@ -15,10 +15,12 @@
 #   ftfy.fix_text() on prompts to normalise unicode. Without it generation
 #   fails with "NameError: name 'ftfy' is not defined".
 #
-# Why opencv-python-headless:
-#   diffusers.utils.export_to_video imports cv2 when saving generated video.
-#   The headless build is enough for server-side MP4 export and avoids GUI
-#   libraries that are unnecessary on RunPod.
+# Why imageio + imageio-ffmpeg:
+#   Saving video frames to mp4. imageio is the path diffusers' export_to_video
+#   prefers; it shells out to ffmpeg (already in the image) with libx264 +
+#   yuv420p + +faststart. The cv2 backend it would fall back to without
+#   imageio silently produces non-zero but invalid mp4s (missing/bad moov,
+#   no faststart, fps mismatch) — videos that "exist" but show 0 seconds.
 #
 # Why diffusers>=0.37.1:
 #   Qwen/Qwen-Image-Edit-2511 uses QwenImageEditPlusPipeline. Older image
@@ -29,4 +31,5 @@
 diffusers>=0.37.1
 peft
 ftfy
-opencv-python-headless
+imageio
+imageio-ffmpeg
