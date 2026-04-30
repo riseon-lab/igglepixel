@@ -1,22 +1,76 @@
-# Models to Add
+Image
+Flux.1 Schnell
+Flux.1 Dev
+Flux.1 Kontext if accessible
+Flux Redux / Canny / Depth style workflows
+Qwen Image ONE
+Qwen Image Edit DONE
+SDXL
+SD 1.5
+SD 3.5 Medium / Large
+HiDream
+HunyuanDiT
+PixArt Sigma
+Kolors
+Playground v2.5
+Kandinsky
+ControlNet
+IP-Adapter
+InstantID
+PuLID
+Real-ESRGAN
+SUPIR / upscalers
+Inpainting variants
+LoRA loader support
 
-## Text / LLM
+Video
+WAN 2.1 T2V
+WAN 2.1 I2V
+WAN 2.2 T2V
+WAN 2.2 I2V
+WAN 2.2 5B
+WAN 2.2 Animate
+WAN 2.2 S2V
+WAN 2.5 I2V / T2V as experimental
+HunyuanVideo
+LTX-Video
+CogVideoX
+Mochi 1
+AnimateDiff
+Stable Video Diffusion
+SkyReels
+FramePack
+Video upscaling / interpolation stack
 
-### OpenAI GPT-OSS 20B
-- Hugging Face: `openai/gpt-oss-20b`
-- License: Apache 2.0
-- Shape: 21B total parameters, about 3.6B active parameters per token, 128k context.
-- Hardware note: OpenAI says the native MXFP4 release only requires about 16 GB of memory, so this is the practical GPT-OSS candidate for local testing and mid/high VRAM cards.
-- UI note: expose reasoning effort as a control (`low`, `medium`, `high`) rather than a plain thinking toggle once the runner supports the harmony format.
+Voice / Audio
+Whisper
+WhisperX
+Faster-Whisper
+XTTS v2
+Coqui TTS
+Bark
+Parler-TTS
+OpenVoice
+RVC
+So-VITS-SVC
+Fish Speech
+MusicGen
+AudioCraft
+Stable Audio Open
+Demucs stem separation
+UVR-style vocal isolation
 
-### OpenAI GPT-OSS 120B
-- Hugging Face: `openai/gpt-oss-120b`
-- License: Apache 2.0
-- Shape: 117B total parameters, about 5.1B active parameters per token, 128k context.
-- Hardware note: OpenAI says this fits in a single 80 GB GPU with MXFP4, making it a high-end option for H100/H200 class systems and larger-memory workstation/server GPUs.
-- Runner note: treat as a future vLLM / harmony-format lane rather than the default Transformers runner.
-
-Sources:
-- https://openai.com/index/introducing-gpt-oss
-- https://huggingface.co/openai/gpt-oss-20b
-- https://huggingface.co/openai/gpt-oss-120b
+Text / coding next
+Qwen 2.5 / Qwen 3
+Qwen Coder
+Llama 3.1 / 3.2 / 3.3
+DeepSeek Coder / V2 / V3 style support where licence fits
+Mistral / Mixtral
+Gemma
+Phi
+StarCoder2
+Yi
+InternLM
+LLaVA / Qwen-VL for image chat
+vLLM backend first
+Ollama / llama.cpp backend later for local forks

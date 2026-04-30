@@ -13,6 +13,12 @@
 const NONCE_LEN = 12;
 let dataKey = null;
 
+// Keep these in sync with ui/key_store.js — the SW reads the same IDB record
+// the page wrote, so we don't need a separate handshake on every wake-up.
+const KEY_DB    = "forge-keys";
+const KEY_STORE = "keys";
+const KEY_ID    = "data";
+
 self.addEventListener("install",  () => self.skipWaiting());
 self.addEventListener("activate", (e) => e.waitUntil(self.clients.claim()));
 
@@ -28,6 +34,37 @@ self.addEventListener("message", (e) => {
     if (e.ports?.[0]) e.ports[0].postMessage({ hasKey: !!dataKey });
   }
 });
+
+// Browsers terminate idle service workers (~30s on Chromium). When that
+// happens, the next fetch re-evaluates this script with `dataKey = null`,
+// so any encrypted asset request would 503 even though the user is still
+// unlocked. Read from the same IDB record the page maintains so we recover
+// transparently. The CryptoKey is non-extractable; structured-clone in IDB
+// keeps it that way.
+async function loadKeyFromIDB() {
+  try {
+    return await new Promise((resolve, reject) => {
+      const req = indexedDB.open(KEY_DB, 1);
+      // If the DB doesn't exist yet, create the store so the open() doesn't
+      // error out — page-side will write into it on next unlock.
+      req.onupgradeneeded = () => {
+        const db = req.result;
+        if (!db.objectStoreNames.contains(KEY_STORE)) db.createObjectStore(KEY_STORE);
+      };
+      req.onsuccess = () => {
+        const db = req.result;
+        if (!db.objectStoreNames.contains(KEY_STORE)) { db.close(); resolve(null); return; }
+        const tx = db.transaction(KEY_STORE, "readonly");
+        const g  = tx.objectStore(KEY_STORE).get(KEY_ID);
+        g.onsuccess = () => { db.close(); resolve(g.result || null); };
+        g.onerror   = () => { db.close(); reject(g.error); };
+      };
+      req.onerror = () => reject(req.error);
+    });
+  } catch {
+    return null;
+  }
+}
 
 self.addEventListener("fetch", (event) => {
   const url = new URL(event.request.url);
@@ -52,8 +89,15 @@ async function handle(req) {
   if (!isEncrypted) return upstream;
 
   if (!dataKey) {
-    // Key hasn't been shared yet — return a 503 so the <img> shows broken
-    // and the main thread knows to prompt for unlock.
+    // Try to recover from IDB before giving up — most "key missing" cases
+    // are SW eviction, not a real lock state. The page-side writes the key
+    // to IDB on every unlock and clears it on logout, so reading here is
+    // equivalent to "is this user still unlocked".
+    dataKey = await loadKeyFromIDB();
+  }
+  if (!dataKey) {
+    // Key truly absent — return 503 so the <img> shows broken and the
+    // main thread can prompt for unlock.
     return new Response("Locked: key not in browser", {
       status: 503,
       headers: { "content-type": "text/plain" },

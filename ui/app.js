@@ -1461,11 +1461,19 @@ function renderField(f) {
       const min = f.min ?? 0, max = f.max ?? 100, step = f.step ?? 1;
       return `<div class="field slider-row" data-control-key="${esc(f.key)}">
         <div class="slider-head">
-          <span>${f.label}</span><span class="val" id="val_${f.key}">${v}</span>
+          <span>${f.label}</span><span class="val" id="val_${f.key}" data-slider-value="${esc(f.key)}">${v}</span>
         </div>
         <div class="slider-control">
-          <input class="slider" type="range" min="${min}" max="${max}" step="${step}" value="${v}" data-key="${f.key}" data-slider>
-          <input class="text-input slider-number" type="number" min="${min}" max="${max}" step="${step}" value="${v}" data-key="${f.key}" data-slider-number>
+          <input class="slider" type="range" min="${min}" max="${max}" step="${step}" value="${v}" data-default="${v}" data-key="${f.key}" data-slider aria-label="${esc(f.label)} slider">
+          <div class="slider-stepper">
+            <button class="slider-step" type="button" data-key="${f.key}" data-stepper="-1" aria-label="Decrease ${esc(f.label)}">
+              <svg><use href="#i-minus"/></svg>
+            </button>
+            <input class="text-input slider-number" type="number" inputmode="decimal" min="${min}" max="${max}" step="${step}" value="${v}" data-default="${v}" data-key="${f.key}" data-slider-number aria-label="${esc(f.label)} value">
+            <button class="slider-step" type="button" data-key="${f.key}" data-stepper="1" aria-label="Increase ${esc(f.label)}">
+              <svg><use href="#i-plus"/></svg>
+            </button>
+          </div>
         </div>
       </div>`;
     }
@@ -1490,26 +1498,137 @@ function renderField(f) {
   }
 }
 
+function numericStepDecimals(step) {
+  const raw = String(step || 1).toLowerCase();
+  if (raw.includes('e-')) return Number(raw.split('e-')[1]) || 0;
+  const dot = raw.indexOf('.');
+  return dot >= 0 ? raw.length - dot - 1 : 0;
+}
+
+function formatControlNumber(value, step) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return '';
+  const decimals = numericStepDecimals(step);
+  const rounded = Number(n.toFixed(decimals));
+  if (!decimals) return String(Math.round(rounded));
+  return rounded.toFixed(decimals).replace(/\.?0+$/, '');
+}
+
+function sliderSpec(field, key) {
+  const escaped = CSS.escape(key);
+  const el = field?.querySelector(`[data-key="${escaped}"][data-slider-number]`)
+          || field?.querySelector(`[data-key="${escaped}"][data-slider]`);
+  const min = el?.min !== undefined && el.min !== '' ? Number(el.min) : -Infinity;
+  const max = el?.max !== undefined && el.max !== '' ? Number(el.max) : Infinity;
+  const step = el?.step && el.step !== 'any' ? Number(el.step) : 1;
+  const fallback = el?.dataset.default !== undefined && el.dataset.default !== ''
+    ? Number(el.dataset.default)
+    : (Number.isFinite(min) ? min : 0);
+  return {
+    min,
+    max,
+    step: Number.isFinite(step) && step > 0 ? step : 1,
+    fallback: Number.isFinite(fallback) ? fallback : 0,
+  };
+}
+
+function clampNumber(value, min, max) {
+  let n = Number(value);
+  if (!Number.isFinite(n)) return n;
+  if (Number.isFinite(min)) n = Math.max(min, n);
+  if (Number.isFinite(max)) n = Math.min(max, n);
+  return n;
+}
+
+function snapNumber(value, spec) {
+  let n = clampNumber(value, spec.min, spec.max);
+  if (!Number.isFinite(n)) return n;
+  const base = Number.isFinite(spec.min) ? spec.min : 0;
+  n = base + Math.round((n - base) / spec.step) * spec.step;
+  return clampNumber(n, spec.min, spec.max);
+}
+
+function setSliderParam(rootEl, key, value, sourceEl = null, opts = {}) {
+  const field = sourceEl?.closest?.('[data-control-key]')
+             || rootEl.querySelector(`[data-control-key="${CSS.escape(key)}"]`);
+  const spec = sliderSpec(field, key);
+  const raw = value === undefined ? sourceEl?.value : value;
+
+  if (raw === '') {
+    state.params[key] = '';
+    field?.querySelectorAll(`[data-slider-value="${CSS.escape(key)}"]`).forEach(el => { el.textContent = '—'; });
+    return;
+  }
+
+  let n = Number(raw);
+  if (!Number.isFinite(n)) return;
+  n = opts.snap ? snapNumber(n, spec) : clampNumber(n, spec.min, spec.max);
+  const display = formatControlNumber(n, spec.step);
+  state.params[key] = Number(display);
+
+  field?.querySelectorAll(`[data-slider-value="${CSS.escape(key)}"]`).forEach(el => { el.textContent = display; });
+  field?.querySelectorAll(`[data-key="${CSS.escape(key)}"]`).forEach(peer => {
+    if (!peer.hasAttribute('data-slider') && !peer.hasAttribute('data-slider-number')) return;
+    if (peer === sourceEl && opts.preserveTyping) return;
+    peer.value = display;
+  });
+
+  if ((key === 'width' || key === 'height') && state.selected) {
+    renderAspectChips(state.selected, true);
+  }
+}
+
 // Generic param input binding — works for both drawer and workspace.
 function bindParamInputs(rootEl) {
   rootEl.querySelectorAll('input[data-key],select[data-key],textarea[data-key]').forEach(el => {
     el.addEventListener('input', () => {
       const key = el.dataset.key;
+      if (el.hasAttribute('data-slider') || el.hasAttribute('data-slider-number')) {
+        setSliderParam(rootEl, key, el.value, el, {
+          snap: el.hasAttribute('data-slider'),
+          preserveTyping: el.hasAttribute('data-slider-number'),
+        });
+        return;
+      }
       let v = el.value;
-      if (el.type === 'number' || el.dataset.slider || el.dataset.sliderNumber) v = el.value === '' ? '' : Number(el.value);
+      if (el.type === 'number') v = el.value === '' ? '' : Number(el.value);
       state.params[key] = v;
       const valEl = rootEl.querySelector(`#val_${key}`);
       if (valEl) valEl.textContent = v;
       const field = el.closest('[data-control-key]');
       if (field) {
         field.querySelectorAll(`[data-key="${CSS.escape(key)}"]`).forEach(peer => {
-          if (peer !== el && (peer.dataset.slider || peer.dataset.sliderNumber)) peer.value = el.value;
+          if (peer !== el && (peer.hasAttribute('data-slider') || peer.hasAttribute('data-slider-number'))) peer.value = el.value;
         });
       }
       // Keep aspect chips in sync when user manually edits width or height.
       if ((key === 'width' || key === 'height') && state.selected) {
         renderAspectChips(state.selected, true);
       }
+    });
+    if (el.hasAttribute('data-slider-number')) {
+      el.addEventListener('change', () => {
+        const key = el.dataset.key;
+        const field = el.closest('[data-control-key]');
+        const spec = sliderSpec(field, key);
+        const next = el.value === '' ? spec.fallback : el.value;
+        setSliderParam(rootEl, key, next, el, { snap: true });
+      });
+    }
+  });
+  rootEl.querySelectorAll('[data-stepper]').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      const key = btn.dataset.key;
+      const field = btn.closest('[data-control-key]');
+      const spec = sliderSpec(field, key);
+      const raw = state.params[key] !== '' && state.params[key] !== undefined
+        ? state.params[key]
+        : field?.querySelector(`[data-key="${CSS.escape(key)}"][data-slider-number]`)?.value;
+      const current = Number(raw);
+      const multiplier = e.shiftKey ? 10 : 1;
+      const direction = Number(btn.dataset.stepper || 0);
+      const base = Number.isFinite(current) ? current : spec.fallback;
+      setSliderParam(rootEl, key, base + direction * spec.step * multiplier, btn, { snap: true });
     });
   });
   rootEl.querySelectorAll('[data-toggle]').forEach(el => {
@@ -3066,9 +3185,13 @@ async function downloadAsset(asset) {
 }
 
 async function deleteAssetAnywhere(asset) {
-  // 1. Always remove from any model's recents that contains it (so a delete
-  //    initiated from the Library doesn't leave ghosts in the workspace strip).
+  // 1. Sweep every consumer that might still hold a reference to this asset.
+  //    Without this, deleted assets linger as broken refs in workspace input
+  //    slots and as ghosts in the recents strip. Order matters: prune the
+  //    in-memory holders BEFORE the fetch so a re-render mid-delete doesn't
+  //    snapshot stale state.
   pruneFromRecents(asset);
+  pruneFromImgInputs(asset);
 
   // 2. Remove the underlying file (or fake-delete in preview mode).
   if (asset.path && !state.preview) {
@@ -3092,6 +3215,24 @@ function pruneFromRecents(asset) {
   if (!asset?.path) return;
   for (const id of Object.keys(state.recents)) {
     state.recents[id] = state.recents[id].filter(a => a.path !== asset.path);
+  }
+}
+
+// Clear the deleted asset out of every model's input slots (ref / pose / style /
+// any image_input the model declares). Without this, a deleted asset stays
+// "selected" in the workspace and renders broken — and submitting a generation
+// would either 404 in the runner or fail signature checks.
+function pruneFromImgInputs(asset) {
+  if (!asset?.path) return;
+  for (const modelId of Object.keys(state.imgInputs)) {
+    const slots = state.imgInputs[modelId];
+    if (!slots) continue;
+    for (const key of Object.keys(slots)) {
+      const slot = slots[key];
+      if (slot?.img?.path === asset.path) {
+        slots[key] = { ...slot, img: null, enabled: false };
+      }
+    }
   }
 }
 
