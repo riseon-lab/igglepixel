@@ -7,6 +7,24 @@
 import { deriveKey, encryptBlob, hexToBytes, verifyCanary, PBKDF2_DEFAULT_ITERATIONS } from './crypto.js';
 import { storeKey, loadKey, clearKey } from './key_store.js';
 
+function readStorage(key, fallback = null) {
+  try {
+    const value = localStorage.getItem(key);
+    return value == null ? fallback : value;
+  } catch {
+    return fallback;
+  }
+}
+
+function readJSONStorage(key, fallback = {}) {
+  try {
+    return JSON.parse(readStorage(key, JSON.stringify(fallback))) || fallback;
+  } catch {
+    try { localStorage.removeItem(key); } catch {}
+    return fallback;
+  }
+}
+
 // ── State ────────────────────────────────────────────────────────────────
 const state = {
   models:        [],
@@ -19,7 +37,7 @@ const state = {
   civResults:    [],
   selected:      null,        // model currently in drawer
   params:        {},          // working copy of params (workspace + drawer)
-  settings:      JSON.parse(localStorage.getItem('forge_settings') || '{}'),
+  settings:      readJSONStorage('forge_settings', {}),
 
   // Per-model lifecycle (downloaded? loading? running? generating?)
   modelStates:   {},
@@ -46,7 +64,7 @@ const state = {
   // the user on the unlock screen — non-sensitive.
   auth: {
     token:    null,                              // unused; cookie carries it
-    username: localStorage.getItem('forge_user') || null,
+    username: readStorage('forge_user', null),
     mode:     'unknown',                         // 'unknown' | 'setup' | 'login' | 'unlock' | 'in'
   },
 
@@ -237,7 +255,21 @@ function resolveFields(m) {
 // "same-origin"` (the default for `fetch` since 2018, but explicit here so
 // it's obvious why no Authorization header).
 async function apiCall(url, opts = {}) {
-  const res = await fetch(url, { credentials: 'same-origin', cache: 'no-store', ...opts });
+  const fetchOpts = { ...opts };
+  const timeoutMs = fetchOpts.timeoutMs;
+  delete fetchOpts.timeoutMs;
+  let timeout = null;
+  if (timeoutMs && !fetchOpts.signal) {
+    const controller = new AbortController();
+    fetchOpts.signal = controller.signal;
+    timeout = setTimeout(() => controller.abort(), timeoutMs);
+  }
+  let res;
+  try {
+    res = await fetch(url, { credentials: 'same-origin', cache: 'no-store', ...fetchOpts });
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
   if (res.status === 401) {
     clearStoredAuth();
     openAuthGate('login', 'Your pod session expired. Sign in again.');
@@ -280,7 +312,7 @@ const jsonBody = (body) => ({
 
 const api = {
   // Auth
-  authStatus:    () => json(apiCall('/api/auth/status')),
+  authStatus:    () => json(apiCall('/api/auth/status', { timeoutMs: 3500 })),
   authSetup:     (b) => json(apiCall('/api/auth/setup',  jsonBody(b))),
   authLogin:     (b) => json(apiCall('/api/auth/login',  jsonBody(b))),
   authUnlock:    (b) => json(apiCall('/api/auth/unlock', jsonBody(b))),
@@ -367,7 +399,16 @@ async function init() {
     toast('Preview mode — generation is faked', 'info');
     return;
   }
-  await checkAuth();
+  const authFallback = setTimeout(() => {
+    if (state.auth.mode === 'unknown') {
+      openAuthGate('login', 'Connecting to the pod…');
+    }
+  }, 1500);
+  try {
+    await checkAuth();
+  } finally {
+    clearTimeout(authFallback);
+  }
 }
 
 // Called after a successful sign-in / setup — loads the actual app data.
@@ -4596,4 +4637,7 @@ function mockModels() {
   ];
 }
 
-init();
+init().catch((err) => {
+  console.error('App failed to start:', err);
+  openAuthGate('login', 'The app failed to start. Refresh once the pod is ready.');
+});
