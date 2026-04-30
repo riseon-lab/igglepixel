@@ -25,6 +25,8 @@ import sys
 from pathlib import Path
 from typing import AsyncIterator, Optional
 
+import venv_manager
+
 
 WORKSPACE = Path(os.environ.get("WORKSPACE", "/workspace"))
 LOGS_DIR  = WORKSPACE / "logs"
@@ -119,7 +121,26 @@ class ModelLauncher:
 
         # Run from repo root so `python -m backend.runner_host` resolves.
         repo_root = Path(__file__).resolve().parent.parent
-        cmd = [sys.executable, "-m", "backend.runner_host", runner_module, str(port)]
+
+        # Per-runner venv: when the registry declares a `runtime` block,
+        # spawn against that venv's python instead of the shared system
+        # interpreter. Used today by LTX-2.3 (needs Python 3.12 + its own
+        # ltx-pipelines deps that conflict with our 3.11 image). Other
+        # runners pass through to sys.executable as before.
+        python_bin = sys.executable
+        runtime = model.get("runtime") or {}
+        runtime_id = runtime.get("id")
+        if runtime_id:
+            rp = venv_manager.runtime_python(runtime_id)
+            if not rp:
+                return {
+                    "status":  "needs_runtime",
+                    "runtime": runtime_id,
+                    "message": f"Runtime '{runtime_id}' not installed. Install via the drawer first.",
+                }
+            python_bin = str(rp)
+
+        cmd = [python_bin, "-m", "backend.runner_host", runner_module, str(port)]
 
         proc = subprocess.Popen(
             cmd,

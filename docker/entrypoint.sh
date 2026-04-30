@@ -86,7 +86,23 @@ export PIP_CACHE_DIR=/workspace/.cache/pip
 # ── Workspace skeleton (the volume may be empty on first boot) ─────────
 mkdir -p /workspace/models /workspace/loras /workspace/checkpoints \
          /workspace/assets/uploads /workspace/assets/generated /workspace/logs \
-         /workspace/.cache/huggingface /workspace/.cache/pip
+         /workspace/.cache/huggingface /workspace/.cache/pip \
+         /workspace/venvs /workspace/repos
+
+# ── uv (per-runner venv tooling) ───────────────────────────────────────
+# uv is a single static binary that handles Python version installs
+# (e.g. 3.12 alongside our system 3.11) plus venv creation plus fast pip.
+# We persist it under /workspace/.local/bin so first-boot downloads it once
+# and every subsequent boot uses the cached binary. backend/venv_manager.py
+# uses uv when present, falling back to `python -m venv` otherwise.
+export UV_INSTALL_DIR=/workspace/.local/bin
+export PATH="$UV_INSTALL_DIR:$PATH"
+if ! command -v uv >/dev/null 2>&1; then
+    log "installing uv (one-time, persistent under $UV_INSTALL_DIR)"
+    mkdir -p "$UV_INSTALL_DIR"
+    curl -fsSL https://astral.sh/uv/install.sh | env INSTALL_DIR="$UV_INSTALL_DIR" sh \
+        || log "WARN: uv install failed; per-runner venvs will fall back to python -m venv"
+fi
 
 # ── Per-deployment dep installs ────────────────────────────────────────
 # requirements-runtime.txt at the repo root lists feature-flag deps

@@ -49,6 +49,7 @@ const state = {
   imgInputs:     {},          // { model_id -> { ref:{img,enabled}, pose:{...}, ... } }
   loraStates:    {},          // { model_id -> { filename -> { on, strength } } }
   components:    [],          // installed split-file components: [{target, filename, size_mb, path}]
+  runtimes:      {},          // { model_id -> {state: 'missing'|'installing'|'ready'|'error', last_line?, error?} }
   chats:         {},          // { model_id -> [{role, text, thinking?, streaming?}] }
   chatSessions:  {},          // { model_id -> [{id,title,messages,compact_summary,…}] }
   activeChat:    {},          // { model_id -> session_id }
@@ -349,6 +350,9 @@ const api = {
   components:           () => json(apiCall('/api/components')),
   installComponents:    (b)  => json(apiCall('/api/components/install', jsonBody(b))),
   componentJobStatus:   (id) => json(apiCall(`/api/components/install-status/${encodeURIComponent(id)}`)),
+  runtimeStatus:        (mid)      => json(apiCall(`/api/runtime/${encodeURIComponent(mid)}/status`)),
+  installRuntime:       (mid)      => json(apiCall(`/api/runtime/${encodeURIComponent(mid)}/install`, { method: 'POST' })),
+  runtimeJobStatus:     (mid, jid) => json(apiCall(`/api/runtime/${encodeURIComponent(mid)}/install-status/${encodeURIComponent(jid)}`)),
   deleteAsset:   (path) => json(apiCall(`/api/assets?path=${encodeURIComponent(path)}`, { method: 'DELETE' })),
   // Phase 3: encrypt the file in the browser BEFORE upload when we have the
   // data key. Backend stores the bytes as-is (sees ciphertext, period).
@@ -1287,6 +1291,10 @@ async function openDrawer(id) {
 
   // Reconcile weight + runner state so reopening the drawer never shows stale "starting".
   await refreshWeightState(m);
+  // Per-runner runtime: refresh in parallel with weight state so the
+  // primary button can render the right CTA without a second round-trip
+  // (Install runtime vs Download weights vs Start, see renderDrawerPrimary).
+  if (m.runtime) await refreshRuntimeStatus(m.id);
   try {
     const h = await api.runnerHealth(m.id);
     if (h.ready)           setModelState(m.id, { ready: true,  starting: false, error: null });
@@ -1524,8 +1532,30 @@ function contextStatText(m) {
 function renderDrawerPrimary() {
   const m = state.selected;
   if (!m) return;
-  const phase = drawerPhase(m.id);
   const btn = $('#drawerPrimary');
+
+  // Per-runner runtime venv gate. Models that declare `m.runtime` need
+  // their venv installed before the runner can spawn (see venv_manager.py
+  // — first install does git clone + pip install of multi-GB ML deps).
+  // We block the normal phase machine here and surface an Install runtime
+  // CTA instead. Once `state.runtimes[m.id].state === 'ready'`, the
+  // normal phase logic resumes.
+  const rt = m.runtime ? (state.runtimes[m.id] || { state: 'unknown' }) : null;
+  if (rt && rt.state !== 'ready') {
+    if (rt.state === 'installing') {
+      const tail = rt.last_line ? ` · ${rt.last_line.slice(0, 60)}` : '';
+      btn.innerHTML = `<span class="spinner"></span><span>Installing runtime…${esc(tail)}</span>`;
+      btn.disabled  = true;
+      btn.dataset.action = '';
+    } else {
+      btn.innerHTML = `<svg><use href="#i-down"/></svg>Install runtime · ${esc(m.runtime.label || m.runtime.id)}`;
+      btn.disabled  = false;
+      btn.dataset.action = 'install-runtime';
+    }
+    return;
+  }
+
+  const phase = drawerPhase(m.id);
   const labels = {
     not_downloaded: { html: '<svg><use href="#i-down"/></svg>Download weights',  busy: false, action: 'download' },
     downloading:    { html: '<span class="spinner"></span><span>Downloading…</span>', busy: true, action: null },
@@ -1774,9 +1804,93 @@ async function onDrawerPrimary() {
   const m = state.selected;
   if (!m) return;
   const action = $('#drawerPrimary').dataset.action;
+  if (action === 'install-runtime')                return installRuntime(m);
   if (action === 'download' || action === 'retry') return downloadWeights(m);
   if (action === 'start')                          return startRunner(m);
   if (action === 'open')                           return openWorkspace(m.id);
+}
+
+// ── Per-runner runtime venv ─────────────────────────────────────────────
+// Models with a `runtime` block (LTX-2.3 today) need an isolated Python
+// venv installed before the runner can spawn — this is a 3–5 min job
+// (git clone + pip install of ML deps) that runs as a backend background
+// task. The drawer's primary button surfaces install / progress; we poll
+// /install-status until the venv is ready, then re-render the drawer so
+// the normal Start flow takes over.
+
+async function refreshRuntimeStatus(modelId) {
+  try {
+    const s = await api.runtimeStatus(modelId);
+    if (!s.required) {
+      // No runtime block on this model — clear any stale entry. Keeps
+      // the drawer phase machine off the install path.
+      delete state.runtimes[modelId];
+      return;
+    }
+    state.runtimes[modelId] = {
+      ...(state.runtimes[modelId] || {}),
+      state:       s.state || 'missing',
+      python_path: s.python_path,
+    };
+  } catch {
+    // If status endpoint is unreachable, leave whatever we already had.
+  }
+}
+
+async function installRuntime(m) {
+  setRuntimeState(m.id, { state: 'installing', last_line: 'queued' });
+  renderDrawerPrimary();
+  let job;
+  try {
+    job = await api.installRuntime(m.id);
+  } catch (e) {
+    setRuntimeState(m.id, { state: 'error', error: e.message || 'install failed' });
+    toast(`Runtime install failed: ${e.message || 'unknown'}`, 'error');
+    renderDrawerPrimary();
+    return;
+  }
+  if (job.status === 'already_installed') {
+    setRuntimeState(m.id, { state: 'ready' });
+    renderDrawerBody();
+    return;
+  }
+  pollRuntimeInstall(m, job.job_id);
+}
+
+const _runtimeJobTimers = {};
+function pollRuntimeInstall(m, jobId) {
+  if (_runtimeJobTimers[jobId]) return;
+  const tick = async () => {
+    let job;
+    try {
+      job = await api.runtimeJobStatus(m.id, jobId);
+    } catch (e) {
+      // Network blip — keep polling. If it's a real 404 the user can
+      // re-trigger install from the drawer.
+      _runtimeJobTimers[jobId] = setTimeout(tick, 6000);
+      return;
+    }
+    if (job.status === 'queued' || job.status === 'running') {
+      setRuntimeState(m.id, { state: 'installing', last_line: job.last_line || '' });
+      if (state.selected?.id === m.id) renderDrawerPrimary();
+      _runtimeJobTimers[jobId] = setTimeout(tick, 4000);
+      return;
+    }
+    delete _runtimeJobTimers[jobId];
+    if (job.status === 'done') {
+      setRuntimeState(m.id, { state: 'ready' });
+      toast(`${m.runtime?.label || 'Runtime'} ready`, 'success');
+    } else {
+      setRuntimeState(m.id, { state: 'error', error: job.error || 'install failed' });
+      toast(`Runtime install failed: ${job.error || 'unknown'}`, 'error');
+    }
+    if (state.selected?.id === m.id) renderDrawerBody();
+  };
+  tick();
+}
+
+function setRuntimeState(modelId, patch) {
+  state.runtimes[modelId] = { ...(state.runtimes[modelId] || {}), ...patch };
 }
 
 async function downloadWeights(m) {

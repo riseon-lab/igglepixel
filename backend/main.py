@@ -1235,6 +1235,117 @@ def delete_component(target: str, filename: str):
     return {"status": "deleted", "path": str(p)}
 
 
+# ── Per-runner runtime venvs ─────────────────────────────────────────────
+# A runner can declare a `runtime` block in the registry pointing at a
+# Python version + git source + pip requirements. Installing the runtime
+# (creating the venv, cloning the source repo, pip-installing packages)
+# can take 5+ minutes and downloads multi-GB wheels — so it's a background
+# job with the same shape as components/loras.
+import venv_manager  # noqa: E402  (imported here so launcher.py's top-level import works in subprocess too)
+
+runtime_install_jobs: dict[str, dict] = {}
+
+
+def _registry_runtime_for(model_id: str) -> Optional[dict]:
+    """Look up a model's `runtime` spec from the registry, or None."""
+    try:
+        with open(REGISTRY_PATH) as f:
+            registry = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return None
+    model = next((m for m in registry.get("models", []) if m.get("id") == model_id), None)
+    if not model:
+        return None
+    return model.get("runtime")
+
+
+def _run_runtime_install_job(job_id: str, spec: dict) -> None:
+    """Background-thread worker — spawns subprocesses for git + pip via
+    venv_manager.ensure_runtime. Streams every log line into the job dict
+    so the UI status endpoint can show a live tail."""
+    job = runtime_install_jobs[job_id]
+    job["status"]     = "running"
+    job["started_at"] = time.time()
+    log_lines: list = []
+    job["log"] = log_lines
+
+    def _log(line: str) -> None:
+        # Cap the log buffer at 2000 lines — pip can emit a lot of progress
+        # and we don't want unbounded memory on long installs.
+        log_lines.append(line)
+        if len(log_lines) > 2000:
+            del log_lines[: len(log_lines) - 2000]
+        job["last_line"] = line
+
+    try:
+        venv_manager.ensure_runtime(spec, _log)
+        job["status"] = "done"
+        job["python_path"] = str(venv_manager.runtime_python(spec["id"]))
+    except Exception as e:
+        job["status"] = "error"
+        job["error"]  = f"{type(e).__name__}: {e}"
+    finally:
+        job["finished_at"] = time.time()
+
+
+@app.post("/api/runtime/{model_id}/install")
+async def install_runtime(model_id: str):
+    """Kick off the venv install for a model that declares `runtime` in
+    the registry. Returns a job_id immediately; UI polls the status
+    endpoint until done."""
+    spec = _registry_runtime_for(model_id)
+    if not spec or not spec.get("id"):
+        raise HTTPException(400, f"Model '{model_id}' has no runtime block in the registry")
+
+    # Already ready? No-op success — the UI can flip its install button
+    # to "Installed" without scheduling a job.
+    if venv_manager.is_runtime_ready(spec["id"]):
+        return {"status": "already_installed", "runtime": spec["id"]}
+
+    job_id = secrets.token_urlsafe(12)
+    runtime_install_jobs[job_id] = {
+        "id":         job_id,
+        "model_id":   model_id,
+        "runtime":    spec["id"],
+        "status":     "queued",
+        "created_at": time.time(),
+    }
+    # Run in a worker thread (not asyncio.create_task) because
+    # venv_manager.ensure_runtime makes blocking subprocess.Popen calls
+    # that would otherwise stall other endpoints during the 3-5 minute install.
+    threading.Thread(
+        target=_run_runtime_install_job,
+        args=(job_id, spec),
+        daemon=True,
+    ).start()
+    return {"job_id": job_id, "status": "queued", "runtime": spec["id"]}
+
+
+@app.get("/api/runtime/{model_id}/install-status/{job_id}")
+def runtime_install_status(model_id: str, job_id: str):
+    job = runtime_install_jobs.get(job_id)
+    if not job:
+        raise HTTPException(404, "Install job not found")
+    if job.get("model_id") != model_id:
+        raise HTTPException(404, "Install job not for this model")
+    return job
+
+
+@app.get("/api/runtime/{model_id}/status")
+def runtime_status(model_id: str):
+    """Lightweight pre-launch check the UI uses to decide whether to
+    show 'Install runtime' vs 'Start'. No job_id needed — just looks at
+    the venv on disk."""
+    spec = _registry_runtime_for(model_id)
+    if not spec or not spec.get("id"):
+        return {"required": False}
+    return {
+        "required": True,
+        "runtime":  spec["id"],
+        **venv_manager.runtime_status(spec["id"]),
+    }
+
+
 class LoraTagRequest(BaseModel):
     tags: list[str] = []
     model_id: Optional[str] = None
