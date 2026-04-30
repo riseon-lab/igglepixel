@@ -6,7 +6,6 @@ import json
 import os
 import secrets
 import shutil
-import subprocess
 import threading
 import time
 from pathlib import Path
@@ -672,6 +671,13 @@ class GenerateRequest(BaseModel):
     hf_token: Optional[str] = None
 
 
+class PromptEnhanceRequest(BaseModel):
+    prompt: str
+    model_id: Optional[str] = None
+    category: Optional[str] = None
+    hf_token: Optional[str] = None
+
+
 generation_jobs: dict[str, dict] = {}
 
 
@@ -719,6 +725,59 @@ async def _generate_result(req: GenerateRequest) -> dict:
 @app.post("/api/generate")
 async def generate(req: GenerateRequest):
     return await _generate_result(req)
+
+
+def _clean_enhanced_prompt(text: str) -> str:
+    text = (text or "").strip()
+    for prefix in ("Improved prompt:", "Enhanced prompt:", "Prompt:"):
+        if text.lower().startswith(prefix.lower()):
+            text = text[len(prefix):].strip()
+    if text.startswith('"') and text.endswith('"'):
+        text = text[1:-1].strip()
+    return text.strip()
+
+
+@app.post("/api/prompt/enhance")
+async def enhance_prompt(req: PromptEnhanceRequest):
+    prompt = (req.prompt or "").strip()
+    if not prompt:
+        raise HTTPException(400, "Prompt is empty")
+
+    enhancer_id = "qwen25-chat"
+    info = launcher.get(enhancer_id)
+    if not info or info.get("status") != "running":
+        raise HTTPException(409, "Prompt enhancer needs Qwen 2.5 Chat running. Start it first, then try Enhance.")
+
+    system = (
+        "You are a prompt editor for image and video generation models. "
+        "Rewrite the user's prompt to be clearer and more useful, while preserving "
+        "the subject, intent, style, and constraints. Do not add new characters, "
+        "brands, camera moves, moods, or story beats unless they are already implied. "
+        "Output only the improved prompt, with no heading, no notes, and no quotes."
+    )
+    user = (
+        f"Target model category: {req.category or 'generation'}\n"
+        f"Target model id: {req.model_id or 'unknown'}\n\n"
+        f"Original prompt:\n{prompt}"
+    )
+    result = await _generate_result(GenerateRequest(
+        model_id=enhancer_id,
+        params={
+            "prompt": user,
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            "thinking": False,
+            "temperature": 0.25,
+            "top_p": 0.8,
+            "max_new_tokens": 220,
+        },
+        loras=[],
+        hf_token=req.hf_token,
+    ))
+    enhanced = _clean_enhanced_prompt(result.get("meta", {}).get("text") or result.get("text") or "")
+    return {"prompt": enhanced or prompt, "model_id": enhancer_id}
 
 
 async def _run_generation_job(job_id: str, req: GenerateRequest):
@@ -905,27 +964,346 @@ async def delete_model_weights(model_id: str):
 
 
 # ── HuggingFace downloads ────────────────────────────────────────────────
-class HFDownloadRequest(BaseModel):
-    repo_id: str
-    filename: Optional[str] = None
+# The previous implementation shelled out to `huggingface-cli download` with
+# stdout/stderr piped but never read. The CLI's progress output filled the
+# 64 KB pipe buffer, the subprocess deadlocked on its next write, and the
+# user saw "Started: …" with no actual download. Errors (bad token, private
+# repo, missing CLI) were swallowed silently. Replaced here with the Python
+# API + a background worker thread that surfaces progress, errors, and
+# cancellation through a polled job dict — same shape as components install.
+
+# Files we treat as "weights" in the browser. Anything else is hidden from
+# the flat list; advanced users can still pass an exact path through the
+# legacy /api/download/hf endpoint.
+HF_WEIGHT_EXTENSIONS = {".safetensors", ".ckpt", ".bin", ".gguf", ".pth", ".pt"}
+
+# Allowed target dirs for downloaded files. Restricting prevents path-
+# traversal trickery via `../` in `target_dir` payloads.
+HF_TARGET_DIRS = {"loras", "models", "checkpoints", "components"}
+
+# In-memory job table. Keyed by job_id. We cap at the most recent 200 jobs
+# so a long-running session doesn't grow unbounded.
+hf_download_jobs: dict[str, dict] = {}
+HF_JOB_MAX = 200
+
+
+def _trim_hf_jobs() -> None:
+    """Keep only the most recent HF_JOB_MAX jobs, sorted by created_at."""
+    if len(hf_download_jobs) <= HF_JOB_MAX:
+        return
+    extras = sorted(hf_download_jobs.values(), key=lambda j: j.get("created_at", 0))[: -HF_JOB_MAX]
+    for j in extras:
+        hf_download_jobs.pop(j["id"], None)
+
+
+def _hf_repo_path(repo: str, rel_path: str) -> Path:
+    """Local on-disk basename layout for HF downloads. We store under
+    <target>/<repo_basename>/<rel_path> so different files from different
+    repos don't collide when they share a basename."""
+    safe_repo = repo.replace("/", "__")
+    return Path(safe_repo) / rel_path
+
+
+def _format_hf_error(e: Exception) -> str:
+    """Produce a useful message for the UI. huggingface_hub raises a few
+    different exception types; we surface the relevant ones plainly so
+    users don't have to copy-paste a stacktrace."""
+    name = type(e).__name__
+    msg  = str(e) or repr(e)
+    # 401/403 from gated/private repos lands as HfHubHTTPError. Highlight
+    # the auth dimension since that's the action the user can take.
+    if "401" in msg or "403" in msg or "Unauthorized" in msg or "gated" in msg.lower():
+        return f"Auth required — set an HF token with read access to this repo. ({name})"
+    if "404" in msg:
+        return f"Repo or revision not found. ({name})"
+    return f"{name}: {msg}"
+
+
+@app.get("/api/hf/files")
+def list_hf_files(
+    repo: str = Query(...),
+    revision: str = Query("main"),
+    hf_token: Optional[str] = Query(None),
+):
+    """Flat list of weight files in a repo. Recursive — folders aren't
+    surfaced; the user just sees the safetensors/ckpt/bin/gguf/pth files
+    with their full `rel_path` so subfolder copies disambiguate."""
+    from huggingface_hub import HfApi
+    from huggingface_hub.errors import HfHubHTTPError, RepositoryNotFoundError
+
+    token = hf_token or os.environ.get("HF_TOKEN") or None
+    api = HfApi()
+    try:
+        all_files = api.list_repo_files(repo_id=repo, revision=revision, token=token)
+    except RepositoryNotFoundError:
+        raise HTTPException(404, f"Repo not found: {repo}")
+    except HfHubHTTPError as e:
+        raise HTTPException(502, _format_hf_error(e))
+
+    weights = [p for p in all_files if Path(p).suffix.lower() in HF_WEIGHT_EXTENSIONS]
+    weights.sort()
+
+    # Sizes: get_paths_info is one API call for the whole list.
+    sizes: dict[str, int] = {}
+    lfs_flags: dict[str, bool] = {}
+    if weights:
+        try:
+            infos = api.get_paths_info(repo_id=repo, paths=weights, revision=revision, token=token)
+            for info in infos:
+                # `info` is RepoFile (size, lfs) or RepoFolder. We only asked
+                # for files but defensive-isinstance is cheap.
+                p = getattr(info, "path", None) or getattr(info, "rfilename", None)
+                if p is None:
+                    continue
+                sizes[p] = int(getattr(info, "size", 0) or 0)
+                lfs_flags[p] = bool(getattr(info, "lfs", None))
+        except Exception:
+            # Sizes are best-effort — UI shows "?" and download still works.
+            pass
+
+    return {
+        "repo":     repo,
+        "revision": revision,
+        "files":    [
+            {"rel_path": p, "size": sizes.get(p, 0), "lfs": lfs_flags.get(p, False)}
+            for p in weights
+        ],
+    }
+
+
+class HFDownloadFile(BaseModel):
+    rel_path:   str
     target_dir: str = "models"
-    hf_token: Optional[str] = None
+
+
+class HFDownloadRequest(BaseModel):
+    repo_id:    str
+    files:      list[HFDownloadFile] = []
+    revision:   Optional[str]        = "main"
+    hf_token:   Optional[str]        = None
+
+    # Back-compat fields. Old single-file callers send {repo_id, filename, target_dir}.
+    # `files` takes precedence when present.
+    filename:   Optional[str] = None
+    target_dir: Optional[str] = None
+
+
+def _resolve_target_dir(name: str) -> Path:
+    if name not in HF_TARGET_DIRS:
+        raise HTTPException(400, f"target_dir must be one of {sorted(HF_TARGET_DIRS)}")
+    return WORKSPACE / name
+
+
+def _hf_job_worker(job_id: str, repo: str, revision: str, rel_path: str,
+                   target_dir_name: str, token: Optional[str]) -> None:
+    """Run one HF download in a worker thread. Polls partial file size so
+    the UI can render a live progress bar without depending on huggingface_hub
+    surfacing a callback (it doesn't expose one cleanly)."""
+    from huggingface_hub import hf_hub_download, HfApi
+    from huggingface_hub.errors import HfHubHTTPError, RepositoryNotFoundError
+
+    job = hf_download_jobs[job_id]
+    job["status"]     = "running"
+    job["started_at"] = time.time()
+
+    target_root = _resolve_target_dir(target_dir_name)
+    repo_subdir = _hf_repo_path(repo, "")
+    local_dir   = target_root / repo_subdir
+    local_dir.mkdir(parents=True, exist_ok=True)
+    expected_dest = local_dir / rel_path
+
+    # Pre-flight size so the UI has a denominator before bytes start moving.
+    try:
+        api = HfApi()
+        infos = api.get_paths_info(repo_id=repo, paths=[rel_path], revision=revision, token=token)
+        if infos:
+            job["total_bytes"] = int(getattr(infos[0], "size", 0) or 0)
+    except Exception:
+        pass  # Size unknown; UI shows "? MB". Download still works.
+
+    # Background poller that watches the partial file size on disk while the
+    # blocking hf_hub_download call runs. huggingface_hub doesn't expose a
+    # progress callback we can rely on across versions, so this is the
+    # least fragile signal we have. Threads share the job dict by reference.
+    cancel_flag = {"cancel": False}
+    job["_cancel_flag"] = cancel_flag
+
+    def _poll_size() -> None:
+        # Look for the partial file under local_dir; HF either creates it
+        # at the final path with `.incomplete` suffix or, in newer versions,
+        # writes directly. Either is reliable enough as a progress proxy.
+        while job["status"] == "running" and not cancel_flag["cancel"]:
+            try:
+                if expected_dest.exists():
+                    job["downloaded_bytes"] = expected_dest.stat().st_size
+                else:
+                    # Incomplete files HF leaves around mid-download.
+                    candidates = sorted(
+                        local_dir.rglob(Path(rel_path).name + "*"),
+                        key=lambda p: p.stat().st_mtime, reverse=True,
+                    )
+                    if candidates:
+                        job["downloaded_bytes"] = candidates[0].stat().st_size
+            except OSError:
+                pass
+            time.sleep(1.0)
+
+    poll_thread = threading.Thread(target=_poll_size, daemon=True)
+    poll_thread.start()
+
+    try:
+        if cancel_flag["cancel"]:
+            job["status"] = "cancelled"
+            return
+        dest = hf_hub_download(
+            repo_id=repo,
+            filename=rel_path,
+            revision=revision,
+            local_dir=str(local_dir),
+            token=token,
+        )
+        if cancel_flag["cancel"]:
+            # Cancellation arrived after the file landed. Treat as cancelled
+            # but DON'T delete a fully-completed file — the user can choose
+            # to remove it from the LoRAs/models tab.
+            job["status"] = "cancelled"
+            return
+        # Final size = on-disk size, in case our poller missed the last
+        # write before this thread raced to flip the status.
+        try:
+            job["downloaded_bytes"] = Path(dest).stat().st_size
+        except OSError:
+            pass
+        job["dest_path"] = str(dest)
+        job["status"]    = "done"
+    except (RepositoryNotFoundError, HfHubHTTPError) as e:
+        job["status"] = "error"
+        job["error"]  = _format_hf_error(e)
+    except Exception as e:
+        job["status"] = "error"
+        job["error"]  = f"{type(e).__name__}: {e}"
+    finally:
+        job["finished_at"] = time.time()
+        # If cancelled mid-download, sweep the partial file. Done/error
+        # states leave the file in place (done = wanted; error = let the
+        # user inspect what got partially fetched).
+        if job["status"] == "cancelled" and not job.get("dest_path"):
+            try:
+                if expected_dest.exists():
+                    expected_dest.unlink()
+            except OSError:
+                pass
+
+
+def _enqueue_hf_job(repo: str, revision: str, rel_path: str,
+                    target_dir_name: str, token: Optional[str]) -> str:
+    job_id = secrets.token_urlsafe(12)
+    hf_download_jobs[job_id] = {
+        "id":               job_id,
+        "repo":             repo,
+        "revision":         revision,
+        "rel_path":         rel_path,
+        "target_dir":       target_dir_name,
+        "status":           "queued",
+        "created_at":       time.time(),
+        "downloaded_bytes": 0,
+        "total_bytes":      0,
+    }
+    _trim_hf_jobs()
+    threading.Thread(
+        target=_hf_job_worker,
+        args=(job_id, repo, revision, rel_path, target_dir_name, token),
+        daemon=True,
+    ).start()
+    return job_id
+
+
+@app.post("/api/hf/download")
+def hf_download_multi(req: HFDownloadRequest):
+    """Queue one job per requested file. Files run sequentially per request
+    but multiple requests can run in parallel — the limiting factor is the
+    user's bandwidth, not our scheduling.
+
+    Back-compat: a body with `filename` + `target_dir` and no `files` array
+    is treated as a single-file request. Old `/api/download/hf` callers
+    are forwarded here so this is the one source of truth.
+    """
+    token = req.hf_token or os.environ.get("HF_TOKEN") or None
+    revision = req.revision or "main"
+
+    files = req.files
+    if not files and req.filename:
+        # Back-compat single-file shape.
+        files = [HFDownloadFile(rel_path=req.filename, target_dir=req.target_dir or "models")]
+    if not files:
+        raise HTTPException(400, "No files specified")
+
+    job_ids: list[str] = []
+    for f in files:
+        if not f.rel_path:
+            continue
+        # Validate target_dir up front so the user gets one clear error,
+        # not N identical errors per file.
+        _resolve_target_dir(f.target_dir)
+        job_ids.append(_enqueue_hf_job(req.repo_id, revision, f.rel_path, f.target_dir, token))
+    return {"job_ids": job_ids}
+
+
+@app.get("/api/hf/jobs")
+def hf_jobs(since: Optional[float] = Query(None)):
+    """Snapshot of the job table. UI polls this every ~2s while there are
+    active jobs to render the queue panel."""
+    items = []
+    for j in hf_download_jobs.values():
+        if since and (j.get("finished_at") or j.get("created_at", 0)) < since:
+            continue
+        # Strip the cancel-flag dict — internal-only and not JSON-clean.
+        items.append({k: v for k, v in j.items() if not k.startswith("_")})
+    items.sort(key=lambda j: j.get("created_at", 0), reverse=True)
+    return {"jobs": items}
+
+
+@app.delete("/api/hf/jobs/{job_id}")
+def hf_job_cancel(job_id: str):
+    """Cancel a queued or running job. For running jobs we set a flag the
+    poller checks; if the file is already mid-write to disk, hf_hub_download
+    finishes the current call (no clean cancel handle) and we then drop the
+    partial file. Queued jobs flip immediately to cancelled.
+    """
+    job = hf_download_jobs.get(job_id)
+    if not job:
+        raise HTTPException(404, "Job not found")
+    if job["status"] in ("done", "error", "cancelled"):
+        return {"status": job["status"]}
+    flag = job.get("_cancel_flag")
+    if flag:
+        flag["cancel"] = True
+    if job["status"] == "queued":
+        job["status"] = "cancelled"
+        job["finished_at"] = time.time()
+    return {"status": "cancelling"}
+
+
+@app.post("/api/hf/jobs/{job_id}/retry")
+def hf_job_retry(job_id: str):
+    """Re-queue an errored or cancelled job with the same params."""
+    job = hf_download_jobs.get(job_id)
+    if not job:
+        raise HTTPException(404, "Job not found")
+    if job["status"] not in ("error", "cancelled"):
+        raise HTTPException(409, f"Cannot retry a job in '{job['status']}' state")
+    token = os.environ.get("HF_TOKEN") or None
+    new_id = _enqueue_hf_job(job["repo"], job["revision"], job["rel_path"], job["target_dir"], token)
+    return {"job_id": new_id}
 
 
 @app.post("/api/download/hf")
 async def download_hf(req: HFDownloadRequest):
-    target = WORKSPACE / req.target_dir
-    target.mkdir(parents=True, exist_ok=True)
-    env = os.environ.copy()
-    if req.hf_token:
-        env["HF_TOKEN"] = req.hf_token
-    cmd = ["huggingface-cli", "download", req.repo_id]
-    if req.filename:
-        cmd.append(req.filename)
-    cmd += ["--local-dir", str(target)]
-    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env, text=True)
-    launcher.track_download("hf", proc)
-    return {"status": "started", "pid": proc.pid}
+    """Legacy single-file endpoint. Forwards to the new multi-file flow so
+    we have one worker, one job table, and one set of error semantics. UI
+    callers should prefer /api/hf/download going forward.
+    """
+    return hf_download_multi(req)
 
 
 # ── CivitAI ──────────────────────────────────────────────────────────────

@@ -319,7 +319,10 @@
         <!-- Main column: prompt + settings -->
         <div>
           <div class="ws-section">
-            <div class="ws-section-title">Prompt</div>
+            <div class="ws-section-title">
+              <span>Prompt</span>
+              <button class="link-btn prompt-enhance-btn" id="wsEnhancePrompt" type="button">Enhance</button>
+            </div>
             <textarea class="ws-prompt" id="wsPrompt" placeholder="Describe what to generate…"></textarea>
           </div>
 
@@ -454,29 +457,86 @@
       <div class="page-head">
         <div>
           <div class="page-title">Downloads</div>
-          <div class="page-sub">Pull LoRA files from HuggingFace into your library.</div>
+          <div class="page-sub">Pull files from HuggingFace into your workspace.</div>
         </div>
       </div>
-      <div style="max-width:520px">
-        <div class="card" style="padding:14px">
+
+      <!-- Live download queue: rendered when there are active or recent jobs -->
+      <div id="dlQueueWrap" class="dl-queue-wrap" style="display:none">
+        <div class="dl-queue-head">
+          <div class="dl-queue-title">Active downloads</div>
+          <button type="button" class="link-btn" id="dlQueueClear">Clear completed</button>
+        </div>
+        <div id="dlQueueList" class="dl-queue-list"></div>
+      </div>
+
+      <div class="downloads-grid">
+        <div class="card hf-card" style="padding:14px">
           <div class="field-stack">
             <div class="field">
-              <label class="field-label">LoRA repo ID</label>
-              <input class="text-input" id="hfRepo" placeholder="e.g. username/example-lora">
+              <label class="field-label">HuggingFace repo</label>
+              <div style="display:flex;gap:8px">
+                <input class="text-input" id="hfRepo" placeholder="username/repo or full https URL">
+                <button class="btn primary" id="hfBrowseBtn"><svg><use href="#i-search"/></svg>Browse</button>
+              </div>
             </div>
             <div class="field">
-              <label class="field-label">Specific file <span class="hint">optional</span></label>
-              <input class="text-input" id="hfFile" placeholder="e.g. adapter.safetensors">
-            </div>
-            <div class="field">
-              <label class="field-label">HF token <span class="hint">for gated repos</span></label>
+              <label class="field-label">HF token <span class="hint">for gated/private repos</span></label>
               <input class="text-input mask-text" id="hfTokenDl" type="text" placeholder="hf_…" autocomplete="off" spellcheck="false" data-1p-ignore>
             </div>
-            <button class="btn primary block lg" id="hfDownloadBtn"><svg><use href="#i-down"/></svg>Start download</button>
+            <details class="hf-advanced">
+              <summary>Advanced — type an exact file path</summary>
+              <div class="field" style="margin-top:8px">
+                <label class="field-label">File path inside repo</label>
+                <input class="text-input" id="hfFile" placeholder="e.g. split_files/diffusion_models/foo.safetensors">
+              </div>
+              <div class="field">
+                <label class="field-label">Save under</label>
+                <select class="select" id="hfTargetDir">
+                  <option value="loras">loras</option>
+                  <option value="models" selected>models</option>
+                  <option value="checkpoints">checkpoints</option>
+                  <option value="components">components</option>
+                </select>
+              </div>
+              <button class="btn block" id="hfDownloadBtn"><svg><use href="#i-down"/></svg>Queue download</button>
+            </details>
           </div>
         </div>
       </div>
     </section>
+
+    <!-- HF Browser modal: flat list of safetensors/ckpt/bin/gguf/pth from a repo -->
+    <div class="modal-scrim" id="hfBrowserScrim" aria-hidden="true">
+      <div class="modal hf-browser" role="dialog" aria-modal="true" aria-labelledby="hfBrowserTitle">
+        <div class="modal-head">
+          <div id="hfBrowserTitle" class="modal-title">Browse HuggingFace</div>
+          <button class="icon-btn" id="hfBrowserClose" aria-label="Close"><svg><use href="#i-x"/></svg></button>
+        </div>
+        <div class="hf-browser-bar">
+          <input class="text-input" id="hfBrowserRepo" placeholder="username/repo or paste URL">
+          <button class="btn primary" id="hfBrowserGo">Go</button>
+        </div>
+        <div class="hf-browser-toolbar">
+          <input class="text-input hf-filter" id="hfBrowserFilter" placeholder="Filter files by name…">
+          <button type="button" class="link-btn" id="hfBrowserSelectAll">Select all</button>
+          <button type="button" class="link-btn" id="hfBrowserClear">Clear</button>
+        </div>
+        <div class="hf-browser-body" id="hfBrowserBody">
+          <div class="empty" style="padding:18px">Enter a repo and click Go.</div>
+        </div>
+        <div class="hf-browser-foot">
+          <div class="hf-browser-summary" id="hfBrowserSummary">No files selected</div>
+          <select class="select" id="hfBrowserDest">
+            <option value="loras">→ loras</option>
+            <option value="models" selected>→ models</option>
+            <option value="checkpoints">→ checkpoints</option>
+            <option value="components">→ components</option>
+          </select>
+          <button class="btn primary" id="hfBrowserDownload" disabled>Download 0 selected</button>
+        </div>
+      </div>
+    </div>
 
     <!-- Settings -->
     <section class="view" data-view="settings">

@@ -54,6 +54,13 @@ const state = {
   loraStates:    readJSONStorage('forge_lora_states', {}), // persisted per-model LoRA toggles + strengths
   components:    [],          // installed split-file components: [{target, filename, size_mb, path}]
   runtimes:      {},          // { model_id -> {state: 'missing'|'installing'|'ready'|'error', last_line?, error?} }
+  // HF browser + active download queue. The browser is a flat list of
+  // weight files (safetensors/ckpt/bin/gguf/pth) for a given repo. The
+  // queue tracks server-side download jobs so the user can see progress,
+  // cancel, retry, and dismiss without leaving the page.
+  hfBrowse:      { repo: '', revision: 'main', files: [], selected: new Set(), filter: '', loading: false, error: null },
+  downloadJobs:  [],          // mirror of /api/hf/jobs response
+  downloadStats: {},          // { job_id -> {prevBytes, prevAt, mbps} } for rolling MB/s
   chats:         {},          // { model_id -> [{role, text, thinking?, streaming?}] }
   chatSessions:  {},          // { model_id -> [{id,title,messages,compact_summary,…}] }
   activeChat:    {},          // { model_id -> session_id }
@@ -327,7 +334,7 @@ const api = {
   gpu:           () => json(apiCall('/api/gpu')),
   status:        () => json(apiCall('/api/status')),
   loras:         () => json(apiCall('/api/loras')),
-  assets:        () => json(apiCall('/api/assets')),
+  assets:        () => json(apiCall('/api/assets', { timeoutMs: 8000 })),
   // Lifecycle
   launch:        (b) => json(apiCall('/api/launch', jsonBody(b))),
   stop:          (id) => json(apiCall(`/api/stop/${id}`, { method: 'POST' })),
@@ -341,6 +348,7 @@ const api = {
   generate:      (b) => json(apiCall('/api/generate', jsonBody(b))),
   startGenerateJob: (b) => json(apiCall('/api/generate-jobs', jsonBody(b))),
   generationJob: (id) => json(apiCall(`/api/generate-jobs/${encodeURIComponent(id)}`)),
+  enhancePrompt: (b) => json(apiCall('/api/prompt/enhance', jsonBody(b))),
   cancel:        (id) => json(apiCall(`/api/cancel/${id}`, { method: 'POST' })),
   // Mutations
   deleteModel:   (id)   => json(apiCall(`/api/models/${id}`, { method: 'DELETE' })),
@@ -357,6 +365,14 @@ const api = {
   runtimeStatus:        (mid)      => json(apiCall(`/api/runtime/${encodeURIComponent(mid)}/status`)),
   installRuntime:       (mid)      => json(apiCall(`/api/runtime/${encodeURIComponent(mid)}/install`, { method: 'POST' })),
   runtimeJobStatus:     (mid, jid) => json(apiCall(`/api/runtime/${encodeURIComponent(mid)}/install-status/${encodeURIComponent(jid)}`)),
+  // HF browser + downloads. Replaces the old huggingface-cli subprocess
+  // path which deadlocked on a blocked stdout pipe.
+  hfFiles:     (repo, revision, hfToken) =>
+    json(apiCall(`/api/hf/files?repo=${encodeURIComponent(repo)}&revision=${encodeURIComponent(revision || 'main')}${hfToken ? '&hf_token=' + encodeURIComponent(hfToken) : ''}`)),
+  hfDownload:  (b)  => json(apiCall('/api/hf/download', jsonBody(b))),
+  hfJobs:      ()   => json(apiCall('/api/hf/jobs')),
+  hfJobCancel: (id) => json(apiCall(`/api/hf/jobs/${encodeURIComponent(id)}`, { method: 'DELETE' })),
+  hfJobRetry:  (id) => json(apiCall(`/api/hf/jobs/${encodeURIComponent(id)}/retry`, { method: 'POST' })),
   deleteAsset:   (path) => json(apiCall(`/api/assets?path=${encodeURIComponent(path)}`, { method: 'DELETE' })),
   // Phase 3: encrypt the file in the browser BEFORE upload when we have the
   // data key. Backend stores the bytes as-is (sees ciphertext, period).
@@ -381,7 +397,6 @@ const api = {
       headers,
     }));
   },
-  hfDownload:    (b) => json(apiCall('/api/download/hf', jsonBody(b))),
   civSearch:     (q, key) => {
     const p = new URLSearchParams({ query: q, types: 'LORA', limit: 24 });
     if (key) p.append('api_key', key);
@@ -760,6 +775,7 @@ function bindShell() {
   });
   $('#wsGenerate').addEventListener('click', onGenerate);
   $('#wsCancel').addEventListener('click', cancelGenerate);
+  $('#wsEnhancePrompt')?.addEventListener('click', enhanceWorkspacePrompt);
   $('#wsLoraAdd').addEventListener('click', () => {
     if (state.selected) openLoraPicker(state.selected);
   });
@@ -814,7 +830,34 @@ function bindShell() {
   $('#civUrlGo').addEventListener('click', civOpenByUrl);
   $('#civUrl').addEventListener('keydown', (e) => { if (e.key === 'Enter') civOpenByUrl(); });
 
-  $('#hfDownloadBtn').addEventListener('click', startHFDownload);
+  $('#hfDownloadBtn')?.addEventListener('click', startHFDownload);
+  $('#hfBrowseBtn')?.addEventListener('click', () => openHFBrowser());
+  $('#hfRepo')?.addEventListener('keydown', (e) => { if (e.key === 'Enter') openHFBrowser(); });
+  // HF Browser modal wiring. Each handler is null-safe so the modal works
+  // even before any tab navigation has touched the markup.
+  $('#hfBrowserClose')?.addEventListener('click', closeHFBrowser);
+  $('#hfBrowserScrim')?.addEventListener('click', (e) => { if (e.target === e.currentTarget) closeHFBrowser(); });
+  $('#hfBrowserGo')?.addEventListener('click', loadHFFiles);
+  $('#hfBrowserRepo')?.addEventListener('keydown', (e) => { if (e.key === 'Enter') loadHFFiles(); });
+  $('#hfBrowserFilter')?.addEventListener('input', (e) => {
+    state.hfBrowse.filter = e.target.value;
+    renderHFBrowserBody();
+  });
+  $('#hfBrowserSelectAll')?.addEventListener('click', () => {
+    const filt = (state.hfBrowse.filter || '').toLowerCase();
+    state.hfBrowse.files
+      .filter(f => !filt || f.rel_path.toLowerCase().includes(filt))
+      .forEach(f => state.hfBrowse.selected.add(f.rel_path));
+    renderHFBrowserBody();
+    updateHFBrowserSummary();
+  });
+  $('#hfBrowserClear')?.addEventListener('click', () => {
+    state.hfBrowse.selected = new Set();
+    renderHFBrowserBody();
+    updateHFBrowserSummary();
+  });
+  $('#hfBrowserDownload')?.addEventListener('click', submitHFBrowserDownload);
+  $('#dlQueueClear')?.addEventListener('click', clearCompletedDownloads);
   ['#settingsHFToken', '#wsHFToken', '#hfTokenDl'].forEach(sel => {
     $(sel)?.addEventListener('change', e => saveHFToken(e.target.value));
   });
@@ -885,9 +928,20 @@ function switchView(name, push = true) {
   }
   $$('.view').forEach(v => v.classList.toggle('active', v.dataset.view === name));
   $$('.nav-item').forEach(n => n.classList.toggle('active', n.dataset.view === name));
+  state.view = name;
   if (name === 'loras')   loadLoras();
   if (name === 'assets')  loadAssets();
   if (name === 'running') renderRunning();
+  if (name === 'downloads') {
+    // Make the queue panel visible (or render the empty state) and wake the
+    // poller so freshly-queued jobs appear right away when the user lands
+    // back on the Downloads view.
+    pokeDownloadQueuePoll();
+  } else {
+    // Repaint so any active jobs that should be hidden on other views are
+    // taken down — the panel is still scoped to the Downloads view today.
+    renderDownloadQueue();
+  }
 }
 
 window.addEventListener('popstate', (e) => {
@@ -3437,8 +3491,15 @@ async function deleteAssetAnywhere(asset) {
 
   // 2. Remove the underlying file (or fake-delete in preview mode).
   if (asset.path && !state.preview) {
-    try { await api.deleteAsset(asset.path); } catch {}
-    await loadAssets();
+    state.assets = state.assets.filter(a => a.path !== asset.path);
+    renderAssets();
+    try {
+      await api.deleteAsset(asset.path);
+      refreshAssetsSoon();
+    } catch (e) {
+      toast(`Delete failed: ${e.message || 'unknown'}`, 'error');
+      refreshAssetsSoon();
+    }
   } else {
     state.assets = state.assets.filter(a => a.path !== asset.path);
     renderAssets();
@@ -3484,6 +3545,58 @@ function bindWorkspaceInputs() {
   $('#wsPrompt').oninput     = (e) => { state.params.prompt = e.target.value; };
   $('#wsNegPrompt').oninput  = (e) => { state.params.negative_prompt = e.target.value; };
   bindSeedField();
+}
+
+function previewEnhancePrompt(prompt, m) {
+  const cleaned = String(prompt || '').replace(/\s+/g, ' ').trim();
+  if (!cleaned) return '';
+  const categoryCue = m?.category === 'video'
+    ? 'clear subject, natural motion, consistent lighting, stable camera, coherent temporal detail'
+    : 'clear subject, composition, lighting, material detail, coherent style';
+  return `${cleaned}, ${categoryCue}`;
+}
+
+async function enhanceWorkspacePrompt() {
+  const m = state.selected || state.models.find(x => x.id === state.workspace);
+  if (!m || m.category === 'llm') return;
+  const input = $('#wsPrompt');
+  const original = (input.value || '').trim();
+  if (!original) return toast('Write a prompt first.', 'error');
+  const btn = $('#wsEnhancePrompt');
+  const oldText = btn?.textContent || 'Enhance';
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = 'Enhancing…';
+  }
+  try {
+    let next;
+    if (state.preview) {
+      await delay(350);
+      next = previewEnhancePrompt(original, m);
+    } else {
+      const res = await api.enhancePrompt({
+        prompt: original,
+        model_id: m.id,
+        category: m.category,
+        hf_token: currentHFToken('#wsHFToken') || null,
+      });
+      next = (res.prompt || '').trim();
+    }
+    if (next && next !== original) {
+      input.value = next;
+      state.params.prompt = next;
+      toast('Prompt enhanced', 'success');
+    } else {
+      toast('Prompt already looks usable.', 'info');
+    }
+  } catch (e) {
+    toast(e.message || 'Prompt enhancer failed', 'error');
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = oldText;
+    }
+  }
 }
 
 async function sendLLMMessage() {
@@ -3748,7 +3861,7 @@ async function runQueue() {
   updateGenerateBtn();
   updateWsStatus();
   renderQueue();
-  if (!state.preview) await loadAssets();
+  if (!state.preview) refreshAssetsSoon();
 }
 
 async function runJob(job) {
@@ -4593,9 +4706,18 @@ async function loadAssets() {
   try {
     const data = await api.assets();
     state.assets = data.assets || [];
-  } catch { state.assets = []; }
+  } catch {
+    // Keep the current grid instead of blanking it if the proxy/API stalls.
+    return;
+  }
   $('#assetNavCount').textContent = state.assets.length;
   renderAssets();
+}
+
+function refreshAssetsSoon() {
+  setTimeout(() => {
+    loadAssets().catch(() => {});
+  }, 250);
 }
 
 function renderAssets() {
@@ -4661,20 +4783,322 @@ async function uploadFiles(files) {
 }
 
 // ── HF download ──────────────────────────────────────────────────────────
+// Advanced "type the exact file path" path. Used when the user already
+// knows the rel_path inside the repo and doesn't want to open the browser.
+// The flow now goes through the new job-backed endpoint, so progress shows
+// up in the queue panel just like browser-driven downloads.
 async function startHFDownload() {
   const repo = $('#hfRepo').value.trim();
   if (!repo) return toast('Enter a repo ID', 'error');
   const file = $('#hfFile').value.trim();
-  const token = currentHFToken('#hfTokenDl');
+  if (!file) return toast('Enter a file path inside the repo, or use Browse', 'error');
+  const target = $('#hfTargetDir')?.value || 'models';
+  const token  = currentHFToken('#hfTokenDl');
   try {
-    await api.hfDownload({ repo_id: repo, filename: file || null, target_dir: 'loras', hf_token: token || null });
-    toast(`Started: ${repo}`, 'success');
-  } catch { toast('Failed to start', 'error'); return; }
+    const cleaned = parseHFRepoInput(repo);
+    await api.hfDownload({
+      repo_id: cleaned.repo,
+      revision: cleaned.revision,
+      files:    [{ rel_path: file, target_dir: target }],
+      hf_token: token || null,
+    });
+    toast(`Queued ${file}`, 'success');
+    pokeDownloadQueuePoll();
+  } catch (e) {
+    toast(`Failed to queue: ${e.message || 'unknown'}`, 'error');
+  }
+}
 
-  // The download runs in a backend background subprocess; poll the LoRA list
-  // for ~3 minutes so a freshly-arrived file shows up in the LoRAs tab without
-  // the user having to navigate away and back.
-  watchForNewLoras(repo);
+// Accepts username/repo, full https URLs, and tree/branch URLs.
+//   "Lightricks/LTX-2.3"
+//   "https://huggingface.co/Lightricks/LTX-2.3"
+//   "https://huggingface.co/Lightricks/LTX-2.3/tree/main"
+function parseHFRepoInput(raw) {
+  const value = String(raw || '').trim();
+  let repo = value, revision = 'main';
+  const m = value.match(/huggingface\.co\/([^/]+\/[^/?#]+)(?:\/(?:tree|blob)\/([^/?#]+))?/i);
+  if (m) {
+    repo = m[1];
+    if (m[2]) revision = m[2];
+  }
+  return { repo, revision };
+}
+
+// ── HF Browser modal ────────────────────────────────────────────────────
+function openHFBrowser(initialRepo) {
+  const scrim = $('#hfBrowserScrim');
+  if (!scrim) return;
+  scrim.classList.add('open');
+  scrim.setAttribute('aria-hidden', 'false');
+  // Pre-fill from the Downloads page's repo input if the user is using the
+  // top-level Browse button. Empty otherwise.
+  const inp = $('#hfBrowserRepo');
+  if (inp) {
+    inp.value = initialRepo || $('#hfRepo')?.value || '';
+    inp.focus();
+  }
+  // Reset selection and filter when reopening — keeps state clean across
+  // independent browse sessions.
+  state.hfBrowse.selected = new Set();
+  state.hfBrowse.filter = '';
+  $('#hfBrowserFilter').value = '';
+  if (initialRepo || inp.value) loadHFFiles();
+  else renderHFBrowserBody();
+  updateHFBrowserSummary();
+}
+
+function closeHFBrowser() {
+  const scrim = $('#hfBrowserScrim');
+  if (!scrim) return;
+  scrim.classList.remove('open');
+  scrim.setAttribute('aria-hidden', 'true');
+}
+
+async function loadHFFiles() {
+  const raw = $('#hfBrowserRepo').value.trim();
+  if (!raw) return;
+  const { repo, revision } = parseHFRepoInput(raw);
+  const token = currentHFToken('#hfTokenDl');
+  state.hfBrowse = { ...state.hfBrowse, repo, revision, files: [], selected: new Set(), loading: true, error: null };
+  renderHFBrowserBody();
+  try {
+    const data = await api.hfFiles(repo, revision, token);
+    state.hfBrowse.files   = data.files || [];
+    state.hfBrowse.loading = false;
+  } catch (e) {
+    state.hfBrowse.loading = false;
+    state.hfBrowse.error   = e.message || 'Failed to fetch files';
+  }
+  renderHFBrowserBody();
+  updateHFBrowserSummary();
+}
+
+function renderHFBrowserBody() {
+  const body = $('#hfBrowserBody');
+  if (!body) return;
+  const s = state.hfBrowse;
+  if (s.loading) {
+    body.innerHTML = `<div class="empty" style="padding:18px"><span class="spinner"></span> Loading files…</div>`;
+    return;
+  }
+  if (s.error) {
+    body.innerHTML = `<div class="empty hf-error" style="padding:18px"><svg><use href="#i-x"/></svg> ${esc(s.error)}</div>`;
+    return;
+  }
+  if (!s.files.length && !s.repo) {
+    body.innerHTML = `<div class="empty" style="padding:18px">Enter a repo and click Go.</div>`;
+    return;
+  }
+  if (!s.files.length) {
+    body.innerHTML = `<div class="empty" style="padding:18px">No safetensors / ckpt / bin / gguf files found in <span class="mono">${esc(s.repo)}</span>.</div>`;
+    return;
+  }
+  const filt = (s.filter || '').toLowerCase();
+  const visible = filt ? s.files.filter(f => f.rel_path.toLowerCase().includes(filt)) : s.files;
+  if (!visible.length) {
+    body.innerHTML = `<div class="empty" style="padding:18px">No matches for "${esc(s.filter)}".</div>`;
+    return;
+  }
+  body.innerHTML = visible.map(f => {
+    const checked = s.selected.has(f.rel_path) ? 'checked' : '';
+    const sizeStr = f.size ? formatBytes(f.size) : '?';
+    const lfs = f.lfs ? '<span class="lfs-pill">LFS</span>' : '';
+    return `<label class="hf-file-row ${checked ? 'selected' : ''}">
+      <input type="checkbox" data-hf-file="${esc(f.rel_path)}" ${checked}>
+      <span class="hf-file-name" title="${esc(f.rel_path)}">${esc(f.rel_path)}</span>
+      <span class="hf-file-size">${sizeStr}</span>
+      ${lfs}
+    </label>`;
+  }).join('');
+  $$('[data-hf-file]', body).forEach(cb => cb.addEventListener('change', () => {
+    const path = cb.dataset.hfFile;
+    if (cb.checked) state.hfBrowse.selected.add(path);
+    else            state.hfBrowse.selected.delete(path);
+    cb.closest('.hf-file-row')?.classList.toggle('selected', cb.checked);
+    updateHFBrowserSummary();
+  }));
+}
+
+function updateHFBrowserSummary() {
+  const s = state.hfBrowse;
+  const sel = s.selected;
+  const totalBytes = s.files.filter(f => sel.has(f.rel_path)).reduce((acc, f) => acc + (f.size || 0), 0);
+  const summary = $('#hfBrowserSummary');
+  if (summary) {
+    summary.textContent = sel.size
+      ? `${sel.size} selected · ${formatBytes(totalBytes)}`
+      : 'No files selected';
+  }
+  const btn = $('#hfBrowserDownload');
+  if (btn) {
+    btn.disabled = sel.size === 0;
+    btn.textContent = sel.size ? `Download ${sel.size} selected` : 'Download 0 selected';
+  }
+}
+
+async function submitHFBrowserDownload() {
+  const s = state.hfBrowse;
+  if (!s.selected.size) return;
+  const dest = $('#hfBrowserDest')?.value || 'models';
+  const token = currentHFToken('#hfTokenDl');
+  const files = [...s.selected].map(rel_path => ({ rel_path, target_dir: dest }));
+  try {
+    await api.hfDownload({
+      repo_id:  s.repo,
+      revision: s.revision || 'main',
+      files,
+      hf_token: token || null,
+    });
+    toast(`Queued ${files.length} file${files.length === 1 ? '' : 's'} from ${s.repo}`, 'success');
+    closeHFBrowser();
+    pokeDownloadQueuePoll();
+  } catch (e) {
+    toast(`Failed to queue: ${e.message || 'unknown'}`, 'error');
+  }
+}
+
+// ── Download queue panel ────────────────────────────────────────────────
+// Polls /api/hf/jobs while there are active jobs OR while the user is on
+// the Downloads view. Stops when everything is settled to keep idle pods
+// quiet. `pokeDownloadQueuePoll` kicks the poller awake after a new job
+// is queued so we don't wait up to 4s for the first render tick.
+
+let _dlPollTimer = null;
+
+function pokeDownloadQueuePoll() {
+  if (_dlPollTimer) { clearTimeout(_dlPollTimer); _dlPollTimer = null; }
+  pollDownloadQueue();
+}
+
+async function pollDownloadQueue() {
+  let data;
+  try {
+    data = await api.hfJobs();
+  } catch {
+    // Backoff on network errors — try again in 5s.
+    _dlPollTimer = setTimeout(pollDownloadQueue, 5000);
+    return;
+  }
+  const now = Date.now();
+  // Compute rolling MB/s per job using the previous poll's bytes.
+  for (const j of data.jobs || []) {
+    const prev = state.downloadStats[j.id];
+    if (prev && j.status === 'running' && j.downloaded_bytes >= prev.prevBytes) {
+      const dt = (now - prev.prevAt) / 1000;
+      const db = j.downloaded_bytes - prev.prevBytes;
+      if (dt > 0) j.mbps = (db / 1024 / 1024) / dt;
+    }
+    state.downloadStats[j.id] = { prevBytes: j.downloaded_bytes || 0, prevAt: now, mbps: j.mbps };
+  }
+  state.downloadJobs = data.jobs || [];
+  renderDownloadQueue();
+  // Keep polling while any job is queued/running, or every 4s while the
+  // Downloads view is the active route (so newly queued items show up
+  // even when the previous batch finished).
+  const hasActive = state.downloadJobs.some(j => j.status === 'queued' || j.status === 'running');
+  const onDownloads = state.view === 'downloads';
+  const interval = hasActive ? 1500 : (onDownloads ? 4000 : 0);
+  if (interval) {
+    _dlPollTimer = setTimeout(pollDownloadQueue, interval);
+  } else {
+    _dlPollTimer = null;
+  }
+}
+
+function renderDownloadQueue() {
+  const wrap = $('#dlQueueWrap');
+  const list = $('#dlQueueList');
+  if (!wrap || !list) return;
+  // Show the panel only on the Downloads page or when there's actually
+  // something happening — keeps other views unchanged.
+  const onDownloads = state.view === 'downloads';
+  const visible = onDownloads || state.downloadJobs.some(j => j.status === 'queued' || j.status === 'running');
+  if (!visible || !state.downloadJobs.length) {
+    wrap.style.display = 'none';
+    return;
+  }
+  wrap.style.display = '';
+  list.innerHTML = state.downloadJobs.map(renderDLJob).join('');
+  // Wire row buttons.
+  $$('[data-dl-cancel]', list).forEach(b => b.addEventListener('click', () => cancelDownloadJob(b.dataset.dlCancel)));
+  $$('[data-dl-retry]',  list).forEach(b => b.addEventListener('click', () => retryDownloadJob(b.dataset.dlRetry)));
+  $$('[data-dl-dismiss]', list).forEach(b => b.addEventListener('click', () => dismissDownloadJob(b.dataset.dlDismiss)));
+}
+
+function renderDLJob(j) {
+  const total  = j.total_bytes || 0;
+  const got    = j.downloaded_bytes || 0;
+  const pct    = total > 0 ? Math.min(100, (got / total) * 100) : (j.status === 'done' ? 100 : 0);
+  const sizes  = total > 0 ? `${formatBytes(got)} / ${formatBytes(total)}` : (got ? formatBytes(got) : '');
+  const mbps   = j.mbps && j.status === 'running' ? ` · ${j.mbps.toFixed(1)} MB/s` : '';
+  const stateLabel = {
+    queued:    'Queued',
+    running:   'Downloading…',
+    done:      'Done',
+    error:     'Failed',
+    cancelled: 'Cancelled',
+  }[j.status] || j.status;
+  const action = j.status === 'queued' || j.status === 'running'
+    ? `<button class="btn xs" data-dl-cancel="${esc(j.id)}" title="Cancel"><svg><use href="#i-x"/></svg></button>`
+    : j.status === 'error' || j.status === 'cancelled'
+    ? `<button class="btn xs" data-dl-retry="${esc(j.id)}">Retry</button>
+       <button class="btn xs" data-dl-dismiss="${esc(j.id)}" title="Dismiss"><svg><use href="#i-x"/></svg></button>`
+    : `<button class="btn xs" data-dl-dismiss="${esc(j.id)}" title="Dismiss"><svg><use href="#i-x"/></svg></button>`;
+  const errRow = j.status === 'error' && j.error
+    ? `<div class="dl-job-error">${esc(j.error)}</div>`
+    : '';
+  return `<div class="dl-job dl-job-${j.status}">
+    <div class="dl-job-meta">
+      <div class="dl-job-name" title="${esc(j.repo)} · ${esc(j.rel_path)}">${esc(j.rel_path)}</div>
+      <div class="dl-job-sub">${esc(j.repo)} · ${esc(j.target_dir)} · ${esc(stateLabel)}${mbps}</div>
+    </div>
+    <div class="dl-job-bar"><div class="dl-job-fill" style="width:${pct.toFixed(1)}%"></div></div>
+    <div class="dl-job-side">
+      <div class="dl-job-sizes">${sizes}</div>
+      <div class="dl-job-actions">${action}</div>
+    </div>
+    ${errRow}
+  </div>`;
+}
+
+async function cancelDownloadJob(id) {
+  try {
+    await api.hfJobCancel(id);
+    pokeDownloadQueuePoll();
+  } catch (e) {
+    toast(`Cancel failed: ${e.message || 'unknown'}`, 'error');
+  }
+}
+
+async function retryDownloadJob(id) {
+  try {
+    await api.hfJobRetry(id);
+    toast('Retrying…', 'info');
+    pokeDownloadQueuePoll();
+  } catch (e) {
+    toast(`Retry failed: ${e.message || 'unknown'}`, 'error');
+  }
+}
+
+function dismissDownloadJob(id) {
+  // Client-side only: just hide the row. Backend keeps the job in its
+  // table for the next 200 jobs anyway. Re-poll so the panel collapses
+  // when nothing's left.
+  state.downloadJobs = state.downloadJobs.filter(j => j.id !== id);
+  delete state.downloadStats[id];
+  renderDownloadQueue();
+}
+
+async function clearCompletedDownloads() {
+  state.downloadJobs = state.downloadJobs.filter(j => j.status === 'queued' || j.status === 'running');
+  renderDownloadQueue();
+}
+
+function formatBytes(n) {
+  if (!n || n < 1024) return `${n || 0} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  if (n < 1024 * 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MB`;
+  return `${(n / 1024 / 1024 / 1024).toFixed(2)} GB`;
 }
 
 async function watchForNewLoras(label) {
@@ -4723,32 +5147,6 @@ function confirmModal(title, text, confirmLabel = 'OK', danger = false) {
 // cards as production. Append entries here when adding new runners.
 function mockModels() {
   return [
-    {
-      id: 'tinyllama-chat', name: 'TinyLlama Chat 1.1B', category: 'llm',
-      description: 'Lightweight local chat model for prototyping the text workspace UI. Small enough for quick iteration; not intended as the final quality bar.',
-      runner_module: 'backend.runners.tinyllama_chat',
-      hf_repo: 'TinyLlama/TinyLlama-1.1B-Chat-v1.0',
-      min_vram_gb: 4, recommended_vram_gb: 8,
-      context_window: 2048,
-      context_by_vram: [
-        { min_gb: 12, tokens: 4096, label: 'extended' },
-        { min_gb: 0,  tokens: 2048, label: 'safe default' },
-      ],
-      context_policy: {
-        mode: 'workspace',
-        auto_compact_at: 0.82,
-        keep_recent_messages: 8,
-      },
-      supports_lora: false, gpu_support: ['nvidia'],
-      param_groups: ['llm'],
-      param_keys: ['thinking', 'max_new_tokens', 'temperature', 'top_p'],
-      param_overrides: {
-        max_new_tokens: { default: 512, min: 64, max: 2048, step: 64 },
-        temperature:    { default: 0.7, min: 0, max: 2, step: 0.05 },
-        top_p:          { default: 0.9, min: 0, max: 1, step: 0.01 },
-        thinking:       { default: true },
-      },
-    },
     {
       id: 'qwen-image', name: 'Qwen-Image', category: 'image',
       description: "Alibaba's Qwen-Image text-to-image. Strong prompt adherence, native 1328×1328. ~40 GB on first download.",

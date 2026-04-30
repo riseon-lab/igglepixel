@@ -1175,6 +1175,11 @@ body::before {
   text-transform: none;
   letter-spacing: 0;
 }
+.prompt-enhance-btn {
+  font-size: 10.5px;
+  text-transform: none;
+  letter-spacing: 0;
+}
 
 .ws-prompt {
   width: 100%;
