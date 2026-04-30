@@ -177,9 +177,11 @@ class Runner(RunnerBase):
         if self._cancel:
             return self.asset_response([], meta={"cancelled": True, "model": self.model_id})
 
-        # Result.frames is a list of frames (per-batch, per-frame PIL images).
-        # WanImageToVideoPipeline returns shape [batch][frame] of PIL Images.
-        frames_out = result.frames[0] if hasattr(result, "frames") else result.images
+        # Wan/diffusers can return either [batch][frame] PIL lists or array-like
+        # tensors. Normalize before moderation/export so array truth checks do
+        # not explode and ffmpeg always receives RGB PIL frames.
+        raw_frames = result.frames if hasattr(result, "frames") else result.images
+        frames_out = self._normalize_video_frames(raw_frames)
         from backend import moderator
         if moderator.is_video_flagged(frames_out):
             return self.asset_response([], meta={"flagged": True, "model": self.model_id, "reason": "moderation"})

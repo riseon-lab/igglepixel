@@ -453,7 +453,8 @@ class Runner(ABC):
         import subprocess
         import tempfile
 
-        if not frames:
+        frames = Runner._normalize_video_frames(frames)
+        if len(frames) == 0:
             raise ValueError("save_video: empty frames list")
 
         dest.parent.mkdir(parents=True, exist_ok=True)
@@ -501,6 +502,7 @@ class Runner(ABC):
                 for frame in frames:
                     proc.stdin.write(frame.convert("RGB").tobytes())
                 proc.stdin.close()
+                proc.stdin = None
                 _, err = proc.communicate(timeout=120)
                 if proc.returncode != 0 or not tmp_path.exists() or tmp_path.stat().st_size == 0:
                     raise RuntimeError(
@@ -524,6 +526,87 @@ class Runner(ABC):
             return fcrypto.write_encrypted(key, dest, plaintext)
         dest.write_bytes(plaintext)
         return dest
+
+    @staticmethod
+    def _normalize_video_frames(frames) -> list:
+        """Return video frames as a plain list of RGB PIL images.
+
+        Diffusers video pipelines are not perfectly consistent here: depending
+        on pipeline/version they can return `[batch][frame]` PIL lists, a
+        NumPy array shaped like `(frames, h, w, c)`, or tensor-like arrays. We
+        normalize once so truth checks, moderation, and ffmpeg export do not
+        trip over array semantics.
+        """
+        from PIL import Image
+
+        def as_array(value):
+            if hasattr(value, "detach"):
+                value = value.detach().cpu()
+            if hasattr(value, "numpy"):
+                value = value.numpy()
+            if hasattr(value, "shape"):
+                import numpy as np
+                return np.asarray(value)
+            return None
+
+        def image_from_array(value):
+            import numpy as np
+            arr = as_array(value)
+            if arr is None:
+                raise TypeError(f"Unsupported video frame type: {type(value).__name__}")
+
+            # Drop leading batch dimension when present.
+            while arr.ndim > 3 and arr.shape[0] == 1:
+                arr = arr[0]
+            if arr.ndim == 3 and arr.shape[0] in (1, 3, 4) and arr.shape[-1] not in (1, 3, 4):
+                arr = np.moveaxis(arr, 0, -1)
+            if arr.dtype.kind == "f":
+                # Diffusers tensors/arrays are often 0..1 floats; if they are
+                # already 0..255, clipping below keeps them sensible.
+                if float(np.nanmax(arr)) <= 1.0:
+                    arr = arr * 255.0
+                arr = np.nan_to_num(arr, nan=0.0, posinf=255.0, neginf=0.0)
+            arr = np.clip(arr, 0, 255).astype("uint8")
+
+            if arr.ndim == 2:
+                return Image.fromarray(arr, mode="L").convert("RGB")
+            if arr.ndim != 3:
+                raise ValueError(f"Unsupported video frame shape: {arr.shape}")
+            if arr.shape[-1] == 1:
+                arr = arr[..., 0]
+                return Image.fromarray(arr, mode="L").convert("RGB")
+            if arr.shape[-1] >= 3:
+                return Image.fromarray(arr[..., :3], mode="RGB")
+            raise ValueError(f"Unsupported video frame shape: {arr.shape}")
+
+        def frame_to_pil(frame):
+            if isinstance(frame, Image.Image):
+                return frame.convert("RGB")
+            return image_from_array(frame)
+
+        if frames is None:
+            return []
+        if isinstance(frames, Image.Image):
+            return [frames.convert("RGB")]
+
+        arr = as_array(frames)
+        if arr is not None:
+            if arr.ndim == 5:
+                arr = arr[0] if arr.shape[0] == 1 else arr.reshape((-1,) + arr.shape[-3:])
+            if arr.ndim == 4:
+                return [frame_to_pil(frame) for frame in arr]
+            return [frame_to_pil(arr)]
+
+        if not isinstance(frames, (list, tuple)):
+            frames = list(frames)
+
+        normalized = []
+        for frame in frames:
+            if isinstance(frame, (list, tuple)):
+                normalized.extend(Runner._normalize_video_frames(frame))
+            else:
+                normalized.append(frame_to_pil(frame))
+        return normalized
 
     @staticmethod
     def load_image(visible_path: Path):

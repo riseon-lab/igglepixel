@@ -93,18 +93,27 @@ def is_video_flagged(frames) -> bool:
     """
     if not is_enabled():
         return False
-    if not frames:
+    if frames is None:
+        print("[moderator] video produced no frames, blocking", flush=True)
+        return True
+    try:
+        frame_count = len(frames)
+    except TypeError:
+        frames = list(frames)
+        frame_count = len(frames)
+
+    if frame_count <= 0:
         print("[moderator] video produced no frames, blocking", flush=True)
         return True
 
-    sample_indices = _video_sample_indices(len(frames))
+    sample_indices = _video_sample_indices(frame_count)
     print(
-        f"[moderator] scanning {len(sample_indices)}/{len(frames)} video frames",
+        f"[moderator] scanning {len(sample_indices)}/{frame_count} video frames",
         flush=True,
     )
     for idx in sample_indices:
         if is_flagged(frames[idx]):
-            print(f"[moderator] flagged video frame {idx + 1}/{len(frames)}", flush=True)
+            print(f"[moderator] flagged video frame {idx + 1}/{frame_count}", flush=True)
             return True
     return False
 
