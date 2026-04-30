@@ -443,7 +443,8 @@ async function bootApp() {
 async function ensureServiceWorker() {
   if (!('serviceWorker' in navigator)) return;
   try {
-    const reg = await navigator.serviceWorker.register('/sw.js', { scope: '/' });
+    const reg = await navigator.serviceWorker.register('/sw.js', { scope: '/', updateViaCache: 'none' });
+    try { await reg.update(); } catch {}
     // Wait for it to be controlling the page so the first asset GET goes
     // through. Without this, the very first <img> on a fresh tab can race
     // and bypass decryption.
@@ -2512,6 +2513,8 @@ function imgCellHtml(key, label, slot, required, hint) {
 }
 
 function generatedCellHtml(asset) {
+  const u = asset ? esc(asset.url) : '';
+  const n = asset ? esc(asset.name) : '';
   return `<div class="img-cell generated${asset ? ' has-media' : ' empty'}" data-input="generated">
     <div class="img-cell-head">
       <div class="label">Generated</div>
@@ -2522,7 +2525,9 @@ function generatedCellHtml(asset) {
       </button>` : ''}
     <div class="img-cell-content" ${asset ? 'data-zoom="1"' : ''}>
       ${asset
-        ? `<img src="${esc(asset.url)}" alt="${esc(asset.name)}">`
+        ? (asset.kind === 'video'
+            ? `<video src="${u}" muted playsinline preload="metadata"></video>`
+            : `<img src="${u}" alt="${n}">`)
         : `<div class="img-cell-empty">
              <svg class="icon" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M5 12h14"/><path d="M12 5v14"/></svg>
              Output appears here
@@ -3048,7 +3053,7 @@ function renderRecents(modelId) {
     const a = items[idx];
     const u = esc(a.url);
     return `<div class="asset" data-recent-idx="${idx}">
-      ${a.kind === 'video' ? `<video src="${u}" muted></video>` : `<img src="${u}" loading="lazy">`}
+      ${a.kind === 'video' ? `<video src="${u}" muted playsinline preload="metadata"></video>` : `<img src="${u}" loading="lazy">`}
       <button class="asset-menu-btn" data-asset-menu="${idx}" data-asset-source="recent" title="Actions">
         <svg><use href="#i-dots"/></svg>
       </button>
@@ -3793,7 +3798,7 @@ function _renderLightbox() {
     <button class="lightbox-nav next" id="lightboxNext" aria-label="Next">›</button>
   ` : '';
   stage.innerHTML = (asset.kind === 'video'
-    ? `<video src="${u}" controls autoplay loop></video>`
+    ? `<video src="${u}" controls autoplay loop playsinline preload="metadata"></video>`
     : `<img src="${u}" alt="${esc(asset.name || '')}">`) + navArrows;
   $('#lightboxFoot').textContent = asset.path || '';
   $('#lightboxDownload').onclick = () => {
@@ -4372,7 +4377,7 @@ function renderAssets() {
     const u = esc(a.url), n = esc(a.name);
     return `<div class="asset" data-asset-idx="${i}">
       ${a.kind === 'video'
-        ? `<video src="${u}" muted></video>`
+        ? `<video src="${u}" muted playsinline preload="metadata"></video>`
         : `<img src="${u}" loading="lazy" alt="${n}">`}
       <span class="asset-kind">${esc(a.source)}</span>
       <button class="asset-menu-btn" data-asset-menu="${i}" data-asset-source="library" title="Actions">

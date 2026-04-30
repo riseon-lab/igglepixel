@@ -78,7 +78,7 @@ async function handle(req) {
   // Video elements commonly request byte ranges. AES-GCM ciphertext cannot be
   // decrypted from an arbitrary partial range, so for encrypted assets we
   // intentionally fetch the complete blob from the backend, decrypt it, and
-  // return a normal 200 response to the media element.
+  // then apply any requested range to the plaintext.
   const upstreamReq = req.headers.has("range") ? withoutRange(req) : req;
   const upstream = await fetch(upstreamReq);
   if (!upstream.ok) return upstream;
@@ -135,19 +135,69 @@ async function handle(req) {
   const mime = guessMime(req.url)
     || upstream.headers.get("content-type")
     || "application/octet-stream";
-  // Explicit Content-Length + Accept-Ranges:none stops <video> elements
-  // from re-issuing range requests in a loop. We only ever serve the full
-  // decrypted blob, so the video element can treat it as a complete stream.
+  // Video elements need byte ranges for reliable metadata/duration probing.
+  // We cannot decrypt arbitrary ciphertext ranges, so we fetch/decrypt the full
+  // encrypted blob above, then satisfy the original Range request against the
+  // plaintext bytes here.
+  const range = req.headers.get("range");
+  if (range) {
+    const parsed = parseRange(range, pt.byteLength);
+    if (!parsed) {
+      return new Response("", {
+        status: 416,
+        headers: {
+          "content-range": `bytes */${pt.byteLength}`,
+          "accept-ranges": "bytes",
+          "cache-control": "no-store",
+        },
+      });
+    }
+    const chunk = pt.slice(parsed.start, parsed.end + 1);
+    return new Response(chunk, {
+      status: 206,
+      headers: {
+        "content-type": mime,
+        "content-length": String(chunk.byteLength),
+        "content-range": `bytes ${parsed.start}-${parsed.end}/${pt.byteLength}`,
+        "accept-ranges": "bytes",
+        "cache-control": "no-store",
+        "x-forge-decrypted": "1",
+      },
+    });
+  }
+
+  // Full response path for images and non-range media requests.
   return new Response(pt, {
     status:  200,
     headers: {
       "content-type":   mime,
       "content-length": String(pt.byteLength),
-      "accept-ranges":  "none",
+      "accept-ranges":  "bytes",
       "cache-control":  "no-store",
       "x-forge-decrypted": "1",
     },
   });
+}
+
+function parseRange(header, size) {
+  const match = /^bytes=(\d*)-(\d*)$/.exec(header || "");
+  if (!match || size <= 0) return null;
+  let start;
+  let end;
+  if (match[1] === "" && match[2] === "") return null;
+  if (match[1] === "") {
+    const suffix = Number(match[2]);
+    if (!Number.isFinite(suffix) || suffix <= 0) return null;
+    start = Math.max(size - suffix, 0);
+    end = size - 1;
+  } else {
+    start = Number(match[1]);
+    end = match[2] === "" ? size - 1 : Number(match[2]);
+    if (!Number.isFinite(start) || !Number.isFinite(end)) return null;
+    if (start > end || start >= size) return null;
+    end = Math.min(end, size - 1);
+  }
+  return { start, end };
 }
 
 function withoutRange(req) {
