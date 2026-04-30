@@ -122,11 +122,9 @@ class ModelLauncher:
         # Run from repo root so `python -m backend.runner_host` resolves.
         repo_root = Path(__file__).resolve().parent.parent
 
-        # Per-runner venv: when the registry declares a `runtime` block,
-        # spawn against that venv's python instead of the shared system
-        # interpreter. Used today by LTX-2.3 for its isolated ltx-pipelines
-        # dependency stack. Other runners pass through to sys.executable as
-        # before.
+        # Runtime profile: models with an isolated dependency profile spawn
+        # against that profile's venv instead of the shared system interpreter.
+        # Other runners pass through to sys.executable as before.
         python_bin = sys.executable
         runtime = model.get("runtime") or {}
         runtime_id = runtime.get("id")
@@ -136,7 +134,7 @@ class ModelLauncher:
                 return {
                     "status":  "needs_runtime",
                     "runtime": runtime_id,
-                    "message": f"Runtime '{runtime_id}' is missing or stale. Install it from the drawer first.",
+                    "message": f"Runtime profile '{runtime_id}' is missing or stale. Start again to prepare it.",
                 }
             python_bin = str(rp)
 

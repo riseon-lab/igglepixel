@@ -1,4 +1,5 @@
 import asyncio
+import copy
 import hmac
 import hashlib
 import json
@@ -576,17 +577,45 @@ def model_download(model_id: str, body: DownloadBody):
 
 
 # ── Registry ─────────────────────────────────────────────────────────────
+def _resolve_runtime_spec(registry: dict, model: dict) -> Optional[dict]:
+    """Resolve a model's runtime profile into the concrete runtime spec.
+
+    Models may still declare a legacy inline `runtime` block; profiles are the
+    preferred path because multiple models can share one dependency runtime.
+    """
+    if model.get("runtime"):
+        return copy.deepcopy(model["runtime"])
+    profile_id = model.get("runtime_profile")
+    if not profile_id:
+        return None
+    profile = (registry.get("runtime_profiles") or {}).get(profile_id)
+    if not profile:
+        return None
+    spec = copy.deepcopy(profile)
+    spec.setdefault("id", profile_id)
+    return spec
+
+
+def _with_resolved_runtime(registry: dict, model: dict) -> dict:
+    model = copy.deepcopy(model)
+    spec = _resolve_runtime_spec(registry, model)
+    if spec:
+        model["runtime"] = spec
+    return model
+
+
 @app.get("/api/models")
 def get_models():
     with open(REGISTRY_PATH) as f:
         data = json.load(f)
     gpu = detect_gpu()
-    for m in data["models"]:
+    models = [_with_resolved_runtime(data, m) for m in data["models"]]
+    for m in models:
         m["gpu_compatible"]   = gpu["type"] in m.get("gpu_support", [])
         m["vram_ok"]          = gpu["vram_gb"] >= m.get("min_vram_gb", 0)
         m["vram_recommended"] = gpu["vram_gb"] >= m.get("recommended_vram_gb", 0)
     return {
-        "models":    data["models"],
+        "models":    models,
         "upscalers": data.get("upscalers", []),
         "gpu":       gpu,
     }
@@ -621,6 +650,7 @@ async def launch_model(req: LaunchRequest):
     model = next((m for m in registry["models"] if m["id"] == req.model_id), None)
     if not model:
         raise HTTPException(404, "Model not found")
+    model = _with_resolved_runtime(registry, model)
     return await launcher.launch(model, req.loras, req.hf_token, req.quant, req.variant, req.components)
 
 
@@ -830,9 +860,16 @@ async def delete_model_weights(model_id: str):
     repos = set()
     if model.get("hf_repo"):
         repos.add(model["hf_repo"])
+    _, extra_files, extra_repos, _ = _download_plan(model)
+    repos.update(f.get("hf_repo") for f in extra_files if f.get("hf_repo"))
+    repos.update(extra_repos)
     for v in (model.get("variants") or []):
         if v.get("hf_repo"):
             repos.add(v["hf_repo"])
+        _, extra_files, extra_repos, _ = _download_plan(model, v.get("id"))
+        repos.update(f.get("hf_repo") for f in extra_files if f.get("hf_repo"))
+        repos.update(extra_repos)
+    repos.discard(None)
 
     cache_root = Path(os.environ.get("HF_HOME", str(Path.home() / ".cache" / "huggingface"))) / "hub"
     removed: list = []
@@ -1255,19 +1292,18 @@ def delete_component(target: str, filename: str):
     return {"status": "deleted", "path": str(p)}
 
 
-# ── Per-runner runtime venvs ─────────────────────────────────────────────
-# A runner can declare a `runtime` block in the registry pointing at a
-# Python version + git source + pip requirements. Installing the runtime
-# (creating the venv, cloning the source repo, pip-installing packages)
-# can take 5+ minutes and downloads multi-GB wheels — so it's a background
-# job with the same shape as components/loras.
+# ── Runtime profiles ────────────────────────────────────────────────────
+# A model can point at a shared `runtime_profile` in the registry. Installing
+# the profile (creating the venv, cloning source, pip-installing packages)
+# can take 5+ minutes and downloads multi-GB wheels, so it runs as a
+# background job with the same shape as components/loras.
 import venv_manager  # noqa: E402  (imported here so launcher.py's top-level import works in subprocess too)
 
 runtime_install_jobs: dict[str, dict] = {}
 
 
 def _registry_runtime_for(model_id: str) -> Optional[dict]:
-    """Look up a model's `runtime` spec from the registry, or None."""
+    """Look up a model's resolved runtime profile/spec, or None."""
     try:
         with open(REGISTRY_PATH) as f:
             registry = json.load(f)
@@ -1276,7 +1312,7 @@ def _registry_runtime_for(model_id: str) -> Optional[dict]:
     model = next((m for m in registry.get("models", []) if m.get("id") == model_id), None)
     if not model:
         return None
-    return model.get("runtime")
+    return _resolve_runtime_spec(registry, model)
 
 
 def _run_runtime_install_job(job_id: str, spec: dict) -> None:
@@ -1310,12 +1346,13 @@ def _run_runtime_install_job(job_id: str, spec: dict) -> None:
 
 @app.post("/api/runtime/{model_id}/install")
 async def install_runtime(model_id: str):
-    """Kick off the venv install for a model that declares `runtime` in
-    the registry. Returns a job_id immediately; UI polls the status
-    endpoint until done."""
+    """Kick off runtime-profile preparation for a model.
+
+    Returns a job_id immediately; UI polls the status endpoint until done.
+    """
     spec = _registry_runtime_for(model_id)
     if not spec or not spec.get("id"):
-        raise HTTPException(400, f"Model '{model_id}' has no runtime block in the registry")
+        raise HTTPException(400, f"Model '{model_id}' has no runtime profile in the registry")
 
     # Already ready? No-op success — the UI can flip its install button
     # to "Installed" without scheduling a job.
@@ -1353,9 +1390,7 @@ def runtime_install_status(model_id: str, job_id: str):
 
 @app.get("/api/runtime/{model_id}/status")
 def runtime_status(model_id: str):
-    """Lightweight pre-launch check the UI uses to decide whether to
-    show 'Install runtime' vs 'Start'. No job_id needed — just looks at
-    the venv on disk."""
+    """Lightweight pre-launch check for auto-preparing dependency profiles."""
     spec = _registry_runtime_for(model_id)
     if not spec or not spec.get("id"):
         return {"required": False}

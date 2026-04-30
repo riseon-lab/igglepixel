@@ -1,5 +1,30 @@
 {
   "_comment": "Each entry declares a Python runner_module under backend/runners/. The runner owns weight loading + inference. backend/runner_host.py wraps it behind a localhost FastAPI; backend/launcher.py spawns it.",
+  "runtime_profiles": {
+    "ltx-pipelines": {
+      "id":     "ltx-pipelines",
+      "label":  "LTX pipelines runtime",
+      "python": "3.12",
+      "git": {
+        "repo": "https://github.com/Lightricks/LTX-2",
+        "ref":  "main",
+        "dest": "/workspace/repos/ltx-2"
+      },
+      "pip": [
+        "-e", "/workspace/repos/ltx-2/packages/ltx-pipelines",
+        "transformers",
+        "huggingface_hub",
+        "fastapi",
+        "uvicorn[standard]",
+        "pydantic",
+        "Pillow",
+        "imageio",
+        "imageio-ffmpeg",
+        "av",
+        "cryptography==44.0.0"
+      ]
+    }
+  },
   "upscalers": [
     {
       "id": "realesrgan-x4-plus",
@@ -152,29 +177,7 @@
       "recommended_vram_gb": 80,
       "supports_lora": true,
       "gpu_support": ["nvidia"],
-      "runtime": {
-        "id":     "ltx23",
-        "label":  "LTX-2.3 venv",
-        "python": "3.12",
-        "git": {
-          "repo": "https://github.com/Lightricks/LTX-2",
-          "ref":  "main",
-          "dest": "/workspace/repos/ltx-2"
-        },
-        "pip": [
-          "-e", "/workspace/repos/ltx-2/packages/ltx-pipelines",
-          "transformers",
-          "huggingface_hub",
-          "fastapi",
-          "uvicorn[standard]",
-          "pydantic",
-          "Pillow",
-          "imageio",
-          "imageio-ffmpeg",
-          "av",
-          "cryptography==44.0.0"
-        ]
-      },
+      "runtime_profile": "ltx-pipelines",
       "variants": [
         {
           "id": "distilled-1.1",
