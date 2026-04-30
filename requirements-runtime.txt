@@ -27,9 +27,17 @@
 #   builds may have the original Qwen edit pipeline but not the 2511-ready
 #   Plus loader. Qwen/Qwen-Image-2512 also expects a current QwenImage
 #   pipeline implementation.
+#
+# Why uv + virtualenv:
+#   Per-model runtimes such as LTX need isolated environments. Some pod
+#   images do not have the entrypoint-installed uv binary or a working
+#   `python -m venv` / ensurepip path, so the backend prefers uv and falls
+#   back to virtualenv before giving up.
 
 diffusers>=0.37.1
 peft
 ftfy
 imageio
 imageio-ffmpeg
+uv
+virtualenv

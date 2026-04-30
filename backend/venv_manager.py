@@ -13,7 +13,8 @@ the venv's Python interpreter, and spawns the runner subprocess against
 that. Other runners are unaffected.
 
 Tooling: prefers `uv` (single static binary, manages Python versions +
-fast pip). Falls back to `python -m venv` when uv isn't installed.
+fast pip). Falls back to `python -m venv`, then `virtualenv`, when uv
+isn't installed.
 
 Persistence: venvs live under WORKSPACE/venvs/<id>/ — same persistent
 volume that holds models and pip cache, so a re-installed runtime is a
@@ -171,9 +172,9 @@ def _create_venv(runtime_id: str, python_version: Optional[str], log: Callable[[
     """Create the venv with the requested Python version.
 
     Prefers uv (handles Python version installs + venv in one step).
-    Falls back to `python -m venv` against the system Python — this only
-    works when the requested version matches what's installed; if it
-    doesn't, the install fails and the user sees the error in the log.
+    Falls back to `python -m venv`, then `virtualenv`, against the best
+    available Python. The virtualenv fallback covers slim containers where
+    the stdlib venv module cannot seed pip.
     """
     venv = _venv_dir(runtime_id)
     if venv.exists():
@@ -202,8 +203,22 @@ def _create_venv(runtime_id: str, python_version: Optional[str], log: Callable[[
         else:
             log(f"WARN: no python{python_version} binary found; using {py_bin}")
     rc = _run([py_bin, "-m", "venv", str(venv)], log)
+    if rc == 0:
+        return
+
+    log("WARN: python -m venv failed; trying virtualenv fallback")
+    shutil.rmtree(venv, ignore_errors=True)
+    if _run([py_bin, "-m", "virtualenv", "--version"], log) != 0:
+        log("virtualenv not available; installing it into the base Python")
+        install_rc = _run([py_bin, "-m", "pip", "install", "--user", "virtualenv"], log)
+        if install_rc != 0:
+            install_rc = _run([py_bin, "-m", "pip", "install", "virtualenv"], log)
+        if install_rc != 0:
+            raise RuntimeError(f"python -m venv failed and virtualenv could not be installed for runtime '{runtime_id}'")
+
+    rc = _run([py_bin, "-m", "virtualenv", str(venv)], log)
     if rc != 0:
-        raise RuntimeError(f"python -m venv failed for runtime '{runtime_id}'")
+        raise RuntimeError(f"python -m venv and virtualenv failed for runtime '{runtime_id}'")
 
 
 def _pip_install(runtime_id: str, packages: list[str], log: Callable[[str], None]) -> None:

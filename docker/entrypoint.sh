@@ -94,7 +94,7 @@ mkdir -p /workspace/models /workspace/loras /workspace/checkpoints \
 # (e.g. 3.12 alongside our system 3.11) plus venv creation plus fast pip.
 # We persist it under /workspace/.local/bin so first-boot downloads it once
 # and every subsequent boot uses the cached binary. backend/venv_manager.py
-# uses uv when present, falling back to `python -m venv` otherwise.
+# uses uv when present, falling back to `python -m venv` / virtualenv otherwise.
 export UV_INSTALL_DIR=/workspace/.local/bin
 export PATH="$UV_INSTALL_DIR:$PATH"
 if ! command -v uv >/dev/null 2>&1; then
