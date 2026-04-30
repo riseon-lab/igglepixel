@@ -1004,6 +1004,17 @@ def _hf_repo_path(repo: str, rel_path: str) -> Path:
     return Path(safe_repo) / rel_path
 
 
+def _flatten_lora_rel_path(rel_path: str) -> str:
+    """Use the repo's filename for LoRA downloads.
+
+    LoRAs are user-managed assets, not model snapshots. Keeping the full HF
+    folder path under /workspace/loras makes the library hard to patch/delete
+    and can hide files behind nested repo layouts. Store these flat by
+    basename; collisions still keep the repo namespace through local_dir.
+    """
+    return Path(rel_path).name
+
+
 def _format_hf_error(e: Exception) -> str:
     """Produce a useful message for the UI. huggingface_hub raises a few
     different exception types; we surface the relevant ones plainly so
@@ -1088,6 +1099,13 @@ class HFDownloadRequest(BaseModel):
     target_dir: Optional[str] = None
 
 
+class HFLoraImportDoneRequest(BaseModel):
+    repo_id:   str
+    rel_paths: list[str] = []
+    revision:  Optional[str] = "main"
+    hf_token:  Optional[str] = None
+
+
 def _resolve_target_dir(name: str) -> Path:
     if name not in HF_TARGET_DIRS:
         raise HTTPException(400, f"target_dir must be one of {sorted(HF_TARGET_DIRS)}")
@@ -1110,7 +1128,8 @@ def _hf_job_worker(job_id: str, repo: str, revision: str, rel_path: str,
     repo_subdir = _hf_repo_path(repo, "")
     local_dir   = target_root / repo_subdir
     local_dir.mkdir(parents=True, exist_ok=True)
-    expected_dest = local_dir / rel_path
+    local_filename = _flatten_lora_rel_path(rel_path) if target_dir_name == "loras" else rel_path
+    expected_dest = local_dir / local_filename
 
     # Pre-flight size so the UI has a denominator before bytes start moving.
     try:
@@ -1162,6 +1181,12 @@ def _hf_job_worker(job_id: str, repo: str, revision: str, rel_path: str,
             local_dir=str(local_dir),
             token=token,
         )
+        if target_dir_name == "loras":
+            final_dest = local_dir / _flatten_lora_rel_path(rel_path)
+            if Path(dest) != final_dest:
+                final_dest.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(dest, final_dest)
+                dest = str(final_dest)
         if cancel_flag["cancel"]:
             # Cancellation arrived after the file landed. Treat as cancelled
             # but DON'T delete a fully-completed file — the user can choose
@@ -1247,6 +1272,46 @@ def hf_download_multi(req: HFDownloadRequest):
         _resolve_target_dir(f.target_dir)
         job_ids.append(_enqueue_hf_job(req.repo_id, revision, f.rel_path, f.target_dir, token))
     return {"job_ids": job_ids}
+
+
+@app.post("/api/hf/import-loras/done")
+def import_completed_hf_loras(req: HFLoraImportDoneRequest):
+    """Best-effort repair/import for HF LoRA files after browser downloads.
+
+    HuggingFace's local_dir behaviour changed across versions and can leave
+    files nested under repo paths or cache pointers. After the UI sees jobs
+    complete, it calls this endpoint so /workspace/loras has a flat,
+    library-visible copy of each selected LoRA filename.
+    """
+    token = req.hf_token or os.environ.get("HF_TOKEN") or None
+    revision = req.revision or "main"
+    local_dir = LORAS_DIR / req.repo_id.replace("/", "__")
+    local_dir.mkdir(parents=True, exist_ok=True)
+    results = []
+    for rel_path in req.rel_paths:
+        if not rel_path:
+            continue
+        dest = local_dir / Path(rel_path).name
+        try:
+            matches = list(local_dir.rglob(Path(rel_path).name))
+            src = next((p for p in matches if p.exists() and p != dest), None)
+            if src and src.exists():
+                shutil.copy2(src, dest)
+            elif not dest.exists():
+                from huggingface_hub import hf_hub_download
+                downloaded = hf_hub_download(
+                    repo_id=req.repo_id,
+                    filename=rel_path,
+                    revision=revision,
+                    local_dir=str(local_dir),
+                    token=token,
+                )
+                if Path(downloaded) != dest:
+                    shutil.copy2(downloaded, dest)
+            results.append({"rel_path": rel_path, "filename": dest.name, "status": "ok", "path": str(dest)})
+        except Exception as e:
+            results.append({"rel_path": rel_path, "filename": Path(rel_path).name, "status": "error", "error": f"{type(e).__name__}: {e}"})
+    return {"results": results}
 
 
 @app.get("/api/hf/jobs")

@@ -218,6 +218,8 @@ const PROMPT_BUILDER_CHIP_GROUPS = [
 const DEFAULT_NEGATIVE_PROMPT =
   'extra fingers, extra arms, duplicate limbs, malformed hands, distorted face, bad anatomy, blurry, low quality, watermark, text artifacts, upside down subject';
 
+const loraId = (l) => l?.rel_path || l?.filename || '';
+
 // ── Helpers ──────────────────────────────────────────────────────────────
 const $  = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
@@ -399,6 +401,7 @@ const api = {
   hfJobs:      ()   => json(apiCall('/api/hf/jobs')),
   hfJobCancel: (id) => json(apiCall(`/api/hf/jobs/${encodeURIComponent(id)}`, { method: 'DELETE' })),
   hfJobRetry:  (id) => json(apiCall(`/api/hf/jobs/${encodeURIComponent(id)}/retry`, { method: 'POST' })),
+  hfLoraImportDone: (b) => json(apiCall('/api/hf/import-loras/done', jsonBody(b))),
   deleteAsset:   (path) => json(apiCall(`/api/assets?path=${encodeURIComponent(path)}`, { method: 'DELETE' })),
   // Phase 3: encrypt the file in the browser BEFORE upload when we have the
   // data key. Backend stores the bytes as-is (sees ciphertext, period).
@@ -3047,7 +3050,7 @@ function renderWorkspaceLoras(m) {
 
   // Stable key per logical LoRA. Multi-file LoRAs use `id` since they don't
   // have a single filename; everything else falls back to filename.
-  const keyOf = (l) => l.id || l.filename;
+  const keyOf = (l) => l.id || loraId(l);
 
   // Seed per-model lora state. Dual-expert models (Wan etc.) carry two
   // strength values per LoRA — one for each expert — so high-noise and
@@ -3081,7 +3084,7 @@ function renderWorkspaceLoras(m) {
       strength_high: saved.strength_high ?? highDefault,
       strength_low: saved.strength_low ?? lowDefault,
       bundled: false,
-      label: l.filename,
+      label: l.rel_path || l.filename,
       entry: l,
     };
   }
@@ -3400,8 +3403,9 @@ function openLoraPicker(model) {
     <div class="field-stack" style="max-height:50vh;overflow-y:auto">
       ${all.map(l => {
         const checked = l.model_id === model.id ? 'checked' : '';
+        const id = loraId(l);
         return `<label class="check-row ${checked ? 'on' : ''}">
-          <input type="checkbox" data-lora-pick="${esc(l.filename)}" ${checked}>
+          <input type="checkbox" data-lora-pick="${esc(id)}" ${checked}>
           <span class="name" title="${esc(l.rel_path || l.filename)}">${esc(l.rel_path || l.filename)}</span>
           <span class="meta">${l.size_mb || '—'}MB${l.model_id && l.model_id !== model.id ? ` · also on ${esc(l.model_id)}` : ''}</span>
         </label>`;
@@ -3425,7 +3429,7 @@ function openLoraPicker(model) {
     let changed = 0;
     for (const c of checks) {
       const fn          = c.dataset.loraPick;
-      const lora        = state.loras.find(l => l.filename === fn);
+      const lora        = state.loras.find(l => loraId(l) === fn);
       const wasAssigned = lora?.model_id === model.id;
       const nowAssigned = c.checked;
       if (wasAssigned === nowAssigned) continue;
@@ -4574,7 +4578,9 @@ function renderLoraPanel() {
     return;
   }
   list.innerHTML = state.loras.map(l => {
-    const fn = esc(l.filename);
+    const id = loraId(l);
+    const fn = esc(id);
+    const label = esc(l.rel_path || l.filename);
     // Dual-expert target: explicit user setting wins; otherwise show the
     // filename-based guess so the user can confirm or override. Wan
     // CivitAI LoRAs ship as paired _high.safetensors / _low.safetensors,
@@ -4584,7 +4590,7 @@ function renderLoraPanel() {
     const opt = (val, label) =>
       `<option value="${val}" ${cur === val ? 'selected' : ''}>${label}${!cur && guess === val ? ' · auto' : ''}</option>`;
     return `<div class="lora-row">
-      <span class="name" title="${fn}">${fn}</span>
+      <span class="name" title="${label}">${label}</span>
       <span class="size">${l.size_mb}MB</span>
       <select class="lora-target-select" data-target-for="${fn}" title="Dual-expert target (Wan etc.)">
         <option value="" ${!cur ? 'selected' : ''}>—${guess ? ` (auto: ${guess})` : ''}</option>
@@ -4603,7 +4609,7 @@ function renderLoraPanel() {
   // Persist target choice via PATCH so the runner sees it on the next launch.
   list.querySelectorAll('[data-target-for]').forEach(s => s.addEventListener('change', async () => {
     const fn  = s.dataset.targetFor;
-    const lora = state.loras.find(x => x.filename === fn);
+    const lora = state.loras.find(x => loraId(x) === fn);
     try {
       await api.patchLora(fn, {
         tags: lora?.tags || [],
@@ -5115,6 +5121,7 @@ async function submitHFBrowserDownload() {
 // is queued so we don't wait up to 4s for the first render tick.
 
 let _dlPollTimer = null;
+let _dlCompletedSeen = new Set();
 
 function pokeDownloadQueuePoll() {
   if (_dlPollTimer) { clearTimeout(_dlPollTimer); _dlPollTimer = null; }
@@ -5142,6 +5149,7 @@ async function pollDownloadQueue() {
     state.downloadStats[j.id] = { prevBytes: j.downloaded_bytes || 0, prevAt: now, mbps: j.mbps };
   }
   state.downloadJobs = data.jobs || [];
+  await refreshCompletedDownloadTargets(state.downloadJobs);
   renderDownloadQueue();
   // Keep polling while any job is queued/running, or every 4s while the
   // Downloads view is the active route (so newly queued items show up
@@ -5153,6 +5161,33 @@ async function pollDownloadQueue() {
     _dlPollTimer = setTimeout(pollDownloadQueue, interval);
   } else {
     _dlPollTimer = null;
+  }
+}
+
+async function refreshCompletedDownloadTargets(jobs) {
+  const completed = (jobs || []).filter(j => j.status === 'done' && !_dlCompletedSeen.has(j.id));
+  if (!completed.length) return;
+  completed.forEach(j => _dlCompletedSeen.add(j.id));
+  const targets = new Set(completed.map(j => j.target_dir));
+  if (targets.has('loras')) {
+    const byRepo = new Map();
+    for (const j of completed.filter(j => j.target_dir === 'loras')) {
+      const key = `${j.repo}@@${j.revision || 'main'}`;
+      if (!byRepo.has(key)) byRepo.set(key, { repo_id: j.repo, revision: j.revision || 'main', rel_paths: [] });
+      byRepo.get(key).rel_paths.push(j.rel_path);
+    }
+    for (const req of byRepo.values()) {
+      try {
+        await api.hfLoraImportDone({ ...req, hf_token: currentHFToken('#hfTokenDl') || null });
+      } catch {}
+    }
+    await loadLoras();
+  }
+  if (targets.has('components')) await loadComponents();
+  if (targets.has('models') || targets.has('checkpoints')) {
+    await Promise.all((state.models || []).map(m => refreshWeightState(m)));
+    renderModels();
+    if (state.selected) renderDrawerBody();
   }
 }
 
@@ -5254,12 +5289,12 @@ function formatBytes(n) {
 
 async function watchForNewLoras(label) {
   const startCount = state.loras.length;
-  const startNames = new Set(state.loras.map(l => l.filename));
+  const startNames = new Set(state.loras.map(loraId));
   const deadline = Date.now() + 3 * 60 * 1000;
   while (Date.now() < deadline) {
     await new Promise(r => setTimeout(r, 5000));
     try { await loadLoras(); } catch { continue; }
-    const newOnes = state.loras.filter(l => !startNames.has(l.filename));
+    const newOnes = state.loras.filter(l => !startNames.has(loraId(l)));
     if (newOnes.length) {
       toast(`${label}: ${newOnes.length} new LoRA${newOnes.length === 1 ? '' : 's'} ready`, 'success');
       return;
