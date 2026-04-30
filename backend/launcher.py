@@ -124,9 +124,9 @@ class ModelLauncher:
 
         # Per-runner venv: when the registry declares a `runtime` block,
         # spawn against that venv's python instead of the shared system
-        # interpreter. Used today by LTX-2.3 (needs Python 3.12 + its own
-        # ltx-pipelines deps that conflict with our 3.11 image). Other
-        # runners pass through to sys.executable as before.
+        # interpreter. Used today by LTX-2.3 for its isolated ltx-pipelines
+        # dependency stack. Other runners pass through to sys.executable as
+        # before.
         python_bin = sys.executable
         runtime = model.get("runtime") or {}
         runtime_id = runtime.get("id")

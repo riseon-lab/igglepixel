@@ -305,6 +305,22 @@ class Runner(ABC):
                     weights = [weight for _, weight in keep]
                 if not names:
                     continue
+
+                if target == "pipe" and any(isinstance(w, dict) for w in weights):
+                    transposed = {}
+                    keys = set()
+                    for w in weights:
+                        if isinstance(w, dict):
+                            keys.update(w.keys())
+                    for k in keys:
+                        transposed[k] = []
+                        for w in weights:
+                            if isinstance(w, dict):
+                                transposed[k].append(w.get(k, 1.0))
+                            else:
+                                transposed[k].append(w)
+                    weights = transposed
+
                 if _set_adapters(module, names, weights):
                     active.extend(names)
             self._active_lora_adapters = active

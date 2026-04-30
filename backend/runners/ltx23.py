@@ -5,10 +5,10 @@ class hardware (~46 GB BF16 weights → ~60-80 GB VRAM realistic). Diffusers
 doesn't support 2.3 yet (model card says "coming soon"), so this runner uses
 Lightricks' own `ltx-pipelines` package directly.
 
-That package pins Python ≥3.12 and Torch ~2.7, which conflicts with our
-3.11 base image. We therefore run this runner inside a per-runner venv
-managed by backend/venv_manager.py — see the `runtime` block on the
-ltx23 entry in backend/model_registry.json.
+That package brings its own Torch ~2.7-era stack, which conflicts with our
+shared runtime. We therefore run this runner inside a per-runner venv managed
+by backend/venv_manager.py — see the `runtime` block on the ltx23 entry in
+backend/model_registry.json.
 
 Differences from our diffusers runners worth flagging:
 
@@ -20,9 +20,9 @@ Differences from our diffusers runners worth flagging:
     asks for a different set, we rebuild the pipeline. Acceptable since
     LoRA toggles are rare in a session.
 
-  - Output is an mp4 (theirs), already on disk. We don't re-encode through
-    imageio — `ffmpeg -c:v copy -an` strips the audio track losslessly,
-    then we encrypt the result via crypto.write_encrypted.
+  - Their pipeline returns video/audio tensors rather than writing a file.
+    We use their `encode_video()` helper to produce an mp4, strip the audio
+    track losslessly, then encrypt the result via crypto.write_encrypted.
 
 License: LTX Community License (non-commercial). The UI surfaces this via
 the registry's license pill — operators who run a fork commercially are
@@ -49,20 +49,27 @@ VARIANTS = {
         "weight": "ltx-2.3-22b-distilled-1.1.safetensors",
         "default_steps": 8,
         "default_cfg":   1.0,
+        "pipeline": "distilled",
     },
     "distilled": {
         "weight": "ltx-2.3-22b-distilled.safetensors",
         "default_steps": 8,
         "default_cfg":   1.0,
+        "pipeline": "distilled",
     },
     "dev": {
         "weight": "ltx-2.3-22b-dev.safetensors",
         "default_steps": 30,
         "default_cfg":   3.0,
+        "pipeline": "two_stage",
     },
 }
 
 HF_REPO = "Lightricks/LTX-2.3"
+GEMMA_REPO = "google/gemma-3-12b-it-qat-q4_0-unquantized"
+SPATIAL_UPSCALER = "ltx-2.3-spatial-upscaler-x2-1.1.safetensors"
+DISTILLED_LORA = "ltx-2.3-22b-distilled-lora-384-1.1.safetensors"
+DEFAULT_IMAGE_CRF = 33
 
 
 def _normalise_lora_set(loras) -> tuple:
@@ -100,13 +107,12 @@ class Runner(RunnerBase):
 
     # ── Pipeline construction ────────────────────────────────────────
     def _build_pipeline(self, lora_set: tuple):
-        """Construct a fresh TI2VidTwoStagesPipeline with the chosen variant
-        + LoRA set. Lazy imports keep cold start before /healthz cheap and
-        ensure the package only resolves once we're inside the venv subprocess.
+        """Construct a fresh LTX pipeline for the chosen variant + LoRA set.
+        Lazy imports keep cold start before /healthz cheap and ensure the
+        package only resolves once we're inside the venv subprocess.
         """
         from huggingface_hub import hf_hub_download
-        from ltx_pipelines.ti2vid_two_stages import TI2VidTwoStagesPipeline
-        from ltx_core.loader import LoraPathStrengthAndSDOps
+        from ltx_core.loader import LTXV_LORA_COMFY_RENAMING_MAP, LoraPathStrengthAndSDOps
 
         token = os.environ.get("HF_TOKEN")
         variant_cfg = VARIANTS[self._variant]
@@ -114,6 +120,8 @@ class Runner(RunnerBase):
 
         print(f"[runner] resolving LTX-2.3 weights ({weight_name})…", flush=True)
         weight_path = hf_hub_download(repo_id=HF_REPO, filename=weight_name, token=token)
+        upscaler_path = hf_hub_download(repo_id=HF_REPO, filename=SPATIAL_UPSCALER, token=token)
+        gemma_root = self._resolve_gemma_root(token)
 
         # Resolve LoRA paths from $LORAS_DIR (the launcher exports it).
         loras_dir = Path(os.environ.get("LORAS_DIR", str(WORKSPACE / "loras")))
@@ -127,17 +135,35 @@ class Runner(RunnerBase):
                     print(f"[runner] WARN: LoRA not found, skipping: {filename}", flush=True)
                     continue
                 p = matches[0]
-            ltx_loras.append(LoraPathStrengthAndSDOps(str(p), float(strength), None))
+            ltx_loras.append(LoraPathStrengthAndSDOps(str(p), float(strength), LTXV_LORA_COMFY_RENAMING_MAP))
 
-        print(f"[runner] building TI2VidTwoStagesPipeline (variant={self._variant}, loras={len(ltx_loras)})", flush=True)
-        # Their constructor takes the safetensors path + LoRA list. Other
-        # ctor kwargs (precision, scheduler, etc.) are left as defaults —
-        # the upstream config files inside the package set sensible BF16
-        # defaults for the dev/distilled checkpoints.
-        pipe = TI2VidTwoStagesPipeline(
-            checkpoint_path=str(weight_path),
-            loras=ltx_loras,
-        )
+        pipeline_name = variant_cfg.get("pipeline", "two_stage")
+        print(f"[runner] building LTX pipeline (mode={pipeline_name}, variant={self._variant}, loras={len(ltx_loras)})", flush=True)
+        if pipeline_name == "distilled":
+            from ltx_pipelines.distilled import DistilledPipeline
+            pipe = DistilledPipeline(
+                distilled_checkpoint_path=str(weight_path),
+                spatial_upsampler_path=str(upscaler_path),
+                gemma_root=str(gemma_root),
+                loras=ltx_loras,
+            )
+        else:
+            from ltx_pipelines.ti2vid_two_stages import TI2VidTwoStagesPipeline
+            distilled_lora_path = hf_hub_download(repo_id=HF_REPO, filename=DISTILLED_LORA, token=token)
+            distilled_lora = [
+                LoraPathStrengthAndSDOps(
+                    str(distilled_lora_path),
+                    0.6,
+                    LTXV_LORA_COMFY_RENAMING_MAP,
+                )
+            ]
+            pipe = TI2VidTwoStagesPipeline(
+                checkpoint_path=str(weight_path),
+                distilled_lora=distilled_lora,
+                spatial_upsampler_path=str(upscaler_path),
+                gemma_root=str(gemma_root),
+                loras=ltx_loras,
+            )
         self._pipe = pipe
         self._loaded_lora_key = lora_set
         print("[runner] ready", flush=True)
@@ -186,13 +212,13 @@ class Runner(RunnerBase):
         seed   = int(params.get("seed", -1))
         steps  = int(params.get("steps", variant_cfg["default_steps"]))
         cfg    = float(params.get("cfg",   variant_cfg["default_cfg"]))
-        width  = int(params.get("width",  1280))
-        height = int(params.get("height",  720))
-        fps    = int(params.get("fps", 24))
+        width  = self._align_dimension(int(params.get("width",  1280)))
+        height = self._align_dimension(int(params.get("height",  720)))
+        fps    = max(1, int(params.get("fps", 24)))
         duration = float(params.get("duration", 3.0))
         # LTX accepts an absolute frame count — keep this consistent with how
         # we expose seconds in the UI for Wan and others.
-        frames = max(8, int(round(duration * fps)))
+        frames = self._frames_from_duration(duration, fps)
         if seed < 0:
             seed = secrets.randbits(31)
 
@@ -204,21 +230,55 @@ class Runner(RunnerBase):
         ref_tmp = self._decrypt_ref_to_temp(ref_visible)
 
         out_tmp = Path(tempfile.mkstemp(suffix=".mp4")[1])
+        stripped = None
         try:
-            from ltx_pipelines import ImageConditioningInput
+            from ltx_core.components.guiders import MultiModalGuiderParams
+            from ltx_core.model.video_vae import TilingConfig, get_video_chunks_number
+            from ltx_pipelines.utils.args import ImageConditioningInput
+            from ltx_pipelines.utils.media_io import encode_video
 
             print(f"[runner] LTX-2.3 generate (variant={self._variant}, steps={steps}, cfg={cfg}, {width}x{height}@{fps}fps, frames={frames}, seed={seed})", flush=True)
-            self._pipe(
+            tiling_config = TilingConfig.default()
+            common_kwargs = dict(
                 prompt=prompt,
-                negative_prompt=(params.get("negative_prompt") or "").strip() or None,
-                output_path=str(out_tmp),
-                images=[ImageConditioningInput(str(ref_tmp), 0, 1.0, frames)],
-                num_inference_steps=steps,
-                guidance_scale=cfg,
-                width=width,
-                height=height,
-                num_frames=frames,
                 seed=seed,
+                height=height,
+                width=width,
+                num_frames=frames,
+                frame_rate=float(fps),
+                images=[ImageConditioningInput(str(ref_tmp), 0, 1.0, DEFAULT_IMAGE_CRF)],
+                tiling_config=tiling_config,
+            )
+            if VARIANTS[self._variant].get("pipeline") == "distilled":
+                video, audio = self._pipe(**common_kwargs)
+            else:
+                video, audio = self._pipe(
+                    **common_kwargs,
+                    negative_prompt=(params.get("negative_prompt") or "").strip() or "",
+                    num_inference_steps=steps,
+                    video_guider_params=MultiModalGuiderParams(
+                        cfg_scale=cfg,
+                        stg_scale=float(params.get("stg", 1.0)),
+                        rescale_scale=float(params.get("rescale", 0.7)),
+                        modality_scale=float(params.get("modality_scale", 3.0)),
+                        skip_step=0,
+                        stg_blocks=[28],
+                    ),
+                    audio_guider_params=MultiModalGuiderParams(
+                        cfg_scale=float(params.get("audio_cfg", 7.0)),
+                        stg_scale=1.0,
+                        rescale_scale=0.7,
+                        modality_scale=3.0,
+                        skip_step=0,
+                        stg_blocks=[28],
+                    ),
+                )
+            encode_video(
+                video=video,
+                fps=float(fps),
+                audio=audio,
+                output_path=str(out_tmp),
+                video_chunks_number=get_video_chunks_number(frames, tiling_config),
             )
 
             if self._cancel:
@@ -248,7 +308,7 @@ class Runner(RunnerBase):
             out_path = self.new_output_path(ext="mp4", prefix=f"{self.model_id}_{seed}")
             on_disk = self._encrypt_video_to_assets(stripped, out_path)
         finally:
-            for p in (ref_tmp, out_tmp):
+            for p in (ref_tmp, out_tmp, stripped):
                 try:
                     if p and p.exists():
                         p.unlink()
@@ -280,6 +340,30 @@ class Runner(RunnerBase):
         self._cancel = True
 
     # ── Helpers ──────────────────────────────────────────────────────
+    @staticmethod
+    def _resolve_gemma_root(token: Optional[str]) -> Path:
+        from huggingface_hub import snapshot_download
+
+        override = os.environ.get("FORGE_LTX_GEMMA_ROOT") or os.environ.get("LTX_GEMMA_ROOT")
+        if override:
+            p = Path(override).expanduser()
+            if p.exists():
+                return p
+            raise FileNotFoundError(f"LTX Gemma root does not exist: {p}")
+        return Path(snapshot_download(repo_id=GEMMA_REPO, token=token))
+
+    @staticmethod
+    def _frames_from_duration(duration: float, fps: int) -> int:
+        # LTX two-stage pipelines require num_frames = (8 * k) + 1.
+        raw = max(9, int(round(max(0.1, duration) * fps)))
+        return ((raw - 1 + 7) // 8) * 8 + 1
+
+    @staticmethod
+    def _align_dimension(value: int) -> int:
+        # Two-stage LTX requires dimensions divisible by 64. Round to the
+        # closest legal value so typed UI values like 1080 become 1088.
+        return max(64, int(round(value / 64)) * 64)
+
     @staticmethod
     def _decrypt_ref_to_temp(visible: Path) -> Path:
         """Write the plaintext bytes of an encrypted ref to a tempfile so we

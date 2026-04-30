@@ -480,15 +480,19 @@ def _download_key(model_id: str, variant: Optional[str] = None) -> str:
     return f"{model_id}:{variant}" if variant else model_id
 
 
-def _download_plan(model: dict, variant: Optional[str] = None) -> tuple[str, list[dict]]:
+def _download_plan(model: dict, variant: Optional[str] = None) -> tuple[str, list[dict], list[str], bool]:
     selected = None
     if variant:
         selected = next((v for v in model.get("variants", []) if v.get("id") == variant), None)
     repo = (selected or model).get("hf_repo", "")
     extra_files = list(model.get("download_files") or [])
+    extra_repos = list(model.get("download_repos") or [])
+    snapshot = bool(model.get("download_snapshot", True))
     if selected:
         extra_files.extend(selected.get("download_files") or [])
-    return repo, extra_files
+        extra_repos.extend(selected.get("download_repos") or [])
+        snapshot = bool(selected.get("download_snapshot", snapshot))
+    return repo, extra_files, extra_repos, snapshot
 
 
 @app.get("/api/models/{model_id}/weight-status")
@@ -498,12 +502,15 @@ def weight_status(model_id: str, variant: Optional[str] = Query(None)):
     model = next((m for m in registry["models"] if m["id"] == model_id), None)
     if not model:
         raise HTTPException(404, "Model not found")
-    repo, extra_files = _download_plan(model, variant)
+    repo, extra_files, extra_repos, snapshot = _download_plan(model, variant)
     tracked = downloads.get(_download_key(model_id, variant))
-    cached = bool(repo) and _is_repo_cached(repo) and all(
+    cached = bool(repo) and (not snapshot or _is_repo_cached(repo)) and all(
         _is_repo_file_cached(f.get("hf_repo", ""), f.get("filename", ""))
         for f in extra_files
         if f.get("hf_repo") and f.get("filename")
+    ) and all(
+        _is_repo_cached(repo_id)
+        for repo_id in extra_repos
     )
     return {
         "downloading": tracked["downloading"],
@@ -525,7 +532,7 @@ def model_download(model_id: str, body: DownloadBody):
     model = next((m for m in registry["models"] if m["id"] == model_id), None)
     if not model:
         raise HTTPException(404, "Model not found")
-    repo, extra_files = _download_plan(model, body.variant)
+    repo, extra_files, extra_repos, snapshot = _download_plan(model, body.variant)
     if not repo:
         raise HTTPException(400, "Model has no hf_repo to download")
     key = _download_key(model_id, body.variant)
@@ -538,15 +545,28 @@ def model_download(model_id: str, body: DownloadBody):
         downloads.set(key, downloading=True, downloaded=False, error=None, progress=0.05)
         try:
             from huggingface_hub import hf_hub_download, snapshot_download
-            snapshot_download(repo_id=repo, token=token)
-            if extra_files:
-                downloads.set(key, progress=0.85)
+            total_units = (1 if snapshot else 0) + len(extra_files) + len(extra_repos)
+            completed_units = 0
+
+            def _mark_unit_done() -> None:
+                nonlocal completed_units
+                completed_units += 1
+                if total_units:
+                    downloads.set(key, progress=min(0.95, 0.05 + 0.90 * (completed_units / total_units)))
+
+            if snapshot:
+                snapshot_download(repo_id=repo, token=token)
+                _mark_unit_done()
             for entry in extra_files:
                 hf_hub_download(
                     repo_id=entry["hf_repo"],
                     filename=entry["filename"],
                     token=token,
                 )
+                _mark_unit_done()
+            for repo_id in extra_repos:
+                snapshot_download(repo_id=repo_id, token=token)
+                _mark_unit_done()
             downloads.set(key, downloading=False, downloaded=True, progress=1.0)
         except Exception as e:
             downloads.set(key, downloading=False, error=f"{type(e).__name__}: {e}")

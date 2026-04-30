@@ -135,6 +135,105 @@
       "default_loras": []
     },
     {
+      "id": "ltx23",
+      "name": "LTX-2.3",
+      "category": "video",
+      "description": "Lightricks' LTX-2.3 (22B) — best-in-class img2vid quality, native portrait, up to 1080p. Workstation-class only — official weights are BF16 (~46 GB on disk, ~60-80 GB VRAM). Distilled variant runs in 8 steps. Diffusers support is pending; we run via Lightricks' own ltx-pipelines package in an isolated Python 3.12 venv.",
+      "runner_module": "backend.runners.ltx23",
+      "hf_repo": "Lightricks/LTX-2.3",
+      "download_snapshot": false,
+      "download_repos": ["google/gemma-3-12b-it-qat-q4_0-unquantized"],
+      "license": {
+        "type": "non-commercial",
+        "label": "LTX Community License (non-commercial)",
+        "url":   "https://huggingface.co/Lightricks/LTX-2.3/blob/main/LICENSE"
+      },
+      "min_vram_gb": 48,
+      "recommended_vram_gb": 80,
+      "supports_lora": true,
+      "gpu_support": ["nvidia"],
+      "runtime": {
+        "id":     "ltx23",
+        "label":  "LTX-2.3 venv",
+        "python": "3.12",
+        "git": {
+          "repo": "https://github.com/Lightricks/LTX-2",
+          "ref":  "main",
+          "dest": "/workspace/repos/ltx-2"
+        },
+        "pip": [
+          "-e", "/workspace/repos/ltx-2/packages/ltx-pipelines",
+          "transformers",
+          "huggingface_hub",
+          "fastapi",
+          "uvicorn[standard]",
+          "pydantic",
+          "Pillow",
+          "imageio",
+          "imageio-ffmpeg",
+          "av",
+          "cryptography==44.0.0"
+        ]
+      },
+      "variants": [
+        {
+          "id": "distilled-1.1",
+          "label": "Distilled 1.1 — 8 steps",
+          "description": "Distilled variant tuned for 8-step inference. Same model size as dev; faster wall-clock per generation.",
+          "auto_min_vram_gb": 48,
+          "download_files": [
+            { "hf_repo": "Lightricks/LTX-2.3", "filename": "ltx-2.3-22b-distilled-1.1.safetensors" },
+            { "hf_repo": "Lightricks/LTX-2.3", "filename": "ltx-2.3-spatial-upscaler-x2-1.1.safetensors" }
+          ]
+        },
+        {
+          "id": "distilled",
+          "label": "Distilled 1.0 — 8 steps",
+          "description": "Earlier distilled checkpoint. Use 1.1 unless you need this exact build.",
+          "auto_min_vram_gb": 48,
+          "download_files": [
+            { "hf_repo": "Lightricks/LTX-2.3", "filename": "ltx-2.3-22b-distilled.safetensors" },
+            { "hf_repo": "Lightricks/LTX-2.3", "filename": "ltx-2.3-spatial-upscaler-x2-1.1.safetensors" }
+          ]
+        },
+        {
+          "id": "dev",
+          "label": "Dev — full / trainable",
+          "description": "Full BF16 model, 30 steps default. Best quality; trainable for custom LoRAs.",
+          "auto_min_vram_gb": 80,
+          "download_files": [
+            { "hf_repo": "Lightricks/LTX-2.3", "filename": "ltx-2.3-22b-dev.safetensors" },
+            { "hf_repo": "Lightricks/LTX-2.3", "filename": "ltx-2.3-spatial-upscaler-x2-1.1.safetensors" },
+            { "hf_repo": "Lightricks/LTX-2.3", "filename": "ltx-2.3-22b-distilled-lora-384-1.1.safetensors" }
+          ]
+        }
+      ],
+      "default_size_by_vram": [
+        { "min_gb": 80, "w": 1536, "h": 1024 },
+        { "min_gb": 48, "w": 1024, "h": 576 }
+      ],
+      "param_groups": ["prompt", "generation", "dimensions", "video"],
+      "param_keys":   ["prompt", "negative_prompt", "seed", "steps", "cfg", "width", "height", "duration", "fps"],
+      "param_overrides": {
+        "steps":    { "default": 8 },
+        "cfg":      { "default": 1.0, "min": 0,    "max": 10, "step": 0.1 },
+        "width":    { "default": 1536, "step": 64, "min": 512, "max": 1920 },
+        "height":   { "default": 1024, "step": 64, "min": 512, "max": 1920 },
+        "duration": { "default": 3.0,  "step": 0.1, "min": 1,  "max": 8, "label": "Seconds" },
+        "fps":      { "default": 24,   "step": 1,   "min": 8,  "max": 30 }
+      },
+      "aspect_presets": [
+        { "label": "16:9 576p",   "w": 1024, "h": 576 },
+        { "label": "16:9 1088p",  "w": 1920, "h": 1088 },
+        { "label": "9:16 portrait","w": 768,  "h": 1344 },
+        { "label": "1:1 square",  "w": 1024, "h": 1024 }
+      ],
+      "image_inputs": [
+        { "key": "ref", "label": "Source frame", "required": true, "hint": "First frame; LTX preserves identity" }
+      ],
+      "default_loras": []
+    },
+    {
       "id": "qwen25-chat",
       "name": "Qwen 2.5 Chat",
       "category": "llm",

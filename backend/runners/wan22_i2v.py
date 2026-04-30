@@ -46,6 +46,10 @@ VARIANTS = {
 
 LIGHTNING_REPO = "Kijai/WanVideo_comfy"
 LIGHTNING_WEIGHT = "Lightx2v/lightx2v_I2V_14B_480p_cfg_step_distill_rank128_bf16.safetensors"
+WAN_DIM_MULTIPLE = 16
+LIGHTNING_MAX_DIM = 832
+LIGHTNING_MIN_DIM = 480
+LIGHTNING_SQUARE_DIM = 640
 
 
 class Runner(RunnerBase):
@@ -138,7 +142,6 @@ class Runner(RunnerBase):
                 LIGHTNING_REPO,
                 weight_name=LIGHTNING_WEIGHT,
                 adapter_name=low_adapter,
-                load_into_transformer_2=True,
             )
             pipe.set_adapters([high_adapter, low_adapter], adapter_weights=[1.0, 1.0])
             pipe.fuse_lora(adapter_names=[high_adapter], lora_scale=3.0, components=["transformer"])
@@ -152,6 +155,81 @@ class Runner(RunnerBase):
             except Exception:
                 pass
             raise RuntimeError(f"Failed to bake Wan Lightning LoRA: {type(e).__name__}: {e}") from e
+
+    @staticmethod
+    def _round_to_multiple(value: int, multiple: int = WAN_DIM_MULTIPLE) -> int:
+        return max(multiple, int(round(value / multiple)) * multiple)
+
+    @classmethod
+    def _resize_with_wan_bounds(
+        cls,
+        image,
+        *,
+        max_dim: int,
+        min_dim: int,
+        square_dim: int,
+    ):
+        from PIL import Image
+
+        src_w, src_h = image.size
+        if src_w == src_h:
+            size = cls._round_to_multiple(square_dim)
+            return image.resize((size, size), Image.LANCZOS)
+
+        aspect_ratio = src_w / src_h
+        max_aspect_ratio = max_dim / min_dim
+        min_aspect_ratio = min_dim / max_dim
+        image_to_resize = image
+
+        if aspect_ratio > max_aspect_ratio:
+            target_w, target_h = max_dim, min_dim
+            crop_width = min(src_w, max(1, int(round(src_h * max_aspect_ratio))))
+            left = (src_w - crop_width) // 2
+            image_to_resize = image.crop((left, 0, left + crop_width, src_h))
+        elif aspect_ratio < min_aspect_ratio:
+            target_w, target_h = min_dim, max_dim
+            crop_height = min(src_h, max(1, int(round(src_w / min_aspect_ratio))))
+            top = (src_h - crop_height) // 2
+            image_to_resize = image.crop((0, top, src_w, top + crop_height))
+        elif src_w > src_h:
+            target_w = max_dim
+            target_h = int(round(target_w / aspect_ratio))
+        else:
+            target_h = max_dim
+            target_w = int(round(target_h * aspect_ratio))
+
+        final_w = cls._round_to_multiple(target_w)
+        final_h = cls._round_to_multiple(target_h)
+        final_w = max(min_dim, min(max_dim, final_w))
+        final_h = max(min_dim, min(max_dim, final_h))
+        return image_to_resize.resize((final_w, final_h), Image.LANCZOS)
+
+    def _resize_source_image(self, image, requested_width: int, requested_height: int):
+        """Normalize the Wan source frame before it reaches Diffusers.
+
+        The Lightning path mirrors the 480p Lightx2v recipe exactly. The
+        standard variants use the selected UI dimensions as the bounds, keeping
+        source aspect ratio and only center-cropping very wide/tall inputs.
+        """
+        if self._lightning_baked:
+            return self._resize_with_wan_bounds(
+                image,
+                max_dim=LIGHTNING_MAX_DIM,
+                min_dim=LIGHTNING_MIN_DIM,
+                square_dim=LIGHTNING_SQUARE_DIM,
+            )
+
+        requested_width = self._round_to_multiple(max(WAN_DIM_MULTIPLE, requested_width))
+        requested_height = self._round_to_multiple(max(WAN_DIM_MULTIPLE, requested_height))
+        max_dim = max(requested_width, requested_height)
+        min_dim = min(requested_width, requested_height)
+        square_dim = requested_width if requested_width == requested_height else max(min_dim, min(max_dim, LIGHTNING_SQUARE_DIM))
+        return self._resize_with_wan_bounds(
+            image,
+            max_dim=max_dim,
+            min_dim=min_dim,
+            square_dim=square_dim,
+        )
 
     # ── Inference ────────────────────────────────────────────────────
     def generate(self, params: dict, loras: Optional[list] = None) -> dict:
@@ -189,6 +267,11 @@ class Runner(RunnerBase):
         cfg_low = float(cfg_low) if cfg_low is not None else (default_cfg if self._lightning_baked else None)
         width  = int(params.get("width",  832))
         height = int(params.get("height", 480))
+        original_width, original_height = ref_img.size
+        ref_img = self._resize_source_image(ref_img, width, height)
+        width, height = ref_img.size
+        if (width, height) != (original_width, original_height):
+            print(f"[runner] resized Wan source {original_width}x{original_height} → {width}x{height}", flush=True)
         fps    = int(params.get("fps", 16 if self._lightning_baked else 24))
         duration = params.get("duration")
         if duration is not None:
@@ -266,6 +349,8 @@ class Runner(RunnerBase):
             "fps":      fps,
             "width":    width,
             "height":   height,
+            "source_width": original_width,
+            "source_height": original_height,
             "duration": round(frames / fps, 2),
         })
 

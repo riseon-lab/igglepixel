@@ -2943,3 +2943,4 @@ body::before {
   .ws-bar { flex-direction: row; gap: 8px; }
   .ws-bar .btn { flex: 1; justify-content: center; }
 }
+.mask-text { -webkit-text-security: disc; }

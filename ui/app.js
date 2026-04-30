@@ -1174,7 +1174,7 @@ function pickAutoVariant(m, vramGb) {
   for (const v of variants) {
     if (vramGb >= (v.auto_min_vram_gb ?? 0)) return v;
   }
-  return variants[variants.length - 1];
+  return [...variants].sort((a, b) => (a.auto_min_vram_gb ?? 0) - (b.auto_min_vram_gb ?? 0))[0];
 }
 
 // Resolve the current variant — explicit user choice from drawer state, or
