@@ -467,15 +467,44 @@ def _is_repo_cached(repo_id: str) -> bool:
     return snaps.exists() and any(snaps.iterdir())
 
 
+def _is_repo_file_cached(repo_id: str, filename: str) -> bool:
+    cache_root = Path(os.environ.get("HF_HOME", str(Path.home() / ".cache" / "huggingface"))) / "hub"
+    repo_dir = cache_root / f"models--{repo_id.replace('/', '--')}"
+    snaps = repo_dir / "snapshots"
+    if not snaps.exists():
+        return False
+    return any((snap / filename).exists() for snap in snaps.iterdir())
+
+
+def _download_key(model_id: str, variant: Optional[str] = None) -> str:
+    return f"{model_id}:{variant}" if variant else model_id
+
+
+def _download_plan(model: dict, variant: Optional[str] = None) -> tuple[str, list[dict]]:
+    selected = None
+    if variant:
+        selected = next((v for v in model.get("variants", []) if v.get("id") == variant), None)
+    repo = (selected or model).get("hf_repo", "")
+    extra_files = list(model.get("download_files") or [])
+    if selected:
+        extra_files.extend(selected.get("download_files") or [])
+    return repo, extra_files
+
+
 @app.get("/api/models/{model_id}/weight-status")
-def weight_status(model_id: str):
+def weight_status(model_id: str, variant: Optional[str] = Query(None)):
     with open(REGISTRY_PATH) as f:
         registry = json.load(f)
     model = next((m for m in registry["models"] if m["id"] == model_id), None)
     if not model:
         raise HTTPException(404, "Model not found")
-    tracked = downloads.get(model_id)
-    cached  = _is_repo_cached(model.get("hf_repo", ""))
+    repo, extra_files = _download_plan(model, variant)
+    tracked = downloads.get(_download_key(model_id, variant))
+    cached = bool(repo) and _is_repo_cached(repo) and all(
+        _is_repo_file_cached(f.get("hf_repo", ""), f.get("filename", ""))
+        for f in extra_files
+        if f.get("hf_repo") and f.get("filename")
+    )
     return {
         "downloading": tracked["downloading"],
         "downloaded":  tracked["downloaded"] or cached,
@@ -486,6 +515,7 @@ def weight_status(model_id: str):
 
 class DownloadBody(BaseModel):
     hf_token: Optional[str] = None
+    variant: Optional[str] = None
 
 
 @app.post("/api/models/{model_id}/download")
@@ -495,25 +525,34 @@ def model_download(model_id: str, body: DownloadBody):
     model = next((m for m in registry["models"] if m["id"] == model_id), None)
     if not model:
         raise HTTPException(404, "Model not found")
-    if not model.get("hf_repo"):
+    repo, extra_files = _download_plan(model, body.variant)
+    if not repo:
         raise HTTPException(400, "Model has no hf_repo to download")
-    if downloads.get(model_id)["downloading"]:
+    key = _download_key(model_id, body.variant)
+    if downloads.get(key)["downloading"]:
         return {"status": "already_in_progress"}
 
-    repo = model["hf_repo"]
     token = body.hf_token or os.environ.get("HF_TOKEN")
 
     def _worker():
-        downloads.set(model_id, downloading=True, downloaded=False, error=None, progress=0.05)
+        downloads.set(key, downloading=True, downloaded=False, error=None, progress=0.05)
         try:
-            from huggingface_hub import snapshot_download
+            from huggingface_hub import hf_hub_download, snapshot_download
             snapshot_download(repo_id=repo, token=token)
-            downloads.set(model_id, downloading=False, downloaded=True, progress=1.0)
+            if extra_files:
+                downloads.set(key, progress=0.85)
+            for entry in extra_files:
+                hf_hub_download(
+                    repo_id=entry["hf_repo"],
+                    filename=entry["filename"],
+                    token=token,
+                )
+            downloads.set(key, downloading=False, downloaded=True, progress=1.0)
         except Exception as e:
-            downloads.set(model_id, downloading=False, error=f"{type(e).__name__}: {e}")
+            downloads.set(key, downloading=False, error=f"{type(e).__name__}: {e}")
 
     threading.Thread(target=_worker, daemon=True).start()
-    return {"status": "started", "repo": repo}
+    return {"status": "started", "repo": repo, "variant": body.variant}
 
 
 # ── Registry ─────────────────────────────────────────────────────────────

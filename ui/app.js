@@ -327,7 +327,10 @@ const api = {
   launch:        (b) => json(apiCall('/api/launch', jsonBody(b))),
   stop:          (id) => json(apiCall(`/api/stop/${id}`, { method: 'POST' })),
   runnerHealth:  (id) => json(apiCall(`/api/runner/${id}/healthz`)),
-  weightStatus:  (id) => json(apiCall(`/api/models/${id}/weight-status`)),
+  weightStatus:  (id, variant) => {
+    const qs = variant ? `?variant=${encodeURIComponent(variant)}` : '';
+    return json(apiCall(`/api/models/${id}/weight-status${qs}`));
+  },
   downloadWeights: (id, body) => json(apiCall(`/api/models/${id}/download`, jsonBody(body || {}))),
   // Inference
   generate:      (b) => json(apiCall('/api/generate', jsonBody(b))),
@@ -1183,6 +1186,10 @@ function selectedVariant(m) {
   return pickAutoVariant(m, state.gpu?.vram_gb || 0);
 }
 
+function selectedVariantId(m) {
+  return selectedVariant(m)?.id;
+}
+
 // Pick the highest-quality quant the detected GPU can comfortably run.
 // For variant-based models, the quant list comes from the resolved variant.
 // Registry lists quants best-first; first match wins. Falls back to the
@@ -1247,6 +1254,18 @@ function drawerPhase(id) {
   return 'not_downloaded';
 }
 
+async function refreshWeightState(m) {
+  try {
+    const ws = await api.weightStatus(m.id, selectedVariantId(m));
+    setModelState(m.id, {
+      downloaded: !!ws.downloaded,
+      downloading: !!ws.downloading,
+      progress: ws.progress || 0,
+      ...(ws.error ? { error: ws.error } : {}),
+    });
+  } catch {}
+}
+
 async function openDrawer(id) {
   const m = state.models.find(x => x.id === id);
   if (!m) return;
@@ -1267,15 +1286,7 @@ async function openDrawer(id) {
   $('#drawer').classList.add('open');
 
   // Reconcile weight + runner state so reopening the drawer never shows stale "starting".
-  try {
-    const ws = await api.weightStatus(m.id);
-    setModelState(m.id, {
-      downloaded: !!ws.downloaded,
-      downloading: !!ws.downloading,
-      progress: ws.progress || 0,
-      ...(ws.error ? { error: ws.error } : {}),
-    });
-  } catch {}
+  await refreshWeightState(m);
   try {
     const h = await api.runnerHealth(m.id);
     if (h.ready)           setModelState(m.id, { ready: true,  starting: false, error: null });
@@ -1450,8 +1461,16 @@ function renderDrawerBody() {
   // variant) and re-renders the drawer so the quant dropdown shows the new
   // variant's quants.
   $('#drawerVariant')?.addEventListener('change', (e) => {
-    setModelState(m.id, { variant: e.target.value, quant: 'auto' });
+    setModelState(m.id, {
+      variant: e.target.value,
+      quant: 'auto',
+      downloaded: false,
+      downloading: false,
+      progress: 0,
+      error: null,
+    });
     renderDrawerBody();
+    refreshWeightState(m).then(() => renderDrawerBody());
   });
   $('#drawerHFToken')?.addEventListener('change', e => saveHFToken(e.target.value));
 
@@ -1763,11 +1782,12 @@ async function onDrawerPrimary() {
 async function downloadWeights(m) {
   // Read token before any re-render that would wipe the typed value.
   const hfToken = currentHFToken('#drawerHFToken');
+  const variant = selectedVariantId(m);
 
   // Check upfront — snapshot_download returns instantly for cached repos, which
   // looks like a broken 1-second download. Detect it here and skip the POST.
   try {
-    const ws = await api.weightStatus(m.id);
+    const ws = await api.weightStatus(m.id, variant);
     if (ws.downloaded) {
       setModelState(m.id, { downloading: false, downloaded: true });
       toast(`${m.name} already on disk`, 'info');
@@ -1780,9 +1800,9 @@ async function downloadWeights(m) {
   renderDrawerBody();
 
   try {
-    await api.downloadWeights(m.id, { hf_token: hfToken });
+    await api.downloadWeights(m.id, { hf_token: hfToken, variant });
     // Poll weight-status until done. Endpoint reports {downloading, downloaded, progress, error}.
-    const ok = await waitForDownload(m.id, 60 * 60);   // up to 1 hour for first 40GB pull
+    const ok = await waitForDownload(m.id, 60 * 60, variant);   // up to 1 hour for first 40GB pull
     if (!ok) throw new Error('Download did not complete (timeout)');
     setModelState(m.id, { downloading: false, downloaded: true });
     toast(`${m.name} weights ready`, 'success');
@@ -1792,11 +1812,11 @@ async function downloadWeights(m) {
   renderDrawerBody();
 }
 
-async function waitForDownload(modelId, maxSeconds) {
+async function waitForDownload(modelId, maxSeconds, variant) {
   const deadline = Date.now() + maxSeconds * 1000;
   while (Date.now() < deadline) {
     try {
-      const ws = await api.weightStatus(modelId);
+      const ws = await api.weightStatus(modelId, variant);
       if (ws.error)       throw new Error(ws.error);
       if (ws.downloaded)  return true;
       if (typeof ws.progress === 'number') {
@@ -1912,6 +1932,10 @@ function defaultParamsForModel(m, sections = resolveFields(m)) {
       params.width  = tier.w;
       params.height = tier.h;
     }
+  }
+  const variantDefaults = selectedVariant(m)?.default_params;
+  if (variantDefaults && typeof variantDefaults === 'object') {
+    Object.assign(params, variantDefaults);
   }
   return params;
 }
@@ -2052,7 +2076,7 @@ function renderLLMThread(modelOrId) {
   // Pre-compute which assistant messages have a saved counterpart so we can
   // mark them visually and swap "Save" → "Saved" on the action row.
   const savedKeys = new Set(
-    (session.saved_context || []).map(b => `${b.user} ${b.assistant}`)
+    (session.saved_context || []).map(b => `${b.user}\u001f${b.assistant}`)
   );
   thread.innerHTML = messages.map((msg, idx) => {
     const busy = msg.thinking || msg.streaming;
@@ -2061,7 +2085,7 @@ function renderLLMThread(modelOrId) {
     const prev = messages[idx - 1];
     const canSave = msg.role === 'assistant' && msg.text && !msg.streaming
                   && prev && prev.role === 'user';
-    const isSaved = canSave && savedKeys.has(`${prev.text} ${msg.text}`);
+    const isSaved = canSave && savedKeys.has(`${prev.text}\u001f${msg.text}`);
     return `
       <div class="llm-message ${esc(msg.role)}${isSaved ? ' saved' : ''}" data-msg-index="${idx}">
         <div class="llm-bubble">
@@ -3478,7 +3502,7 @@ function updateJobProgress(job, step, total) {
   } else {
     job.etaMs = safeStep >= safeTotal ? 0 : null;
   }
-  renderQueue();
+  renderQueue({ progressOnly: true });
 }
 
 function startJobProgress(job) {
@@ -3717,8 +3741,73 @@ async function runJob(job) {
   }
 }
 
+function queueStateLabel(job) {
+  return job.status === 'running'    ? 'Generating'
+       : job.status === 'cancelling' ? 'Cancelling'
+       :                                'Queued';
+}
+
+function queueCardBits(job) {
+  const pct = Math.max(0, Math.min(100, Math.round((job.progress || 0) * 100)));
+  const hasProgress = pct > 0 && job.status !== 'pending';
+  const eta = job.etaMs != null && pct < 100 ? ` · ${formatETA(job.etaMs)}` : '';
+  return {
+    pct,
+    hasProgress,
+    stateLabel: queueStateLabel(job),
+    metaText: job.status === 'running'
+      ? (hasProgress ? `${pct}%${eta}` : 'Estimating')
+      : '',
+  };
+}
+
+function updateQueueCardsInPlace(root) {
+  if (!root) return true;
+  let complete = true;
+  const openJobs = state.queue.filter(j => j.status !== 'done');
+  for (const job of openJobs) {
+    const card = root.querySelector(`[data-queue-job="${CSS.escape(job.id)}"]`);
+    if (!card) {
+      complete = false;
+      continue;
+    }
+    const bits = queueCardBits(job);
+    card.classList.toggle('active', job.status === 'running');
+    card.classList.toggle('has-progress', bits.hasProgress);
+    const stateEl = card.querySelector('.q-state');
+    if (stateEl) stateEl.textContent = bits.stateLabel;
+
+    let metaEl = card.querySelector('.q-meta');
+    if (bits.metaText) {
+      if (!metaEl) {
+        metaEl = document.createElement('div');
+        metaEl.className = 'q-meta';
+        stateEl?.after(metaEl);
+      }
+      metaEl.textContent = bits.metaText;
+    } else if (metaEl) {
+      metaEl.remove();
+    }
+
+    let progressEl = card.querySelector('.q-progress');
+    if (bits.hasProgress) {
+      if (!progressEl) {
+        progressEl = document.createElement('div');
+        progressEl.className = 'q-progress';
+        progressEl.innerHTML = '<span></span>';
+        card.querySelector('.q-prompt')?.before(progressEl);
+      }
+      const fill = progressEl.querySelector('span');
+      if (fill) fill.style.width = `${bits.pct}%`;
+    } else if (progressEl) {
+      progressEl.remove();
+    }
+  }
+  return complete;
+}
+
 // Status line under Generate. Format: "Running 2 of 5 · 3 queued".
-function renderQueue() {
+function renderQueue(opts = {}) {
   const open = state.queue.filter(j => j.status !== 'done');
   const status = $('#wsQueueStatus');
   if (!open.length) {
@@ -3741,7 +3830,16 @@ function renderQueue() {
     if (pending) pieces.push(`<span class="sep">·</span><span>${pending} queued</span>`);
     status.innerHTML = pieces.join('');
   }
-  // Queue cards live inside the recents grid (prepended), so re-render that.
+  // Queue cards live inside the recents grid (prepended). During progress
+  // updates, mutate the queue card in place so existing recent media elements
+  // are not destroyed/recreated every step, which makes video thumbnails flicker.
+  if (opts.progressOnly) {
+    let recentsOk = true;
+    let assetsOk = true;
+    if (state.workspace) recentsOk = updateQueueCardsInPlace($('#wsRecent'));
+    if ($('.view.active')?.dataset.view === 'assets') assetsOk = updateQueueCardsInPlace($('#assetGrid'));
+    if (recentsOk && assetsOk) return;
+  }
   if (state.workspace) renderRecents(state.workspace);
   if ($('.view.active')?.dataset.view === 'assets') renderAssets();
 }

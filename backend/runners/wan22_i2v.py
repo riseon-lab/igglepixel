@@ -1,19 +1,21 @@
 """Wan 2.2 image-to-video runner.
 
-Two size variants from the same registry entry:
-  - 14B (Wan-AI/Wan2.2-I2V-A14B-Diffusers)  — best quality, needs ~80 GB BF16
-  - 5B  (Wan-AI/Wan2.2-TI2V-5B-Diffusers)   — consumer, ~27 GB BF16
+Three size variants from the same registry entry:
+  - 14B Lightning (base 14B + fused Lightx2v LoRA) — fast 8-step path
+  - 14B (Wan-AI/Wan2.2-I2V-A14B-Diffusers)       — best quality, needs ~80 GB BF16
+  - 5B  (Wan-AI/Wan2.2-TI2V-5B-Diffusers)        — consumer, ~27 GB BF16
 
-The launcher passes FORGE_VARIANT (14b | 5b) and FORGE_QUANT (bf16 | int8 | nf4)
-as env vars; this runner reads them and picks the right HF repo + quant config.
+The launcher passes FORGE_VARIANT (14b-lightning | 14b | 5b) and FORGE_QUANT
+(bf16 | int8 | nf4) as env vars; this runner reads them and picks the right
+HF repo + quant config.
 
 Outputs an mp4 written to assets/generated/. Uses diffusers.export_to_video
 (ffmpeg-backed) so the only requirement is that ffmpeg lives on the image,
 which it already does.
 
-Lightning LoRA support: the registry's default_loras list includes the
-Wan2.2 4-step Lightning LoRA. Selecting it lets the model finish in 4 steps
-instead of ~50, with the trade-off being slightly less motion detail.
+Lightning support is exposed as a baked variant: the runner loads the
+Lightx2v 480p LoRA into both Wan experts, fuses it at load, then unloads the
+adapter bookkeeping so jobs behave like normal Wan generations.
 """
 
 from __future__ import annotations
@@ -25,13 +27,25 @@ from typing import Optional
 from .base import Runner as RunnerBase, WORKSPACE
 
 
-# Maps variant id → diffusers HF repo. Mirrored from model_registry.json so
-# the runner doesn't have to read the registry; the launcher passes
+# Maps variant id → diffusers HF repo/config. Mirrored from model_registry.json
+# so the runner doesn't have to read the registry; the launcher passes
 # FORGE_VARIANT and we look it up here.
 VARIANTS = {
-    "14b": "Wan-AI/Wan2.2-I2V-A14B-Diffusers",
-    "5b":  "Wan-AI/Wan2.2-TI2V-5B-Diffusers",
+    "14b-lightning": {
+        "repo": "Wan-AI/Wan2.2-I2V-A14B-Diffusers",
+        "lightning": True,
+        "default_steps": 8,
+    },
+    "14b": {
+        "repo": "Wan-AI/Wan2.2-I2V-A14B-Diffusers",
+    },
+    "5b": {
+        "repo": "Wan-AI/Wan2.2-TI2V-5B-Diffusers",
+    },
 }
+
+LIGHTNING_REPO = "Kijai/WanVideo_comfy"
+LIGHTNING_WEIGHT = "Lightx2v/lightx2v_I2V_14B_480p_cfg_step_distill_rank128_bf16.safetensors"
 
 
 class Runner(RunnerBase):
@@ -46,6 +60,7 @@ class Runner(RunnerBase):
         self._pipe = None
         self._cancel = False
         self._variant = None
+        self._lightning_baked = False
 
     # ── Lifecycle ────────────────────────────────────────────────────
     def load(self) -> None:
@@ -60,7 +75,11 @@ class Runner(RunnerBase):
             print(f"[runner] unknown variant '{variant}', falling back to 5b", flush=True)
             variant = "5b"
         self._variant = variant
-        repo = VARIANTS[variant]
+        variant_cfg = VARIANTS[variant]
+        repo = variant_cfg["repo"]
+        lightning = bool(variant_cfg.get("lightning"))
+        if lightning and quant != "bf16":
+            raise RuntimeError("Wan Lightning baked variant currently requires BF16. Select BF16 or the standard 14B/5B variant.")
 
         kwargs = {"torch_dtype": torch.bfloat16, "token": token}
         if quant in ("int8", "nf4"):
@@ -78,6 +97,8 @@ class Runner(RunnerBase):
             print(f"[runner] loading Wan 2.2 {variant} (bf16)…", flush=True)
 
         pipe = WanImageToVideoPipeline.from_pretrained(repo, **kwargs)
+        if lightning:
+            self._bake_lightning_lora(pipe)
 
         if torch.cuda.is_available() and quant == "bf16":
             try:
@@ -85,7 +106,7 @@ class Runner(RunnerBase):
                 total_gb = total / 1024 ** 3
                 # 14B at bf16 needs ~80 GB; 5B at bf16 needs ~27 GB. Anything
                 # below comfortable headroom gets sequential offload.
-                threshold = 80 if variant == "14b" else 36
+                threshold = 80 if variant.startswith("14b") else 36
                 if total_gb >= threshold:
                     pipe.to("cuda")
                 else:
@@ -95,6 +116,42 @@ class Runner(RunnerBase):
         # int8/nf4: bnb auto-placed on GPU during from_pretrained
         print("[runner] ready", flush=True)
         self._pipe = pipe
+
+    def _bake_lightning_lora(self, pipe) -> None:
+        """Fuse Lightx2v's Wan 2.2 I2V 14B Lightning LoRA once at load time.
+
+        The LoRA file contains weights for both experts. Diffusers needs it
+        loaded once into the high-noise transformer and once into transformer_2,
+        then fused with different scales. After fusion, runtime jobs behave like
+        a normal model and do not need to carry a LoRA payload.
+        """
+        print("[runner] baking Wan Lightning LoRA into 14B pipeline…", flush=True)
+        high_adapter = "lightx2v_high"
+        low_adapter = "lightx2v_low"
+        try:
+            pipe.load_lora_weights(
+                LIGHTNING_REPO,
+                weight_name=LIGHTNING_WEIGHT,
+                adapter_name=high_adapter,
+            )
+            pipe.load_lora_weights(
+                LIGHTNING_REPO,
+                weight_name=LIGHTNING_WEIGHT,
+                adapter_name=low_adapter,
+                load_into_transformer_2=True,
+            )
+            pipe.set_adapters([high_adapter, low_adapter], adapter_weights=[1.0, 1.0])
+            pipe.fuse_lora(adapter_names=[high_adapter], lora_scale=3.0, components=["transformer"])
+            pipe.fuse_lora(adapter_names=[low_adapter], lora_scale=1.0, components=["transformer_2"])
+            pipe.unload_lora_weights()
+            self._lightning_baked = True
+            print("[runner] Wan Lightning LoRA fused (high=3.0, low=1.0)", flush=True)
+        except Exception as e:
+            try:
+                pipe.unload_lora_weights()
+            except Exception:
+                pass
+            raise RuntimeError(f"Failed to bake Wan Lightning LoRA: {type(e).__name__}: {e}") from e
 
     # ── Inference ────────────────────────────────────────────────────
     def generate(self, params: dict, loras: Optional[list] = None) -> dict:
@@ -122,22 +179,30 @@ class Runner(RunnerBase):
             raise FileNotFoundError(f"Reference image not found: {ref_path}")
 
         seed    = int(params.get("seed", -1))
-        steps   = int(params.get("steps", 30))
-        cfg     = float(params.get("cfg", 5.0))
+        default_steps = int(VARIANTS.get(self._variant, {}).get("default_steps", 8)) if self._lightning_baked else 30
+        default_cfg = 1.0 if self._lightning_baked else 5.0
+        steps   = int(params.get("steps", default_steps))
+        cfg     = float(params.get("cfg", default_cfg))
         # Dual-expert (MoE) guidance: high-noise expert uses cfg, low-noise
         # uses cfg_low. If unset, diffusers reuses cfg for both.
         cfg_low = params.get("cfg_low")
-        cfg_low = float(cfg_low) if cfg_low is not None else None
+        cfg_low = float(cfg_low) if cfg_low is not None else (default_cfg if self._lightning_baked else None)
         width  = int(params.get("width",  832))
         height = int(params.get("height", 480))
-        fps    = int(params.get("fps", 24))
+        fps    = int(params.get("fps", 16 if self._lightning_baked else 24))
         duration = params.get("duration")
         if duration is not None:
             # Wan works best with frame counts of 4n + 1. Let the UI expose
             # seconds, then resolve to the nearest valid frame count here.
             seconds = max(0.1, float(duration))
-            raw_frames = max(16, min(121, int(round(seconds * fps))))
-            frames = max(17, min(121, ((raw_frames - 1) // 4) * 4 + 1))
+            if self._lightning_baked:
+                # Lightx2v's 480p distilled recipe clamps the model frames to
+                # 8-80 and then adds the initial frame, so 3.5s at 16fps = 57.
+                model_frames = max(8, min(80, int(round(seconds * fps))))
+                frames = 1 + model_frames
+            else:
+                raw_frames = max(16, min(121, int(round(seconds * fps))))
+                frames = max(17, min(121, ((raw_frames - 1) // 4) * 4 + 1))
         else:
             frames = int(params.get("num_frames", 81))
         if seed < 0:
@@ -191,6 +256,7 @@ class Runner(RunnerBase):
         return self.asset_response([on_disk], meta={
             "model":    self.model_id,
             "variant":  self._variant,
+            "lightning": self._lightning_baked,
             "prompt":   prompt,
             "ref":      ref_path,
             "seed":     seed,
