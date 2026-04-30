@@ -1180,6 +1180,101 @@ body::before {
   text-transform: none;
   letter-spacing: 0;
 }
+.prompt-mode-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  height: 26px;
+  padding: 2px;
+  border: 1px solid var(--line-1);
+  border-radius: var(--r-sm);
+  background: var(--glass-1);
+  margin-left: auto;
+  margin-right: 8px;
+}
+.prompt-mode-btn {
+  border: 0;
+  border-radius: calc(var(--r-sm) - 2px);
+  background: transparent;
+  color: var(--t-3);
+  font: inherit;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
+  height: 20px;
+  padding: 0 8px;
+  cursor: pointer;
+}
+.prompt-mode-btn.active {
+  background: var(--glass-3);
+  color: var(--t-1);
+}
+.prompt-builder {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.pb-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+.pb-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+.pb-field span,
+.pb-chip-label,
+.pb-preview-label {
+  color: var(--t-3);
+  font-size: 10.5px;
+  font-weight: 600;
+}
+.pb-control-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px 12px;
+}
+.pb-chip-group {
+  min-width: 0;
+}
+.pb-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+.pb-chip {
+  min-height: 28px;
+  border: 1px solid var(--line-1);
+  border-radius: var(--r-sm);
+  background: var(--glass-1);
+  color: var(--t-2);
+  font: inherit;
+  font-size: 11.5px;
+  padding: 0 9px;
+  cursor: pointer;
+}
+.pb-chip.active {
+  border-color: var(--line-3);
+  background: var(--glass-3);
+  color: var(--t-1);
+}
+.pb-preview {
+  border: 1px solid var(--line-1);
+  border-radius: var(--r-md);
+  background: var(--glass-1);
+  padding: 10px 12px;
+}
+.pb-preview-text {
+  margin-top: 5px;
+  color: var(--t-2);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
 
 .ws-prompt {
   width: 100%;
@@ -1804,6 +1899,26 @@ body::before {
 }
 
 @media (max-width: 640px) {
+  .ws-section-title {
+    align-items: flex-start;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .prompt-mode-toggle {
+    order: 3;
+    width: 100%;
+    margin: 0;
+  }
+  .prompt-mode-btn {
+    flex: 1;
+  }
+  .prompt-enhance-btn {
+    margin-left: auto;
+  }
+  .pb-grid,
+  .pb-control-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
   .view.llm-mode { max-width: none; }
   .view.llm-mode.active {
     height: calc(100vh - var(--topbar-h) - 18px);
@@ -2953,3 +3068,272 @@ body::before {
   .ws-bar .btn { flex: 1; justify-content: center; }
 }
 .mask-text { -webkit-text-security: disc; }
+
+/* ── HF browser modal + Downloads page ──────────────────────────────────
+   The old "type the filename and pray" form is gone. We now have:
+     - A flat list of weight files for a repo (folder structure flattened
+       into rel_path strings — disambiguates same-name files in subdirs).
+     - A download queue panel that's visible on the Downloads view OR
+       any time there are active downloads, with live progress bars.
+   Mobile rules sit at the bottom of the @media block farther down. */
+
+.downloads-grid { display: grid; gap: 16px; max-width: 720px; }
+.hf-card .field-stack { display: flex; flex-direction: column; gap: 12px; }
+.hf-advanced { border: 1px solid var(--line-1); border-radius: 8px; padding: 0; }
+.hf-advanced > summary {
+  list-style: none;
+  cursor: pointer;
+  padding: 10px 12px;
+  font-size: 12.5px;
+  color: var(--t-2);
+  user-select: none;
+}
+.hf-advanced > summary::-webkit-details-marker { display: none; }
+.hf-advanced > summary::before {
+  content: "▸ ";
+  display: inline-block;
+  margin-right: 4px;
+  transition: transform 0.15s;
+}
+.hf-advanced[open] > summary::before { transform: rotate(90deg); }
+.hf-advanced[open] > summary { border-bottom: 1px solid var(--line-1); }
+.hf-advanced > .field { padding: 0 12px; }
+.hf-advanced > .field:first-of-type { margin-top: 10px !important; }
+.hf-advanced > .btn { margin: 12px; width: calc(100% - 24px); }
+
+/* HF browser modal — wider than the default modal because file paths
+   can be long (e.g. split_files/diffusion_models/foo_bf16.safetensors). */
+.modal.hf-browser {
+  width: 720px;
+  max-width: min(720px, 92vw);
+  max-height: 86vh;
+}
+.hf-browser-bar {
+  display: flex;
+  gap: 8px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--line-1);
+}
+.hf-browser-bar .text-input { flex: 1; }
+.hf-browser-toolbar {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--line-1);
+}
+.hf-browser-toolbar .hf-filter { flex: 1; }
+.hf-browser-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 4px 0;
+  min-height: 240px;
+}
+.hf-browser-body .empty.hf-error {
+  color: var(--err, #ff7676);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.hf-browser-body .empty.hf-error svg { width: 16px; height: 16px; }
+
+.hf-file-row {
+  display: grid;
+  grid-template-columns: 22px 1fr auto auto;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px;
+  min-height: 44px;       /* touch-friendly */
+  font-size: 12.5px;
+  cursor: pointer;
+  border-bottom: 1px solid var(--line-1);
+  transition: background 0.1s;
+}
+.hf-file-row:hover { background: rgba(255,255,255,0.04); }
+.hf-file-row.selected { background: rgba(255,24,189,0.08); }
+.hf-file-row input[type="checkbox"] { accent-color: #ff18bd; cursor: pointer; }
+.hf-file-name {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--t-1);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.hf-file-size {
+  font-size: 11px;
+  color: var(--t-3);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.lfs-pill {
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--t-2);
+  background: rgba(255,255,255,0.08);
+  border: 1px solid var(--line-2);
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+.hf-browser-foot {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: 10px;
+  align-items: center;
+  padding: 12px 16px;
+  border-top: 1px solid var(--line-1);
+  background: rgba(0,0,0,0.25);
+}
+.hf-browser-summary {
+  font-size: 12px;
+  color: var(--t-2);
+}
+
+.link-btn {
+  background: transparent;
+  border: 0;
+  color: var(--t-2);
+  font-size: 11.5px;
+  cursor: pointer;
+  padding: 4px 6px;
+  border-radius: 4px;
+}
+.link-btn:hover { color: var(--t-1); background: rgba(255,255,255,0.04); }
+
+/* ── Download queue panel ──────────────────────────────────────────────
+   Pinned to the top of the Downloads view. Each row carries its own
+   progress bar so multiple downloads stay individually monitorable. */
+
+.dl-queue-wrap {
+  background: rgba(255,255,255,0.025);
+  border: 1px solid var(--line-1);
+  border-radius: 12px;
+  margin-bottom: 16px;
+  max-width: 720px;
+  overflow: hidden;
+}
+.dl-queue-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--line-1);
+}
+.dl-queue-title {
+  font-size: 12.5px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+.dl-queue-list {
+  display: flex;
+  flex-direction: column;
+}
+.dl-job {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  grid-template-rows: auto auto auto;
+  gap: 6px 14px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--line-1);
+  align-items: center;
+}
+.dl-job:last-child { border-bottom: 0; }
+.dl-job-meta { min-width: 0; grid-column: 1 / 2; grid-row: 1; }
+.dl-job-side { grid-column: 2; grid-row: 1 / span 2; text-align: right; }
+.dl-job-bar {
+  grid-column: 1 / -1;
+  grid-row: 2;
+  height: 4px;
+  background: rgba(255,255,255,0.06);
+  border-radius: 2px;
+  overflow: hidden;
+}
+.dl-job-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #ff18bd, #ff67d8);
+  transition: width 0.4s ease-out;
+}
+.dl-job-name {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--t-1);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dl-job-sub {
+  font-size: 11px;
+  color: var(--t-3);
+  margin-top: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dl-job-sizes {
+  font-size: 11px;
+  color: var(--t-3);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  margin-bottom: 4px;
+}
+.dl-job-actions { display: flex; gap: 6px; justify-content: flex-end; }
+.btn.xs {
+  padding: 4px 8px;
+  font-size: 11px;
+  min-height: 26px;
+}
+.btn.xs svg { width: 12px; height: 12px; }
+.dl-job-message {
+  grid-column: 1 / -1;
+  grid-row: 3;
+  font-size: 11.5px;
+  color: var(--err, #ff7676);
+  background: rgba(255,118,118,0.06);
+  border: 1px solid rgba(255,118,118,0.18);
+  border-radius: 6px;
+  padding: 6px 8px;
+  margin-top: 4px;
+  word-break: break-word;
+}
+.dl-job-done .dl-job-fill { background: linear-gradient(90deg, #4ade80, #86efac); }
+.dl-job-cancelled .dl-job-fill { background: rgba(255,255,255,0.18); }
+.dl-job.dl-job-error .dl-job-fill { background: linear-gradient(90deg, #ef4444, #fca5a5); }
+
+/* Mobile rules: stack action buttons under the meta + sizes so nothing
+   gets pushed off-screen on narrow widths. The queue panel itself sits
+   above the bottom-nav so the last row is always reachable. */
+@media (max-width: 540px) {
+  .modal.hf-browser { width: 100%; max-width: calc(100vw - 16px); max-height: calc(100dvh - 80px); }
+  .hf-browser-bar { flex-wrap: wrap; }
+  .hf-browser-bar .text-input { width: 100%; flex: 1 1 100%; }
+  .hf-browser-toolbar { flex-wrap: wrap; }
+  .hf-browser-foot {
+    grid-template-columns: 1fr;
+    gap: 8px;
+  }
+  .hf-browser-foot .select,
+  .hf-browser-foot .btn { width: 100%; }
+
+  .hf-file-row {
+    grid-template-columns: 22px 1fr auto;
+    grid-template-rows: auto auto;
+    gap: 4px 8px;
+  }
+  .hf-file-name { grid-column: 2 / -1; grid-row: 1; }
+  .hf-file-size { grid-column: 2; grid-row: 2; }
+  .hf-file-row .lfs-pill { grid-column: 3; grid-row: 2; justify-self: end; }
+
+  .dl-queue-wrap { margin-bottom: calc(var(--mobile-nav-h) + 12px); }
+  .dl-job {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto auto auto auto;
+  }
+  .dl-job-meta  { grid-column: 1; grid-row: 1; }
+  .dl-job-side  { grid-column: 1; grid-row: 3; text-align: left; }
+  .dl-job-bar   { grid-row: 2; }
+  .dl-job-message { grid-row: 4; }
+  .dl-job-actions { justify-content: flex-start; }
+}

@@ -49,6 +49,8 @@ const state = {
   // Workspace
   workspace:     null,        // model_id of currently-open workspace, or null
   workspaceParams: {},        // model_id -> persisted prompt/settings while app is open
+  promptModes:   readJSONStorage('forge_prompt_modes', {}),   // model_id -> 'builder' | 'raw'
+  promptBuilders: readJSONStorage('forge_prompt_builders', {}),// model_id -> guided prompt fields
   recents:       {},          // model_id -> [asset, …] (this session only)
   imgInputs:     {},          // { model_id -> { ref:{img,enabled}, pose:{...}, ... } }
   loraStates:    readJSONStorage('forge_lora_states', {}), // persisted per-model LoRA toggles + strengths
@@ -191,6 +193,30 @@ const DEFAULT_GROUPS_BY_CATEGORY = {
   llm:   ['llm'],
   audio: ['audio', 'server'],
 };
+
+const PROMPT_BUILDER_TEXT_FIELDS = [
+  { key: 'idea',       label: 'Core idea',    placeholder: 'person, product, place, creature...' },
+  { key: 'hairStyle',  label: 'Hair style',   placeholder: 'long wavy hair, short bob...' },
+  { key: 'hairColor',  label: 'Hair colour',  placeholder: 'black, auburn, platinum blonde...' },
+  { key: 'bodyType',   label: 'Body type',    placeholder: 'athletic, slim, broad build...' },
+  { key: 'outfit',     label: 'Outfit',       placeholder: 'oversized coat, formal suit...' },
+  { key: 'scene',      label: 'Scene',        placeholder: 'neon street, studio backdrop...' },
+  { key: 'props',      label: 'Props',        placeholder: 'umbrella, headphones, camera...' },
+  { key: 'action',     label: 'Action',       placeholder: 'walking, holding a drink...' },
+  { key: 'style',      label: 'Style / light',placeholder: 'natural light, cinematic, editorial...' },
+];
+
+const PROMPT_BUILDER_CHIP_GROUPS = [
+  { key: 'pose', label: 'Pose', options: ['standing', 'sitting', 'walking', 'kneeling', 'leaning', 'lying down'] },
+  { key: 'distance', label: 'Subject distance', options: ['close-up', 'half body', 'full body', 'wide shot'] },
+  { key: 'camera', label: 'Camera position', options: ['eye-level', 'low angle', 'high angle', 'overhead', 'front view', '3/4 view', 'side profile', 'back view'] },
+  { key: 'head', label: 'Head direction', options: ['looking at camera', 'looking left', 'looking right', 'looking up', 'looking down'] },
+  { key: 'bodyAxis', label: 'Body facing', options: ['facing camera', 'turned left', 'turned right', 'back-facing'] },
+  { key: 'orientation', label: 'Orientation', options: ['upright subject', 'natural gravity', 'centred subject'] },
+];
+
+const DEFAULT_NEGATIVE_PROMPT =
+  'extra fingers, extra arms, duplicate limbs, malformed hands, distorted face, bad anatomy, blurry, low quality, watermark, text artifacts, upside down subject';
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 const $  = (sel, root = document) => root.querySelector(sel);
@@ -776,6 +802,8 @@ function bindShell() {
   $('#wsGenerate').addEventListener('click', onGenerate);
   $('#wsCancel').addEventListener('click', cancelGenerate);
   $('#wsEnhancePrompt')?.addEventListener('click', enhanceWorkspacePrompt);
+  $('#wsPromptModeBuilder')?.addEventListener('click', () => setPromptMode('builder'));
+  $('#wsPromptModeRaw')?.addEventListener('click', () => setPromptMode('raw'));
   $('#wsLoraAdd').addEventListener('click', () => {
     if (state.selected) openLoraPicker(state.selected);
   });
@@ -2158,6 +2186,9 @@ function renderWorkspace(m, sections) {
   // Pre-fill prompt textareas with current state.
   $('#wsPrompt').value    = state.params.prompt || '';
   $('#wsNegPrompt').value = state.params.negative_prompt || '';
+  $('#wsNegPrompt').placeholder = DEFAULT_NEGATIVE_PROMPT;
+  renderPromptMode(m);
+  renderPromptBuilder(m);
 
   // Aspect chips (only when the model exposes width/height).
   const hasDims = promptKeys.includes('width') && promptKeys.includes('height');
@@ -3547,6 +3578,121 @@ function bindWorkspaceInputs() {
   bindSeedField();
 }
 
+function promptModeForModel(m = state.selected) {
+  if (!m) return 'builder';
+  return state.promptModes[m.id] || 'builder';
+}
+
+function promptBuilderForModel(m = state.selected) {
+  if (!m) return {};
+  state.promptBuilders[m.id] ||= {};
+  return state.promptBuilders[m.id];
+}
+
+function savePromptBuilderState() {
+  writeJSONStorage('forge_prompt_builders', state.promptBuilders);
+}
+
+function savePromptModes() {
+  writeJSONStorage('forge_prompt_modes', state.promptModes);
+}
+
+function setPromptMode(mode) {
+  const m = state.selected;
+  if (!m || !['builder', 'raw'].includes(mode)) return;
+  state.promptModes[m.id] = mode;
+  savePromptModes();
+  if (mode === 'raw') {
+    const compiled = compilePromptBuilder(m);
+    const input = $('#wsPrompt');
+    if (compiled && input && !input.value.trim()) {
+      input.value = compiled;
+      state.params.prompt = compiled;
+    }
+  }
+  renderPromptMode(m);
+}
+
+function renderPromptMode(m) {
+  const mode = promptModeForModel(m);
+  const builder = $('#wsPromptBuilder');
+  const raw = $('#wsPromptRaw');
+  if (builder) builder.style.display = mode === 'builder' ? '' : 'none';
+  if (raw) raw.style.display = mode === 'raw' ? '' : 'none';
+  $('#wsPromptModeBuilder')?.classList.toggle('active', mode === 'builder');
+  $('#wsPromptModeRaw')?.classList.toggle('active', mode === 'raw');
+}
+
+function renderPromptBuilder(m) {
+  const root = $('#wsPromptBuilder');
+  if (!root || !m || m.category === 'llm') return;
+  const values = promptBuilderForModel(m);
+  const textFields = PROMPT_BUILDER_TEXT_FIELDS.map(f => `
+    <label class="pb-field">
+      <span>${esc(f.label)}</span>
+      <input class="text-input" data-pb-text="${esc(f.key)}" value="${esc(values[f.key] || '')}" placeholder="${esc(f.placeholder)}">
+    </label>
+  `).join('');
+  const chipGroups = PROMPT_BUILDER_CHIP_GROUPS.map(g => `
+    <div class="pb-chip-group">
+      <div class="pb-chip-label">${esc(g.label)}</div>
+      <div class="pb-chips">
+        ${g.options.map(opt => {
+          const active = values[g.key] === opt;
+          return `<button type="button" class="pb-chip ${active ? 'active' : ''}" data-pb-chip="${esc(g.key)}" data-pb-value="${esc(opt)}">${esc(opt)}</button>`;
+        }).join('')}
+      </div>
+    </div>
+  `).join('');
+  root.innerHTML = `
+    <div class="pb-grid">${textFields}</div>
+    <div class="pb-control-grid">${chipGroups}</div>
+    <div class="pb-preview">
+      <div class="pb-preview-label">Compiled prompt</div>
+      <div class="pb-preview-text" id="wsPromptBuilderPreview">${esc(compilePromptBuilder(m) || 'Fill in a few fields to build the generation prompt.')}</div>
+    </div>
+  `;
+  $$('[data-pb-text]', root).forEach(input => input.addEventListener('input', () => {
+    values[input.dataset.pbText] = input.value;
+    savePromptBuilderState();
+    updatePromptBuilderPreview(m);
+  }));
+  $$('[data-pb-chip]', root).forEach(btn => btn.addEventListener('click', () => {
+    const key = btn.dataset.pbChip;
+    const value = btn.dataset.pbValue;
+    values[key] = values[key] === value ? '' : value;
+    savePromptBuilderState();
+    renderPromptBuilder(m);
+  }));
+}
+
+function updatePromptBuilderPreview(m) {
+  const el = $('#wsPromptBuilderPreview');
+  if (!el) return;
+  el.textContent = compilePromptBuilder(m) || 'Fill in a few fields to build the generation prompt.';
+}
+
+function compilePromptBuilder(m = state.selected) {
+  const values = promptBuilderForModel(m);
+  const parts = [];
+  for (const f of PROMPT_BUILDER_TEXT_FIELDS) {
+    const value = String(values[f.key] || '').trim();
+    if (value) parts.push(value);
+  }
+  for (const g of PROMPT_BUILDER_CHIP_GROUPS) {
+    const value = String(values[g.key] || '').trim();
+    if (value) parts.push(value);
+  }
+  return parts.join(', ');
+}
+
+function currentWorkspacePrompt() {
+  const m = state.selected;
+  if (!m || m.category === 'llm') return state.params.prompt || '';
+  if (promptModeForModel(m) === 'builder') return compilePromptBuilder(m) || state.params.prompt || '';
+  return $('#wsPrompt')?.value || state.params.prompt || '';
+}
+
 function previewEnhancePrompt(prompt, m) {
   const cleaned = String(prompt || '').replace(/\s+/g, ' ').trim();
   if (!cleaned) return '';
@@ -3560,7 +3706,7 @@ async function enhanceWorkspacePrompt() {
   const m = state.selected || state.models.find(x => x.id === state.workspace);
   if (!m || m.category === 'llm') return;
   const input = $('#wsPrompt');
-  const original = (input.value || '').trim();
+  const original = currentWorkspacePrompt().trim();
   if (!original) return toast('Write a prompt first.', 'error');
   const btn = $('#wsEnhancePrompt');
   const oldText = btn?.textContent || 'Enhance';
@@ -3585,6 +3731,11 @@ async function enhanceWorkspacePrompt() {
     if (next && next !== original) {
       input.value = next;
       state.params.prompt = next;
+      if (promptModeForModel(m) === 'builder') {
+        state.promptModes[m.id] = 'raw';
+        savePromptModes();
+        renderPromptMode(m);
+      }
       toast('Prompt enhanced', 'success');
     } else {
       toast('Prompt already looks usable.', 'info');
@@ -3781,6 +3932,9 @@ function snapshotJob() {
   if (!m) return null;
   const slots = state.imgInputs[m.id] || {};
   const params = { ...state.params };
+  if (m.category !== 'llm') {
+    params.prompt = currentWorkspacePrompt();
+  }
   for (const inp of (m.image_inputs || [])) {
     const slot = slots[inp.key];
     const active = slot?.images?.[slot.idx ?? 0];
@@ -5045,7 +5199,7 @@ function renderDLJob(j) {
        <button class="btn xs" data-dl-dismiss="${esc(j.id)}" title="Dismiss"><svg><use href="#i-x"/></svg></button>`
     : `<button class="btn xs" data-dl-dismiss="${esc(j.id)}" title="Dismiss"><svg><use href="#i-x"/></svg></button>`;
   const errRow = j.status === 'error' && j.error
-    ? `<div class="dl-job-error">${esc(j.error)}</div>`
+    ? `<div class="dl-job-message">${esc(j.error)}</div>`
     : '';
   return `<div class="dl-job dl-job-${j.status}">
     <div class="dl-job-meta">

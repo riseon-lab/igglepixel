@@ -321,9 +321,16 @@
           <div class="ws-section">
             <div class="ws-section-title">
               <span>Prompt</span>
+              <div class="prompt-mode-toggle" role="group" aria-label="Prompt mode">
+                <button type="button" class="prompt-mode-btn active" id="wsPromptModeBuilder" data-mode="builder">Builder</button>
+                <button type="button" class="prompt-mode-btn" id="wsPromptModeRaw" data-mode="raw">Prompt box</button>
+              </div>
               <button class="link-btn prompt-enhance-btn" id="wsEnhancePrompt" type="button">Enhance</button>
             </div>
-            <textarea class="ws-prompt" id="wsPrompt" placeholder="Describe what to generate…"></textarea>
+            <div class="prompt-builder" id="wsPromptBuilder"></div>
+            <div class="prompt-raw" id="wsPromptRaw" style="display:none">
+              <textarea class="ws-prompt" id="wsPrompt" placeholder="Describe what to generate…"></textarea>
+            </div>
           </div>
 
           <div class="ws-section" id="wsNegSection">
