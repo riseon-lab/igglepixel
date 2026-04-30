@@ -1882,8 +1882,8 @@ body::before {
 /* Recents strip */
 .ws-recent {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
-  gap: 8px;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 10px;
 }
 .ws-recent .asset { aspect-ratio: 1/1; }
 
@@ -2753,6 +2753,10 @@ body::before {
   }
   .ws-section {
     overflow: hidden;
+  }
+  .ws-recent {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
   }
 
   /* ── Topbar: compact, settings stays here while bottom nav carries Downloads ── */

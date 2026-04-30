@@ -265,7 +265,7 @@ class Runner(RunnerBase):
 
         seed    = int(params.get("seed", -1))
         default_steps = int(VARIANTS.get(self._variant, {}).get("default_steps", 8)) if self._lightning_baked else 30
-        default_cfg = 1.0 if self._lightning_baked else 5.0
+        default_cfg = 1.0
         steps   = int(params.get("steps", default_steps))
         cfg     = float(params.get("cfg", default_cfg))
         # Dual-expert (MoE) guidance: high-noise expert uses cfg, low-noise
@@ -279,7 +279,7 @@ class Runner(RunnerBase):
         width, height = ref_img.size
         if (width, height) != (original_width, original_height):
             print(f"[runner] resized Wan source {original_width}x{original_height} → {width}x{height}", flush=True)
-        fps    = int(params.get("fps", 16 if self._lightning_baked else 24))
+        fps    = int(params.get("fps", 18))
         duration = params.get("duration")
         if duration is not None:
             # Wan works best with frame counts of 4n + 1. Let the UI expose

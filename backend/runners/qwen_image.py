@@ -89,7 +89,7 @@ class Runner(RunnerBase):
         if not prompt:
             raise ValueError("`prompt` is required")
         seed   = int(params.get("seed", -1))
-        steps  = int(params.get("steps", 30))
+        steps  = int(params.get("steps", 25))
         cfg    = float(params.get("cfg", 4.0))
         width  = int(params.get("width",  1024))
         height = int(params.get("height", 1024))

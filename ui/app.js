@@ -25,6 +25,10 @@ function readJSONStorage(key, fallback = {}) {
   }
 }
 
+function writeJSONStorage(key, value) {
+  try { localStorage.setItem(key, JSON.stringify(value)); } catch {}
+}
+
 // ── State ────────────────────────────────────────────────────────────────
 const state = {
   models:        [],
@@ -47,7 +51,7 @@ const state = {
   workspaceParams: {},        // model_id -> persisted prompt/settings while app is open
   recents:       {},          // model_id -> [asset, …] (this session only)
   imgInputs:     {},          // { model_id -> { ref:{img,enabled}, pose:{...}, ... } }
-  loraStates:    {},          // { model_id -> { filename -> { on, strength } } }
+  loraStates:    readJSONStorage('forge_lora_states', {}), // persisted per-model LoRA toggles + strengths
   components:    [],          // installed split-file components: [{target, filename, size_mb, path}]
   runtimes:      {},          // { model_id -> {state: 'missing'|'installing'|'ready'|'error', last_line?, error?} }
   chats:         {},          // { model_id -> [{role, text, thinking?, streaming?}] }
@@ -1158,11 +1162,28 @@ function clearWorkspaceMemory(id) {
   delete state.loraStates[id];
   delete state.recents[id];
   delete state.lastSeed[id];
+  persistLoraStates();
   state.queue = state.queue.filter(j => j.model_id !== id);
   if (state.workspace === id) {
     const m = state.models.find(x => x.id === id);
     if (m) state.params = state.workspaceParams[id] = defaultParamsForModel(m);
   }
+}
+
+function persistLoraStates() {
+  const out = {};
+  for (const [modelId, entries] of Object.entries(state.loraStates || {})) {
+    out[modelId] = {};
+    for (const [key, value] of Object.entries(entries || {})) {
+      out[modelId][key] = {
+        on: !!value.on,
+        strength: Number(value.strength ?? 1.0),
+        strength_high: Number(value.strength_high ?? value.strength ?? 1.0),
+        strength_low: Number(value.strength_low ?? value.strength ?? 1.0),
+      };
+    }
+  }
+  writeJSONStorage('forge_lora_states', out);
 }
 
 // Pick the highest-quality variant the GPU can run. Variants are model
@@ -2954,11 +2975,13 @@ function renderWorkspaceLoras(m) {
   const defaultLow  = (l) => l.strength_low  ?? l.strength ?? 1.0;
   for (const l of defaults) {
     const k = keyOf(l);
-    if (!lstate[k]) lstate[k] = {
-      on: !!l.default_on,
-      strength: l.strength ?? 1.0,
-      strength_high: defaultHigh(l),
-      strength_low:  defaultLow(l),
+    const saved = lstate[k] || {};
+    lstate[k] = {
+      ...saved,
+      on: saved.on ?? !!l.default_on,
+      strength: saved.strength ?? l.strength ?? 1.0,
+      strength_high: saved.strength_high ?? defaultHigh(l),
+      strength_low:  saved.strength_low  ?? defaultLow(l),
       bundled: true,
       label: l.label || l.filename || k,
       entry: l,                 // keep the registry entry so generate() can pick up files/hf_repo
@@ -2966,11 +2989,15 @@ function renderWorkspaceLoras(m) {
   }
   for (const l of assigned) {
     const k = keyOf(l);
-    if (!lstate[k]) lstate[k] = {
-      on: false,
-      strength: 1.0,
-      strength_high: 1.0,
-      strength_low: 1.0,
+    const saved = lstate[k] || {};
+    const highDefault = m.dual_expert ? 0.7 : 1.0;
+    const lowDefault = m.dual_expert ? 0.9 : 1.0;
+    lstate[k] = {
+      ...saved,
+      on: saved.on ?? false,
+      strength: saved.strength ?? 1.0,
+      strength_high: saved.strength_high ?? highDefault,
+      strength_low: saved.strength_low ?? lowDefault,
       bundled: false,
       label: l.filename,
       entry: l,
@@ -3088,6 +3115,7 @@ function bindLoraCards(m) {
     if (b.disabled) return;
     const fn = b.dataset.loraToggle;
     lstate[fn].on = !lstate[fn].on;
+    persistLoraStates();
     renderWorkspaceLoras(m);
   }));
   // Install missing files for a bundled LoRA. Pulls each {hf_repo, filename}
@@ -3130,6 +3158,7 @@ function bindLoraCards(m) {
       });
       const out = $(`[data-lora-strength-val="${CSS.escape(fn)}"]`);
       if (out) out.textContent = `×${Number(s.value).toFixed(2)}`;
+      persistLoraStates();
     });
   });
   // Dual-expert (high-noise / low-noise) sliders for MoE pipelines (Wan etc.)
@@ -3142,6 +3171,7 @@ function bindLoraCards(m) {
       });
       const out = $(`[data-lora-strength-high-val="${CSS.escape(fn)}"]`);
       if (out) out.textContent = `×${Number(s.value).toFixed(2)}`;
+      persistLoraStates();
     });
   });
   $$('[data-lora-strength-low]', $('#wsLoraPane')).forEach(s => {
@@ -3153,6 +3183,7 @@ function bindLoraCards(m) {
       });
       const out = $(`[data-lora-strength-low-val="${CSS.escape(fn)}"]`);
       if (out) out.textContent = `×${Number(s.value).toFixed(2)}`;
+      persistLoraStates();
     });
   });
 }
@@ -4380,6 +4411,16 @@ function parseCivitaiUrl(input) {
   };
 }
 
+function selectCivitaiFile(files = []) {
+  const safeFiles = files.filter(f => f?.name?.toLowerCase().endsWith('.safetensors'));
+  const pool = safeFiles.length ? safeFiles : files.filter(f => f?.name);
+  return [...pool].sort((a, b) => {
+    const primary = Number(!!b.primary) - Number(!!a.primary);
+    if (primary) return primary;
+    return Number(b.sizeKB || 0) - Number(a.sizeKB || 0);
+  })[0];
+}
+
 async function civOpenByUrl() {
   const raw = $('#civUrl').value;
   const parsed = parseCivitaiUrl(raw);
@@ -4431,7 +4472,7 @@ function openCivVersionPicker(model, preselectVersionId) {
     <div class="field-stack" id="civVersionList" style="max-height:54vh;overflow:auto">
       ${versions.map((v, i) => {
         const thumb = v.images?.[0]?.url || '';
-        const file  = v.files?.find(f => f.name?.endsWith('.safetensors')) || v.files?.[0];
+        const file  = selectCivitaiFile(v.files || []);
         const fname = file?.name || '—';
         const fsize = file?.sizeKB ? `${(file.sizeKB / 1024).toFixed(1)} MB` : '';
         const checked = i === initialIdx ? 'checked' : '';
@@ -4469,7 +4510,7 @@ function openCivVersionPicker(model, preselectVersionId) {
     const vIdx = sel ? Number(sel.value) : 0;
     const v = versions[vIdx];
     const tags = $('#civTags').value.split(',').map(t => t.trim()).filter(Boolean);
-    const file = v.files?.find(f => f.name?.endsWith('.safetensors')) || v.files?.[0];
+    const file = selectCivitaiFile(v.files || []);
     if (!file) return toast('No downloadable file in this version', 'error');
     try {
       await api.civDownload({
@@ -4521,7 +4562,7 @@ function openCivDetail(idx) {
     const vIdx = Number($('#civVersionSelect').value);
     const v = versions[vIdx];
     const tags = $('#civTags').value.split(',').map(t => t.trim()).filter(Boolean);
-    const file = v.files?.find(f => f.name.endsWith('.safetensors')) || v.files?.[0];
+    const file = selectCivitaiFile(v.files || []);
     if (!file) return toast('No downloadable file found', 'error');
     try {
       await api.civDownload({

@@ -145,7 +145,7 @@ class Runner(RunnerBase):
             raise FileNotFoundError(f"Reference image not found: {ref_path}")
 
         seed   = int(params.get("seed", -1))
-        steps  = int(params.get("steps", 30))
+        steps  = int(params.get("steps", 25))
         cfg    = float(params.get("cfg", 4.0))
         width  = int(params.get("width",  ref_img.width))
         height = int(params.get("height", ref_img.height))

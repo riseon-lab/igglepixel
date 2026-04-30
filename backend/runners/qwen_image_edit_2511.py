@@ -103,7 +103,7 @@ class Runner(RunnerBase):
         pipe_image = ref_images if len(ref_images) > 1 else ref_images[0]
 
         seed   = int(params.get("seed", -1))
-        steps  = int(params.get("steps", 40))
+        steps  = int(params.get("steps", 25))
         cfg    = float(params.get("cfg", 4.0))
         width  = int(params.get("width",  ref_images[0].width))
         height = int(params.get("height", ref_images[0].height))
