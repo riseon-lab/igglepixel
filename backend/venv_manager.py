@@ -151,10 +151,23 @@ def _ensure_git_clone(spec: dict, log: Callable[[str], None]) -> None:
     repo = spec.get("repo")
     ref  = spec.get("ref", "main")
     dest = Path(spec.get("dest") or (REPOS_DIR / Path(repo).stem))
+    required_paths = [dest / p for p in (spec.get("required_paths") or [])]
+
+    def _has_required_checkout() -> bool:
+        if required_paths:
+            return all(p.exists() for p in required_paths)
+        return dest.exists() and any(dest.iterdir())
+
+    def _clone(url: str) -> int:
+        return _run(["git", "clone", "--depth", "50", "--branch", ref, url, str(dest)], log)
 
     if not (dest / ".git").exists():
         dest.parent.mkdir(parents=True, exist_ok=True)
-        rc = _run(["git", "clone", "--depth", "50", "--branch", ref, repo, str(dest)], log)
+        rc = _clone(repo)
+        if rc != 0 and repo and not repo.endswith(".git"):
+            alt_repo = repo.rstrip("/") + ".git"
+            log(f"WARN: clone failed; retrying with {alt_repo}")
+            rc = _clone(alt_repo)
         if rc != 0:
             raise RuntimeError(f"git clone failed: {repo}@{ref}")
         return
@@ -162,9 +175,25 @@ def _ensure_git_clone(spec: dict, log: Callable[[str], None]) -> None:
     # Existing clone — fetch the requested ref and hard-reset.
     rc = _run(["git", "fetch", "--depth", "50", "origin", ref], log, cwd=dest)
     if rc != 0:
+        if _has_required_checkout():
+            log(f"WARN: git fetch failed for {repo}@{ref}; using cached checkout at {dest}")
+            return
+        log("WARN: cached checkout incomplete; recloning")
+        shutil.rmtree(dest, ignore_errors=True)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        rc = _clone(repo)
+        if rc != 0 and repo and not repo.endswith(".git"):
+            alt_repo = repo.rstrip("/") + ".git"
+            log(f"WARN: clone failed; retrying with {alt_repo}")
+            rc = _clone(alt_repo)
+        if rc == 0:
+            return
         raise RuntimeError(f"git fetch failed: {repo}@{ref}")
     rc = _run(["git", "reset", "--hard", f"origin/{ref}"], log, cwd=dest)
     if rc != 0:
+        if _has_required_checkout():
+            log(f"WARN: git reset failed for {repo}@{ref}; using cached checkout at {dest}")
+            return
         raise RuntimeError(f"git reset failed: {repo}@{ref}")
 
 

@@ -6,9 +6,10 @@
       "label":  "LTX pipelines runtime",
       "python": "3.12",
       "git": {
-        "repo": "https://github.com/Lightricks/LTX-2",
+        "repo": "https://github.com/Lightricks/LTX-2.git",
         "ref":  "main",
-        "dest": "/workspace/repos/ltx-2"
+        "dest": "/workspace/repos/ltx-2",
+        "required_paths": ["packages/ltx-pipelines"]
       },
       "pip": [
         "-e", "/workspace/repos/ltx-2/packages/ltx-pipelines",
