@@ -1688,17 +1688,14 @@ function renderField(f) {
         <div class="slider-head">
           <span>${f.label}</span><span class="val" id="val_${f.key}" data-slider-value="${esc(f.key)}">${v}</span>
         </div>
-        <div class="slider-control">
-          <input class="slider" type="range" min="${min}" max="${max}" step="${step}" value="${v}" data-default="${v}" data-key="${f.key}" data-slider aria-label="${esc(f.label)} slider">
-          <div class="slider-stepper">
-            <button class="slider-step" type="button" data-key="${f.key}" data-stepper="-1" aria-label="Decrease ${esc(f.label)}">
-              <svg><use href="#i-minus"/></svg>
-            </button>
-            <input class="text-input slider-number" type="number" inputmode="decimal" min="${min}" max="${max}" step="${step}" value="${v}" data-default="${v}" data-key="${f.key}" data-slider-number aria-label="${esc(f.label)} value">
-            <button class="slider-step" type="button" data-key="${f.key}" data-stepper="1" aria-label="Increase ${esc(f.label)}">
-              <svg><use href="#i-plus"/></svg>
-            </button>
-          </div>
+        <div class="slider-stepper">
+          <button class="slider-step" type="button" data-key="${f.key}" data-stepper="-1" aria-label="Decrease ${esc(f.label)}">
+            <svg><use href="#i-minus"/></svg>
+          </button>
+          <input class="text-input slider-number" type="number" inputmode="decimal" min="${min}" max="${max}" step="${step}" value="${v}" data-default="${v}" data-key="${f.key}" data-slider-number aria-label="${esc(f.label)} value">
+          <button class="slider-step" type="button" data-key="${f.key}" data-stepper="1" aria-label="Increase ${esc(f.label)}">
+            <svg><use href="#i-plus"/></svg>
+          </button>
         </div>
       </div>`;
     }

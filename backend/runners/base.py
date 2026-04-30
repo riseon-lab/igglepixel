@@ -49,6 +49,53 @@ def _data_key() -> Optional[bytes]:
     return bytes.fromhex(hex_key) if hex_key else None
 
 
+def save_latent_preview(pipe, latents, height: int, width: int, path: Path) -> bool:
+    """Best-effort decode of in-progress diffusion latents to a JPEG preview.
+
+    Qwen-Image pipelines pass packed 2x2 latent patches to callbacks, so the
+    normal `vae.decode(latents / scaling_factor)` path fails. Diffusers unpacks
+    those latents and applies the Qwen VAE mean/std just before final decode;
+    mirror that path here so live previews work for Qwen without touching the
+    runner-specific generation flow.
+    """
+    try:
+        import torch
+
+        with torch.no_grad():
+            latents = latents.detach()
+            vae = pipe.vae
+            if hasattr(pipe, "_unpack_latents") and latents.ndim == 3:
+                latents = pipe._unpack_latents(latents, height, width, pipe.vae_scale_factor)
+                latents = latents.to(vae.dtype)
+                cfg = vae.config
+                if hasattr(cfg, "latents_mean") and hasattr(cfg, "latents_std"):
+                    z_dim = getattr(cfg, "z_dim", latents.shape[1])
+                    mean = torch.tensor(cfg.latents_mean).view(1, z_dim, 1, 1, 1).to(latents.device, latents.dtype)
+                    std = torch.tensor(cfg.latents_std).view(1, z_dim, 1, 1, 1).to(latents.device, latents.dtype)
+                    latents = latents * std + mean
+                image = vae.decode(latents, return_dict=False)[0]
+                if image.ndim == 5:
+                    image = image[:, :, 0]
+            else:
+                scale = getattr(vae.config, "scaling_factor", 1.0)
+                image = vae.decode(latents / scale, return_dict=False)[0]
+
+            if hasattr(pipe, "image_processor"):
+                pil = pipe.image_processor.postprocess(image, output_type="pil")[0]
+            else:
+                import numpy as np
+                from PIL import Image
+
+                arr = (image / 2 + 0.5).clamp(0, 1)[0].permute(1, 2, 0).cpu().float().numpy()
+                pil = Image.fromarray((arr * 255).astype(np.uint8))
+            path.parent.mkdir(parents=True, exist_ok=True)
+            pil.convert("RGB").save(path, "JPEG", quality=80)
+            return True
+    except Exception as e:
+        print(f"[preview] failed: {type(e).__name__}: {e}", flush=True)
+        return False
+
+
 class Runner(ABC):
     """Subclass per model. Keep loading lazy in __init__; do the heavy work in load()."""
 

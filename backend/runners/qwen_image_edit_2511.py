@@ -14,7 +14,7 @@ import os
 from pathlib import Path
 from typing import Optional
 
-from .base import Runner as RunnerBase, WORKSPACE
+from .base import Runner as RunnerBase, WORKSPACE, save_latent_preview
 
 
 class Runner(RunnerBase):
@@ -124,15 +124,7 @@ class Runner(RunnerBase):
                 pipe._interrupt = True
             print(f"[gen] step {step + 1}/{steps}", flush=True)
             if step % 5 == 0 and "latents" in callback_kwargs:
-                try:
-                    lat = callback_kwargs["latents"]
-                    with torch.no_grad():
-                        img = pipe.vae.decode(lat / pipe.vae.config.scaling_factor).sample
-                    img = (img / 2 + 0.5).clamp(0, 1)[0].permute(1, 2, 0).cpu().float().numpy()
-                    from PIL import Image as _PIL
-                    _PIL.fromarray((img * 255).astype("uint8")).save(preview_path, "JPEG", quality=80)
-                except Exception:
-                    pass
+                save_latent_preview(pipe, callback_kwargs["latents"], height, width, preview_path)
             return callback_kwargs
 
         try:
