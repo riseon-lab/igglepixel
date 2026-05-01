@@ -285,6 +285,32 @@ class Runner(ABC):
                 return {"transformer": strength, "transformer_2": 0.0}
             return strength
 
+        # PEFT happily registers an adapter name under peft_config even when
+        # the LoRA's keys didn't match any actual nn.Module — the load call
+        # returns no error but ZERO LoRA layers get attached. Activating the
+        # empty adapter has no effect on output, regardless of strength.
+        # Wan LoRAs in non-diffusers format hit this when loaded directly on
+        # a transformer (the conversion utility never runs). After every
+        # load we count actual attached layers; zero ⇒ silent failure.
+        def _count_lora_layers(module, adapter: str) -> int:
+            n = 0
+            for _, m in module.named_modules():
+                la = getattr(m, "lora_A", None)
+                # PEFT exposes lora_A as a ModuleDict keyed by adapter_name.
+                if la is not None and hasattr(la, "__contains__") and adapter in la:
+                    n += 1
+            return n
+
+        # Wan 2.2 ships a dual-expert (high/low denoiser) MoE pipeline. Its
+        # community LoRAs (CivitAI, Lightning, etc.) are saved with bare
+        # block-level keys that need diffusers' Wan conversion utility to
+        # be remapped onto `attn1.to_q` / `lora_A` / etc. That conversion
+        # only runs from `pipe.load_lora_weights(...)`. Bypassing it via
+        # direct `transformer.load_lora_adapter(...)` is the silent-no-op
+        # path we used to take. For dual-expert pipes we always route at
+        # the pipe level; the submodule path is reserved for Qwen/Flux.
+        is_dual_expert = getattr(pipe, "transformer_2", None) is not None
+
         adapters = []
         for i, entry in enumerate(loras):
             if not isinstance(entry, dict):
@@ -306,7 +332,19 @@ class Runner(ABC):
                     adapter  = f"{run_prefix}_{i}_{j}"
                     strength = sl if target == "low" else sh
                     print(f"[runner] loading LoRA {fname} ({target}, strength={strength:.2f})", flush=True)
-                    if _load_to_submodule(path, adapter, target):
+                    # Wan: pipe-level only — submodule-direct skips the
+                    # non-diffusers→diffusers key conversion and silently
+                    # registers an empty adapter.
+                    if is_dual_expert:
+                        loaded_target = _load_to_pipe(path, adapter, target)
+                        host = getattr(pipe, "transformer_2" if loaded_target == "low" else "transformer", None)
+                        n_layers = _count_lora_layers(host, adapter) if host is not None else 0
+                        if n_layers == 0:
+                            print(f"[runner] WARN: LoRA {fname} attached 0 layers — file format mismatch?", flush=True)
+                            continue
+                        print(f"[runner] {fname}: {n_layers} layers attached on transformer_2" if loaded_target == "low" else f"[runner] {fname}: {n_layers} layers attached on transformer", flush=True)
+                        adapters.append({"name": adapter, "weight": strength, "target": loaded_target})
+                    elif _load_to_submodule(path, adapter, target):
                         adapters.append({"name": adapter, "weight": strength, "target": target})
                     else:
                         loaded_target = _load_to_pipe(path, adapter, target)
@@ -324,25 +362,46 @@ class Runner(ABC):
                 continue
             adapter = f"{run_prefix}_{i}"
             # Explicit target on the entry (e.g. CivitAI Wan LoRA the user
-            # tagged as high-noise) — load straight onto that submodule.
-            # Defaults to "high" since single-transformer pipes (Qwen, Flux)
-            # only have `transformer`, and "high" maps there.
+            # tagged as high-noise) — defaults to "high" since single-
+            # transformer pipes (Qwen, Flux) only have `transformer`, and
+            # "high" maps there.
             explicit_target = entry.get("target")
             entry_target = (explicit_target or "high").lower()
             if entry_target not in ("high", "low"):
                 entry_target = "high"
-            prefer_pipe_level = explicit_target is None and getattr(pipe, "transformer_2", None) is None
+            # Wan (dual-expert) ALWAYS goes pipe-level — see the docstring
+            # on is_dual_expert above. Qwen-style without explicit_target
+            # also goes pipe-level. Qwen with explicit target goes through
+            # _load_to_submodule (which is the path designed for Qwen's
+            # text-encoder validation issue).
+            prefer_pipe_level = is_dual_expert or explicit_target is None
+
+            def _post_pipe_load(loaded_target: str, strength_value: float) -> None:
+                """Append an adapter record with a flat float weight when the
+                LoRA loaded onto a real transformer; validate that some LoRA
+                layers actually attached so we don't activate an empty adapter."""
+                host = None
+                if loaded_target == "high":
+                    host = getattr(pipe, "transformer", None)
+                elif loaded_target == "low":
+                    host = getattr(pipe, "transformer_2", None)
+                if host is not None:
+                    n_layers = _count_lora_layers(host, adapter)
+                    if n_layers == 0:
+                        print(f"[runner] WARN: {filename} attached 0 layers on {loaded_target} — file format mismatch?", flush=True)
+                        return
+                    print(f"[runner] {filename}: {n_layers} layers on {'transformer_2' if loaded_target == 'low' else 'transformer'}", flush=True)
+                weight = strength_value if loaded_target != "pipe" else _pipe_weight_for_target(entry_target, strength_value)
+                adapters.append({"name": adapter, "weight": weight, "target": loaded_target})
+
             if "strength_high" in entry or "strength_low" in entry:
                 sh = float(entry.get("strength_high", 1.0))
                 sl = float(entry.get("strength_low",  sh))
                 print(f"[runner] loading LoRA {filename} (target={entry_target}, high={sh:.2f}, low={sl:.2f})", flush=True)
-                # Pick the strength matching the explicit target.
                 strength = sl if entry_target == "low" else sh
                 if prefer_pipe_level:
                     try:
-                        loaded_target = _load_to_pipe(path, adapter, entry_target)
-                        weight = strength if loaded_target != "pipe" else _pipe_weight_for_target(entry_target, strength)
-                        adapters.append({"name": adapter, "weight": weight, "target": loaded_target})
+                        _post_pipe_load(_load_to_pipe(path, adapter, entry_target), strength)
                         continue
                     except Exception as e:
                         print(f"[runner] pipe-level LoRA load failed ({type(e).__name__}: {e}); falling back to transformer-only", flush=True)
@@ -350,17 +409,13 @@ class Runner(ABC):
                 if _load_to_submodule(path, adapter, entry_target):
                     adapters.append({"name": adapter, "weight": strength, "target": entry_target})
                 else:
-                    loaded_target = _load_to_pipe(path, adapter, entry_target)
-                    weight = strength if loaded_target != "pipe" else _pipe_weight_for_target(entry_target, strength)
-                    adapters.append({"name": adapter, "weight": weight, "target": loaded_target})
+                    _post_pipe_load(_load_to_pipe(path, adapter, entry_target), strength)
             else:
                 strength = float(entry.get("strength", 1.0))
                 print(f"[runner] loading LoRA {filename} (target={entry_target}, strength={strength:.2f})", flush=True)
                 if prefer_pipe_level:
                     try:
-                        loaded_target = _load_to_pipe(path, adapter, entry_target)
-                        weight = strength if loaded_target != "pipe" else _pipe_weight_for_target(entry_target, strength)
-                        adapters.append({"name": adapter, "weight": weight, "target": loaded_target})
+                        _post_pipe_load(_load_to_pipe(path, adapter, entry_target), strength)
                         continue
                     except Exception as e:
                         print(f"[runner] pipe-level LoRA load failed ({type(e).__name__}: {e}); falling back to transformer-only", flush=True)
