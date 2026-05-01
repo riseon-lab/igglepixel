@@ -1887,6 +1887,14 @@ async def install_runtime(model_id: str):
     if venv_manager.is_runtime_ready(spec["id"], spec):
         return {"status": "already_installed", "runtime": spec["id"]}
 
+    for job in runtime_install_jobs.values():
+        if (
+            job.get("model_id") == model_id
+            and job.get("runtime") == spec["id"]
+            and job.get("status") in ("queued", "running")
+        ):
+            return {"job_id": job["id"], "status": job["status"], "runtime": spec["id"]}
+
     job_id = secrets.token_urlsafe(12)
     runtime_install_jobs[job_id] = {
         "id":         job_id,
@@ -1922,6 +1930,19 @@ def runtime_status(model_id: str):
     spec = _registry_runtime_for(model_id)
     if not spec or not spec.get("id"):
         return {"required": False}
+    for job in runtime_install_jobs.values():
+        if (
+            job.get("model_id") == model_id
+            and job.get("runtime") == spec["id"]
+            and job.get("status") in ("queued", "running")
+        ):
+            return {
+                "required": True,
+                "runtime": spec["id"],
+                "state": "installing",
+                "job_id": job["id"],
+                "last_line": job.get("last_line") or "Preparing runtime profile...",
+            }
     return {
         "required": True,
         "runtime":  spec["id"],

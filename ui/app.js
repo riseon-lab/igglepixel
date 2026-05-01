@@ -1356,8 +1356,10 @@ function resolveContextConfig(m) {
 
 function drawerPhase(id) {
   const s = modelStateOf(id);
+  const rt = state.runtimes[id];
   if (s.error)             return 'error';
   if (s.ready)             return 'ready';
+  if (rt?.state === 'installing') return 'starting';
   if (s.starting)          return 'starting';
   if (s.downloading)       return 'downloading';
   if (s.downloaded)        return 'downloaded';
@@ -1924,6 +1926,8 @@ async function refreshRuntimeStatus(modelId) {
       ...(state.runtimes[modelId] || {}),
       state:       s.state || 'missing',
       python_path: s.python_path,
+      job_id:      s.job_id,
+      last_line:   s.last_line || s.note || '',
     };
   } catch {
     // If status endpoint is unreachable, leave whatever we already had.
@@ -4437,6 +4441,7 @@ async function pollRunning() {
       }
       for (const [id, s] of Object.entries(state.modelStates)) {
         if (!liveIds.has(id) && (s.ready || s.starting || s.generating)) {
+          if (s.starting && state.runtimes[id]?.state === 'installing') continue;
           setModelState(id, { ready: false, starting: false, generating: false });
         }
       }
