@@ -3427,6 +3427,7 @@ function openLoraPicker(model) {
     btn.innerHTML = '<span class="spinner"></span><span>Saving…</span>';
     const checks = $$('[data-lora-pick]', $('#modalBody'));
     let changed = 0;
+    let failed = 0;
     for (const c of checks) {
       const fn          = c.dataset.loraPick;
       const lora        = state.loras.find(l => loraId(l) === fn);
@@ -3444,12 +3445,15 @@ function openLoraPicker(model) {
           });
         }
         changed++;
-      } catch { /* keep going */ }
+      } catch {
+        failed++;
+      }
     }
     if (!state.preview) await loadLoras();
     if (state.workspace === model.id) renderWorkspaceLoras(model);
     closeModal();
     if (changed) toast(`Updated ${changed} LoRA${changed === 1 ? '' : 's'}`, 'success');
+    if (failed) toast(`${failed} LoRA${failed === 1 ? '' : 's'} could not be updated`, 'error');
   };
   openModal();
 }

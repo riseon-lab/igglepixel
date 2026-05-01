@@ -1062,12 +1062,27 @@ def list_hf_files(
             infos = api.get_paths_info(repo_id=repo, paths=weights, revision=revision, token=token)
             for info in infos:
                 # `info` is RepoFile (size, lfs) or RepoFolder. We only asked
-                # for files but defensive-isinstance is cheap.
-                p = getattr(info, "path", None) or getattr(info, "rfilename", None)
+                # for files but defensive-isinstance is cheap. Different
+                # huggingface_hub versions return either objects or dict-ish
+                # payloads, and LFS files may expose the real byte count under
+                # `lfs.size` while `size` can be the pointer size.
+                if isinstance(info, dict):
+                    p = info.get("path") or info.get("rfilename")
+                    lfs = info.get("lfs")
+                    raw_size = info.get("size")
+                else:
+                    p = getattr(info, "path", None) or getattr(info, "rfilename", None)
+                    lfs = getattr(info, "lfs", None)
+                    raw_size = getattr(info, "size", 0)
                 if p is None:
                     continue
-                sizes[p] = int(getattr(info, "size", 0) or 0)
-                lfs_flags[p] = bool(getattr(info, "lfs", None))
+                lfs_size = None
+                if isinstance(lfs, dict):
+                    lfs_size = lfs.get("size")
+                elif lfs is not None:
+                    lfs_size = getattr(lfs, "size", None)
+                sizes[p] = int(lfs_size or raw_size or 0)
+                lfs_flags[p] = bool(lfs)
         except Exception:
             # Sizes are best-effort — UI shows "?" and download still works.
             pass
@@ -1465,7 +1480,24 @@ def list_loras():
     sidecar is looked up next to each file.
     """
     loras = []
-    for f in LORAS_DIR.rglob("*.safetensors"):
+    seen: set[tuple[str, str]] = set()
+    files = sorted(
+        LORAS_DIR.rglob("*.safetensors"),
+        key=lambda p: (
+            len(p.relative_to(LORAS_DIR).parts) if p.is_relative_to(LORAS_DIR) else 999,
+            -p.stat().st_mtime,
+        ),
+    )
+    for f in files:
+        try:
+            rel = f.relative_to(LORAS_DIR).as_posix()
+        except ValueError:
+            rel = f.name
+        parts = Path(rel).parts
+        dedupe_key = (parts[0] if len(parts) > 1 else "", f.name)
+        if dedupe_key in seen:
+            continue
+        seen.add(dedupe_key)
         meta_path = f.with_suffix(f.suffix + ".meta.json")
         meta = {}
         if meta_path.exists():
@@ -1474,10 +1506,6 @@ def list_loras():
                     meta = json.load(mf)
             except Exception:
                 pass
-        try:
-            rel = f.relative_to(LORAS_DIR).as_posix()
-        except ValueError:
-            rel = f.name
         # Auto-detect dual-expert target from filename when the user hasn't
         # set one explicitly. UI can show this as a guess they can override.
         target_guess = _guess_lora_target(f.name)
@@ -1513,6 +1541,48 @@ def _find_lora(filename: str) -> Optional[Path]:
     return matches[0] if matches else None
 
 
+def _lora_delete_targets(filename: str) -> list[Path]:
+    """Resolve all physical files represented by a LoRA library row.
+
+    HF imports may leave both a flat library-visible copy and the original
+    nested local_dir copy. Removing only one makes the row immediately
+    reappear, which feels like delete is broken.
+    """
+    targets: list[Path] = []
+
+    def add(p: Path) -> None:
+        try:
+            resolved = p.resolve()
+        except OSError:
+            return
+        try:
+            resolved.relative_to(LORAS_DIR.resolve())
+        except ValueError:
+            return
+        if resolved.exists() and resolved not in targets:
+            targets.append(resolved)
+
+    rel = Path(filename.lstrip("/"))
+    exact = LORAS_DIR / rel
+    add(exact)
+
+    base = rel.name
+    parts = rel.parts
+    if len(parts) > 1:
+        namespace = LORAS_DIR / parts[0]
+        if namespace.exists():
+            for match in namespace.rglob(base):
+                add(match)
+    else:
+        for match in LORAS_DIR.rglob(base):
+            add(match)
+
+    found = _find_lora(filename)
+    if found:
+        add(found)
+    return targets
+
+
 class LoraInstallBody(BaseModel):
     files:    list      # [{hf_repo: str, filename: str}, ...]
     hf_token: Optional[str] = None
@@ -1546,16 +1616,19 @@ def install_loras(body: LoraInstallBody):
     return {"results": results}
 
 
-@app.delete("/api/loras/{filename}")
+@app.delete("/api/loras/{filename:path}")
 def delete_lora(filename: str):
-    target = _find_lora(filename)
-    if not target:
+    targets = _lora_delete_targets(filename)
+    if not targets:
         raise HTTPException(404, "LoRA not found")
-    target.unlink()
-    meta = target.with_suffix(target.suffix + ".meta.json")
-    if meta.exists():
-        meta.unlink()
-    return {"status": "deleted"}
+    deleted = []
+    for target in targets:
+        target.unlink(missing_ok=True)
+        deleted.append(str(target))
+        meta = target.with_suffix(target.suffix + ".meta.json")
+        if meta.exists():
+            meta.unlink()
+    return {"status": "deleted", "deleted": deleted}
 
 
 # ── Components (split-file transformer / VAE / text-encoder swaps) ────────
@@ -1852,7 +1925,7 @@ class LoraTagRequest(BaseModel):
     target: Optional[str] = None
 
 
-@app.patch("/api/loras/{filename}")
+@app.patch("/api/loras/{filename:path}")
 def update_lora(filename: str, req: LoraTagRequest):
     target = _find_lora(filename)
     if not target:
