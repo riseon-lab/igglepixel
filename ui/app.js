@@ -1658,7 +1658,11 @@ function renderDrawerPrimary() {
     downloaded:     { html: '<svg><use href="#i-bolt"/></svg>Start runner',      busy: false, action: 'start' },
     starting:       { html: startingHtml, busy: true, action: null },
     ready:          { html: '<svg><use href="#i-link"/></svg>Open workspace',    busy: false, action: 'open' },
-    error:          { html: '<svg><use href="#i-x"/></svg>Retry',                busy: false, action: 'retry' },
+    error:          {
+      html: '<svg><use href="#i-x"/></svg>Retry',
+      busy: false,
+      action: modelStateOf(m.id).downloaded ? 'retry-start' : 'retry',
+    },
   }[phase];
   btn.innerHTML  = labels.html;
   btn.disabled   = labels.busy;
@@ -1898,6 +1902,7 @@ async function onDrawerPrimary() {
   if (!m) return;
   const action = $('#drawerPrimary').dataset.action;
   if (action === 'download' || action === 'retry') return downloadWeights(m);
+  if (action === 'retry-start')                    return startRunner(m);
   if (action === 'start')                          return startRunner(m);
   if (action === 'open')                           return openWorkspace(m.id);
 }
@@ -2008,7 +2013,7 @@ async function downloadWeights(m) {
     setModelState(m.id, { downloading: false, downloaded: true });
     toast(`${m.name} weights ready`, 'success');
   } catch (e) {
-    setModelState(m.id, { downloading: false, error: e.message || 'Download failed' });
+    setModelState(m.id, { downloading: false, downloaded: false, error: e.message || 'Download failed' });
   }
   renderDrawerBody();
 }
@@ -2091,7 +2096,7 @@ async function startRunner(m) {
     setModelState(m.id, { starting: false, ready: true });
     toast(`${m.name} ready`, 'success');
   } catch (e) {
-    setModelState(m.id, { starting: false, error: e.message });
+    setModelState(m.id, { starting: false, ready: false, downloaded: true, error: e.message });
   } finally {
     if (logEs) logEs.close();
   }

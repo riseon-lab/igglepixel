@@ -9,9 +9,10 @@
         "repo": "https://github.com/Lightricks/LTX-2.git",
         "ref":  "main",
         "dest": "/workspace/repos/ltx-2",
-        "required_paths": ["packages/ltx-pipelines"]
+        "required_paths": ["packages/ltx-core", "packages/ltx-pipelines"]
       },
       "pip": [
+        "-e", "/workspace/repos/ltx-2/packages/ltx-core",
         "-e", "/workspace/repos/ltx-2/packages/ltx-pipelines",
         "transformers",
         "huggingface_hub",

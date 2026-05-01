@@ -29,6 +29,9 @@ UI_DIR        = BASE_DIR / "ui"
 REGISTRY_PATH = BACKEND_DIR / "model_registry.json"
 
 WORKSPACE = Path(os.environ.get("WORKSPACE", "/workspace"))
+HF_HOME_DIR      = WORKSPACE / ".cache" / "huggingface"
+PIP_CACHE_DIR    = WORKSPACE / ".cache" / "pip"
+TMP_DIR          = WORKSPACE / "tmp"
 LORAS_DIR        = WORKSPACE / "loras"
 MODELS_DIR       = WORKSPACE / "models"
 COMPONENTS_DIR   = WORKSPACE / "components"     # split-file transformer/VAE/text-encoder swaps
@@ -41,7 +44,13 @@ COMFY_OUTPUT     = WORKSPACE / "ComfyUI" / "output"  # also scanned as 'generate
 # and the launcher resolves a path by target+filename without ambiguity.
 COMPONENT_TARGETS = ("transformer", "vae", "text_encoder")
 
-for d in (LORAS_DIR, MODELS_DIR, COMPONENTS_DIR, ASSET_UPLOADS, ASSET_GENERATED):
+os.environ.setdefault("HF_HOME", str(HF_HOME_DIR))
+os.environ.setdefault("HF_HUB_CACHE", str(HF_HOME_DIR / "hub"))
+os.environ.setdefault("TRANSFORMERS_CACHE", str(HF_HOME_DIR / "hub"))
+os.environ.setdefault("HF_DATASETS_CACHE", str(HF_HOME_DIR / "datasets"))
+os.environ.setdefault("PIP_CACHE_DIR", str(PIP_CACHE_DIR))
+
+for d in (LORAS_DIR, MODELS_DIR, COMPONENTS_DIR, ASSET_UPLOADS, ASSET_GENERATED, HF_HOME_DIR, PIP_CACHE_DIR, TMP_DIR):
     try:
         d.mkdir(parents=True, exist_ok=True)
     except OSError:

@@ -31,9 +31,19 @@ import venv_manager
 WORKSPACE = Path(os.environ.get("WORKSPACE", "/workspace"))
 LOGS_DIR  = WORKSPACE / "logs"
 PORT_BASE = int(os.environ.get("RUNNER_PORT_BASE", "17000"))
+HF_HOME_DIR   = WORKSPACE / ".cache" / "huggingface"
+PIP_CACHE_DIR = WORKSPACE / ".cache" / "pip"
+TMP_DIR       = WORKSPACE / "tmp"
+
+os.environ.setdefault("HF_HOME", str(HF_HOME_DIR))
+os.environ.setdefault("HF_HUB_CACHE", str(HF_HOME_DIR / "hub"))
+os.environ.setdefault("TRANSFORMERS_CACHE", str(HF_HOME_DIR / "hub"))
+os.environ.setdefault("HF_DATASETS_CACHE", str(HF_HOME_DIR / "datasets"))
+os.environ.setdefault("PIP_CACHE_DIR", str(PIP_CACHE_DIR))
 
 try:
-    LOGS_DIR.mkdir(parents=True, exist_ok=True)
+    for _dir in (LOGS_DIR, HF_HOME_DIR, PIP_CACHE_DIR, TMP_DIR):
+        _dir.mkdir(parents=True, exist_ok=True)
 except OSError:
     pass  # WORKSPACE may not exist locally; deferred to launch time.
 
@@ -75,6 +85,12 @@ class ModelLauncher:
         env["WORKSPACE"] = str(WORKSPACE)
         env["LORAS_DIR"] = str(WORKSPACE / "loras")
         env["LORAS"]     = ",".join(loras)
+        env.setdefault("HF_HOME", str(HF_HOME_DIR))
+        env.setdefault("HF_HUB_CACHE", str(HF_HOME_DIR / "hub"))
+        env.setdefault("TRANSFORMERS_CACHE", str(HF_HOME_DIR / "hub"))
+        env.setdefault("HF_DATASETS_CACHE", str(HF_HOME_DIR / "datasets"))
+        env.setdefault("PIP_CACHE_DIR", str(PIP_CACHE_DIR))
+        env.setdefault("TMPDIR", str(TMP_DIR))
         if hf_token:
             env["HF_TOKEN"] = hf_token
         # Quantisation choice (bf16 | int8 | nf4). Runner reads FORGE_QUANT

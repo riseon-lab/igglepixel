@@ -40,11 +40,19 @@ from typing import Callable, Optional
 WORKSPACE = Path(os.environ.get("WORKSPACE", "/workspace"))
 VENVS_DIR = WORKSPACE / "venvs"
 REPOS_DIR = WORKSPACE / "repos"
+HF_HOME_DIR   = WORKSPACE / ".cache" / "huggingface"
+PIP_CACHE_DIR = WORKSPACE / ".cache" / "pip"
 SPEC_MARKER = ".igglepixel-runtime-spec.sha256"
+
+os.environ.setdefault("HF_HOME", str(HF_HOME_DIR))
+os.environ.setdefault("HF_HUB_CACHE", str(HF_HOME_DIR / "hub"))
+os.environ.setdefault("TRANSFORMERS_CACHE", str(HF_HOME_DIR / "hub"))
+os.environ.setdefault("HF_DATASETS_CACHE", str(HF_HOME_DIR / "datasets"))
+os.environ.setdefault("PIP_CACHE_DIR", str(PIP_CACHE_DIR))
 
 # Initialised on import so callers can rely on the dirs existing. WORKSPACE
 # may not exist locally (dev sandbox); endpoints handle that on demand.
-for d in (VENVS_DIR, REPOS_DIR):
+for d in (VENVS_DIR, REPOS_DIR, HF_HOME_DIR, PIP_CACHE_DIR):
     try:
         d.mkdir(parents=True, exist_ok=True)
     except OSError:

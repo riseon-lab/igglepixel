@@ -70,6 +70,7 @@ GEMMA_REPO = "google/gemma-3-12b-it-qat-q4_0-unquantized"
 SPATIAL_UPSCALER = "ltx-2.3-spatial-upscaler-x2-1.1.safetensors"
 DISTILLED_LORA = "ltx-2.3-22b-distilled-lora-384-1.1.safetensors"
 DEFAULT_IMAGE_CRF = 33
+LTX_TMP_DIR = WORKSPACE / "tmp" / "ltx23"
 
 
 def _normalise_lora_set(loras) -> tuple:
@@ -229,7 +230,7 @@ class Runner(RunnerBase):
             ref_visible = WORKSPACE / ref_visible
         ref_tmp = self._decrypt_ref_to_temp(ref_visible)
 
-        out_tmp = Path(tempfile.mkstemp(suffix=".mp4")[1])
+        out_tmp = self._temp_file(".mp4")
         stripped = None
         try:
             from ltx_core.components.guiders import MultiModalGuiderParams
@@ -353,6 +354,11 @@ class Runner(RunnerBase):
         return Path(snapshot_download(repo_id=GEMMA_REPO, token=token))
 
     @staticmethod
+    def _temp_file(suffix: str) -> Path:
+        LTX_TMP_DIR.mkdir(parents=True, exist_ok=True)
+        return Path(tempfile.mkstemp(suffix=suffix, dir=str(LTX_TMP_DIR))[1])
+
+    @staticmethod
     def _frames_from_duration(duration: float, fps: int) -> int:
         # LTX two-stage pipelines require num_frames = (8 * k) + 1.
         raw = max(9, int(round(max(0.1, duration) * fps)))
@@ -381,7 +387,8 @@ class Runner(RunnerBase):
         # Preserve the visible suffix so LTX's image loader can decode the
         # right format (PNG/JPEG/etc.) without sniffing.
         suffix = visible.suffix or ".png"
-        fd, tmp = tempfile.mkstemp(suffix=suffix)
+        LTX_TMP_DIR.mkdir(parents=True, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(suffix=suffix, dir=str(LTX_TMP_DIR))
         try:
             with os.fdopen(fd, "wb") as f:
                 f.write(data)
