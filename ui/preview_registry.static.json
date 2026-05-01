@@ -100,8 +100,8 @@
             "duration": 3.5
           },
           "param_overrides": {
-            "duration": { "default": 3.5, "step": 0.1, "min": 1, "max": 4.5, "label": "Seconds" },
-            "fps":      { "default": 18,  "step": 1,   "min": 18, "max": 18 }
+            "duration": { "default": 3.5, "step": 0.1, "min": 1, "max": 15, "label": "Seconds" },
+            "fps":      { "default": 18,  "step": 1,   "min": 8,  "max": 24 }
           },
           "download_files": [
             {
@@ -129,8 +129,8 @@
             "duration": 3.5
           },
           "param_overrides": {
-            "duration": { "default": 3.5, "step": 0.1, "min": 1, "max": 4.5, "label": "Seconds" },
-            "fps":      { "default": 18,  "step": 1,   "min": 18, "max": 18 }
+            "duration": { "default": 3.5, "step": 0.1, "min": 1, "max": 15, "label": "Seconds" },
+            "fps":      { "default": 18,  "step": 1,   "min": 8,  "max": 24 }
           },
           "download_files": [
             {
@@ -180,7 +180,7 @@
         "cfg_low":    { "default": 1.0, "min": 0, "max": 10, "step": 0.1, "label": "Guidance (low-noise)" },
         "width":      { "default": 832,  "step": 16, "min": 256, "max": 1280 },
         "height":     { "default": 480,  "step": 16, "min": 256, "max": 720 },
-        "duration":   { "default": 3.4,  "step": 0.1, "min": 1, "max": 6.5, "label": "Seconds" },
+        "duration":   { "default": 3.4,  "step": 0.1, "min": 1, "max": 15, "label": "Seconds" },
         "fps":        { "default": 18,   "step": 1,  "min": 8,   "max": 30 }
       },
       "aspect_presets": [

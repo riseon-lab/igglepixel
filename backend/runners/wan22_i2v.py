@@ -56,6 +56,9 @@ WAN_DIM_MULTIPLE = 16
 LIGHTNING_MAX_DIM = 832
 LIGHTNING_MIN_DIM = 480
 LIGHTNING_SQUARE_DIM = 640
+WAN_MAX_DURATION_SECONDS = 15.0
+WAN_LIGHTNING_MAX_FPS = 24
+WAN_STANDARD_MAX_FPS = 30
 
 
 class Runner(RunnerBase):
@@ -239,6 +242,11 @@ class Runner(RunnerBase):
         )
 
     # ── Inference ────────────────────────────────────────────────────
+    @staticmethod
+    def _wan_frame_count(seconds: float, fps: int) -> int:
+        raw_frames = max(8, int(round(seconds * fps)))
+        return max(9, ((raw_frames - 1 + 3) // 4) * 4 + 1)
+
     def generate(self, params: dict, loras: Optional[list] = None) -> dict:
         import secrets
         import torch
@@ -279,22 +287,16 @@ class Runner(RunnerBase):
         width, height = ref_img.size
         if (width, height) != (original_width, original_height):
             print(f"[runner] resized Wan source {original_width}x{original_height} → {width}x{height}", flush=True)
-        fps    = int(params.get("fps", 18))
+        max_fps = WAN_LIGHTNING_MAX_FPS if self._lightning_baked else WAN_STANDARD_MAX_FPS
+        fps    = max(1, min(max_fps, int(params.get("fps", 18))))
         duration = params.get("duration")
         requested_seconds = None
         if duration is not None:
             # Wan works best with frame counts of 4n + 1. Let the UI expose
             # seconds, then resolve to the nearest valid frame count here.
-            seconds = max(0.1, float(duration))
+            seconds = max(0.1, min(WAN_MAX_DURATION_SECONDS, float(duration)))
             requested_seconds = seconds
-            if self._lightning_baked:
-                # Lightx2v's 480p distilled recipe clamps the model frames to
-                # 8-80 and then adds the initial frame, so 3.5s at 16fps = 57.
-                model_frames = max(8, min(80, int(round(seconds * fps))))
-                frames = 1 + model_frames
-            else:
-                raw_frames = max(16, min(121, int(round(seconds * fps))))
-                frames = max(17, min(121, ((raw_frames - 1) // 4) * 4 + 1))
+            frames = self._wan_frame_count(seconds, fps)
         else:
             frames = int(params.get("num_frames", 81))
         if seed < 0:
