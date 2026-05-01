@@ -268,8 +268,12 @@ class Runner(ABC):
             if target == "low" and getattr(pipe, "transformer_2", None) is not None:
                 kwargs["load_into_transformer_2"] = True
             pipe.load_lora_weights(str(path.parent), weight_name=path.name, adapter_name=adapter, **kwargs)
-            if target in ("high", "low"):
+            if target == "low":
                 module = getattr(pipe, "transformer_2", None) if target == "low" else getattr(pipe, "transformer", None)
+                if module is not None and adapter in _registered_adapters(module):
+                    return target
+            if target == "high" and getattr(pipe, "transformer_2", None) is not None:
+                module = getattr(pipe, "transformer", None)
                 if module is not None and adapter in _registered_adapters(module):
                     return target
             return "pipe"
@@ -323,15 +327,26 @@ class Runner(ABC):
             # tagged as high-noise) — load straight onto that submodule.
             # Defaults to "high" since single-transformer pipes (Qwen, Flux)
             # only have `transformer`, and "high" maps there.
-            entry_target = (entry.get("target") or "high").lower()
+            explicit_target = entry.get("target")
+            entry_target = (explicit_target or "high").lower()
             if entry_target not in ("high", "low"):
                 entry_target = "high"
+            prefer_pipe_level = explicit_target is None and getattr(pipe, "transformer_2", None) is None
             if "strength_high" in entry or "strength_low" in entry:
                 sh = float(entry.get("strength_high", 1.0))
                 sl = float(entry.get("strength_low",  sh))
                 print(f"[runner] loading LoRA {filename} (target={entry_target}, high={sh:.2f}, low={sl:.2f})", flush=True)
                 # Pick the strength matching the explicit target.
                 strength = sl if entry_target == "low" else sh
+                if prefer_pipe_level:
+                    try:
+                        loaded_target = _load_to_pipe(path, adapter, entry_target)
+                        weight = strength if loaded_target != "pipe" else _pipe_weight_for_target(entry_target, strength)
+                        adapters.append({"name": adapter, "weight": weight, "target": loaded_target})
+                        continue
+                    except Exception as e:
+                        print(f"[runner] pipe-level LoRA load failed ({type(e).__name__}: {e}); falling back to transformer-only", flush=True)
+                        adapter = f"{adapter}_direct"
                 if _load_to_submodule(path, adapter, entry_target):
                     adapters.append({"name": adapter, "weight": strength, "target": entry_target})
                 else:
@@ -341,6 +356,15 @@ class Runner(ABC):
             else:
                 strength = float(entry.get("strength", 1.0))
                 print(f"[runner] loading LoRA {filename} (target={entry_target}, strength={strength:.2f})", flush=True)
+                if prefer_pipe_level:
+                    try:
+                        loaded_target = _load_to_pipe(path, adapter, entry_target)
+                        weight = strength if loaded_target != "pipe" else _pipe_weight_for_target(entry_target, strength)
+                        adapters.append({"name": adapter, "weight": weight, "target": loaded_target})
+                        continue
+                    except Exception as e:
+                        print(f"[runner] pipe-level LoRA load failed ({type(e).__name__}: {e}); falling back to transformer-only", flush=True)
+                        adapter = f"{adapter}_direct"
                 if _load_to_submodule(path, adapter, entry_target):
                     adapters.append({"name": adapter, "weight": strength, "target": entry_target})
                 else:

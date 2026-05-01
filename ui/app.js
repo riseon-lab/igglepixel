@@ -3967,7 +3967,7 @@ function snapshotJob() {
           strength_low:  v.strength_low  ?? v.strength ?? 1.0,
         };
       }
-      const filename = entry.filename || key;
+      const filename = entry.rel_path || entry.filename || key;
       // For dual-expert models, forward the per-LoRA `target` (the user's
       // explicit high/low tag, or the filename auto-detect) so the runner
       // applies the file to the matching expert. Falls back to "high" when
