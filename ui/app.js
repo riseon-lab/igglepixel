@@ -268,7 +268,10 @@ function groupsForModel(m) {
 
 // Resolve fields for a model: walk groups, apply per-model overrides
 function resolveFields(m) {
-  const overrides = m.param_overrides || {};
+  const overrides = {
+    ...(m.param_overrides || {}),
+    ...(selectedVariant(m)?.param_overrides || {}),
+  };
   const enabledKeys = m.param_keys ? new Set(m.param_keys) : null; // optional whitelist
   const groups = groupsForModel(m);
   const out = [];
@@ -2115,6 +2118,7 @@ function openWorkspace(modelId, push = true) {
   state.selected  = m;
   const sections = resolveFields(m);
   state.params = state.workspaceParams[modelId] || (state.workspaceParams[modelId] = defaultParamsForModel(m, sections));
+  clampParamsToFields(state.params, sections);
   if (m.category === 'llm') {
     const cfg = resolveContextConfig(m);
     state.params.max_model_len ??= cfg.tokens;
@@ -2150,6 +2154,28 @@ function defaultParamsForModel(m, sections = resolveFields(m)) {
     Object.assign(params, variantDefaults);
   }
   return params;
+}
+
+function clampParamsToFields(params, sections) {
+  for (const s of sections) for (const f of s.fields) {
+    if (!['slider', 'number'].includes(f.type)) continue;
+    if (params[f.key] === undefined || params[f.key] === '') continue;
+    const current = Number(params[f.key]);
+    if (!Number.isFinite(current)) continue;
+    const min = f.min !== undefined ? Number(f.min) : -Infinity;
+    const max = f.max !== undefined ? Number(f.max) : Infinity;
+    const step = f.step !== undefined ? Number(f.step) : 1;
+    let next = clampNumber(current, min, max);
+    if (Number.isFinite(step) && step > 0) {
+      next = snapNumber(next, {
+        min,
+        max,
+        step,
+        fallback: f.default !== undefined ? Number(f.default) : next,
+      });
+    }
+    params[f.key] = Number(formatControlNumber(next, step));
+  }
 }
 
 function closeWorkspace() {

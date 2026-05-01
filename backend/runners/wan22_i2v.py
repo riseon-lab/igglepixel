@@ -281,10 +281,12 @@ class Runner(RunnerBase):
             print(f"[runner] resized Wan source {original_width}x{original_height} → {width}x{height}", flush=True)
         fps    = int(params.get("fps", 18))
         duration = params.get("duration")
+        requested_seconds = None
         if duration is not None:
             # Wan works best with frame counts of 4n + 1. Let the UI expose
             # seconds, then resolve to the nearest valid frame count here.
             seconds = max(0.1, float(duration))
+            requested_seconds = seconds
             if self._lightning_baked:
                 # Lightx2v's 480p distilled recipe clamps the model frames to
                 # 8-80 and then adds the initial frame, so 3.5s at 16fps = 57.
@@ -337,6 +339,7 @@ class Runner(RunnerBase):
         # not explode and ffmpeg always receives RGB PIL frames.
         raw_frames = result.frames if hasattr(result, "frames") else result.images
         frames_out = self._normalize_video_frames(raw_frames)
+        actual_frames = len(frames_out)
         from backend import moderator
         if moderator.is_video_flagged(frames_out):
             return self.asset_response([], meta={"flagged": True, "model": self.model_id, "reason": "moderation"})
@@ -353,12 +356,14 @@ class Runner(RunnerBase):
             "steps":    steps,
             "cfg":      cfg,
             "frames":   frames,
+            "actual_frames": actual_frames,
             "fps":      fps,
             "width":    width,
             "height":   height,
             "source_width": original_width,
             "source_height": original_height,
-            "duration": round(frames / fps, 2),
+            "requested_duration": round(requested_seconds, 2) if requested_seconds is not None else None,
+            "duration": round(actual_frames / fps, 2),
         })
 
     # ── Cancellation ─────────────────────────────────────────────────
