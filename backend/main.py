@@ -1345,16 +1345,19 @@ def hf_jobs(since: Optional[float] = Query(None)):
 
 @app.delete("/api/hf/jobs/{job_id}")
 def hf_job_cancel(job_id: str):
-    """Cancel a queued or running job. For running jobs we set a flag the
-    poller checks; if the file is already mid-write to disk, hf_hub_download
-    finishes the current call (no clean cancel handle) and we then drop the
-    partial file. Queued jobs flip immediately to cancelled.
+    """Cancel active jobs or dismiss finished jobs from the queue.
+
+    For running jobs we set a flag the poller checks; if the file is already
+    mid-write to disk, hf_hub_download finishes the current call. Finished
+    jobs are removed from the in-memory table so dismissed rows don't come
+    back on the next UI poll.
     """
     job = hf_download_jobs.get(job_id)
     if not job:
         raise HTTPException(404, "Job not found")
     if job["status"] in ("done", "error", "cancelled"):
-        return {"status": job["status"]}
+        hf_download_jobs.pop(job_id, None)
+        return {"status": "dismissed"}
     flag = job.get("_cancel_flag")
     if flag:
         flag["cancel"] = True

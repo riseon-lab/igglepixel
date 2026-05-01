@@ -5126,6 +5126,7 @@ async function submitHFBrowserDownload() {
 
 let _dlPollTimer = null;
 let _dlCompletedSeen = new Set();
+let _dlDismissed = new Set();
 
 function pokeDownloadQueuePoll() {
   if (_dlPollTimer) { clearTimeout(_dlPollTimer); _dlPollTimer = null; }
@@ -5152,7 +5153,7 @@ async function pollDownloadQueue() {
     }
     state.downloadStats[j.id] = { prevBytes: j.downloaded_bytes || 0, prevAt: now, mbps: j.mbps };
   }
-  state.downloadJobs = data.jobs || [];
+  state.downloadJobs = (data.jobs || []).filter(j => !_dlDismissed.has(j.id));
   await refreshCompletedDownloadTargets(state.downloadJobs);
   renderDownloadQueue();
   // Keep polling while any job is queued/running, or every 4s while the
@@ -5271,15 +5272,20 @@ async function retryDownloadJob(id) {
 }
 
 function dismissDownloadJob(id) {
-  // Client-side only: just hide the row. Backend keeps the job in its
-  // table for the next 200 jobs anyway. Re-poll so the panel collapses
-  // when nothing's left.
+  _dlDismissed.add(id);
   state.downloadJobs = state.downloadJobs.filter(j => j.id !== id);
   delete state.downloadStats[id];
   renderDownloadQueue();
+  api.hfJobCancel(id).catch(() => {});
 }
 
 async function clearCompletedDownloads() {
+  const done = state.downloadJobs.filter(j => j.status !== 'queued' && j.status !== 'running');
+  done.forEach(j => {
+    _dlDismissed.add(j.id);
+    delete state.downloadStats[j.id];
+    api.hfJobCancel(j.id).catch(() => {});
+  });
   state.downloadJobs = state.downloadJobs.filter(j => j.status === 'queued' || j.status === 'running');
   renderDownloadQueue();
 }
