@@ -95,13 +95,30 @@ mkdir -p /workspace/models /workspace/loras /workspace/checkpoints \
 # We persist it under /workspace/.local/bin so first-boot downloads it once
 # and every subsequent boot uses the cached binary. backend/venv_manager.py
 # uses uv when present, falling back to `python -m venv` / virtualenv otherwise.
+#
+# History: an earlier version of this script passed `INSTALL_DIR=…` (the
+# wrong env name) so uv silently landed in `~/.local/bin` instead. We now
+# pass the documented `UV_INSTALL_DIR` plus `UV_UNMANAGED_INSTALL` (which
+# disables shell-profile editing — irrelevant for a container ENTRYPOINT
+# but explicitly intended for ephemeral / CI environments per the docs).
+#
+# UV_PYTHON_INSTALL_DIR moves uv-managed Python interpreters onto the
+# persistent /workspace volume. Without this, every cold pod re-downloads
+# Python 3.12 (~50 MB) when LTX-2.3 needs it.
 export UV_INSTALL_DIR=/workspace/.local/bin
+export UV_PYTHON_INSTALL_DIR=/workspace/.cache/uv-python
 export PATH="$UV_INSTALL_DIR:$PATH"
+mkdir -p "$UV_INSTALL_DIR" "$UV_PYTHON_INSTALL_DIR"
 if ! command -v uv >/dev/null 2>&1; then
     log "installing uv (one-time, persistent under $UV_INSTALL_DIR)"
-    mkdir -p "$UV_INSTALL_DIR"
-    curl -fsSL https://astral.sh/uv/install.sh | env INSTALL_DIR="$UV_INSTALL_DIR" sh \
+    curl -fsSL https://astral.sh/uv/install.sh | env \
+            UV_INSTALL_DIR="$UV_INSTALL_DIR" \
+            UV_UNMANAGED_INSTALL="$UV_INSTALL_DIR" \
+            UV_NO_MODIFY_PATH=1 sh \
         || log "WARN: uv install failed; per-runner venvs will fall back to python -m venv"
+fi
+if command -v uv >/dev/null 2>&1; then
+    log "uv ready: $(uv --version 2>&1)"
 fi
 
 # ── Per-deployment dep installs ────────────────────────────────────────

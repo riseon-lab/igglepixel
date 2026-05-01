@@ -220,13 +220,45 @@ def _create_venv(runtime_id: str, python_version: Optional[str], log: Callable[[
         log(f"removing partial venv at {venv}")
         shutil.rmtree(venv, ignore_errors=True)
 
+    # Tee log lines into a local tail buffer so we can fold the most
+    # recent stderr into the RuntimeError message — without that, the
+    # toast just says "uv venv failed" and the user has to dig the actual
+    # cause out of the install log endpoint.
+    from collections import deque
+    tail: deque = deque(maxlen=12)
+
+    def tee(line: str) -> None:
+        tail.append(line)
+        log(line)
+
+    def _fail(step: str) -> None:
+        snippet = "\n".join(tail) if tail else "(no log captured)"
+        raise RuntimeError(
+            f"{step} failed for runtime '{runtime_id}'. Last log lines:\n{snippet}"
+        )
+
     if _has_uv():
+        # Surface the uv version up front so a "uv venv failed" log is
+        # easier to triage (different uv versions handle --python very
+        # differently — older builds didn't auto-fetch managed Python).
+        _run(["uv", "--version"], tee)
+
+        # Pre-fetch the requested managed Python as a discrete step. This
+        # separates "download interpreter" from "make venv" so the user can
+        # see exactly which step failed in the install log. uv's `python
+        # install` is idempotent — already-installed versions are a no-op.
+        if python_version:
+            log(f"== ensuring managed Python {python_version} ==")
+            rc = _run(["uv", "python", "install", python_version], tee)
+            if rc != 0:
+                _fail(f"uv python install {python_version}")
+
         cmd = ["uv", "venv", str(venv)]
         if python_version:
             cmd.extend(["--python", python_version])
-        rc = _run(cmd, log)
+        rc = _run(cmd, tee)
         if rc != 0:
-            raise RuntimeError(f"uv venv failed for runtime '{runtime_id}'")
+            _fail("uv venv")
         return
 
     # No uv — try the system python -m venv. Only honest Python version
