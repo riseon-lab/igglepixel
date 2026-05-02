@@ -119,6 +119,7 @@ class Runner(RunnerBase):
         from huggingface_hub import hf_hub_download
         from ltx_core.loader.primitives import LoraPathStrengthAndSDOps
         from ltx_core.loader.sd_ops import LTXV_LORA_COMFY_RENAMING_MAP
+        self._patch_xformers_attention()
 
         token = os.environ.get("HF_TOKEN")
         variant_cfg = VARIANTS[self._variant]
@@ -170,9 +171,42 @@ class Runner(RunnerBase):
                 gemma_root=str(gemma_root),
                 loras=ltx_loras,
             )
+        self._preload_pipeline_components(pipe)
         self._pipe = pipe
         self._loaded_lora_key = lora_set
         print("[runner] ready", flush=True)
+
+    @staticmethod
+    def _preload_pipeline_components(pipe) -> None:
+        """Force LTX's lazy ledger to instantiate its heavy components now.
+
+        Without this, the runner can report "ready" while the first generate
+        still has to load the transformer/text/VAE stack. That looks like a
+        stuck generation in the UI. Preloading shifts that cost into Start
+        Runner, where users expect model loading to happen.
+        """
+        ledger = getattr(pipe, "model_ledger", None)
+        if ledger is None:
+            return
+        cached = {}
+        component_names = (
+            "transformer",
+            "video_encoder",
+            "video_decoder",
+            "spatial_upsampler",
+            "text_encoder",
+            "gemma_embeddings_processor",
+        )
+        for name in component_names:
+            factory = getattr(ledger, name, None)
+            if not callable(factory):
+                continue
+            print(f"[runner] preloading LTX component: {name}", flush=True)
+            cached[name] = factory()
+        for name, instance in cached.items():
+            setattr(ledger, name, lambda obj=instance: obj)
+        if cached:
+            print(f"[runner] preloaded LTX components: {', '.join(cached)}", flush=True)
 
     def load(self) -> None:
         variant = os.environ.get("FORGE_VARIANT", "distilled-1.1").lower()
@@ -244,6 +278,7 @@ class Runner(RunnerBase):
             from ltx_pipelines.utils.media_io import encode_video
 
             print(f"[runner] LTX-2.3 generate (variant={self._variant}, steps={steps}, cfg={cfg}, {width}x{height}@{fps}fps, frames={frames}, seed={seed})", flush=True)
+            self._progress(1, 10, "prepared inputs")
             tiling_config = TilingConfig.default()
             common_kwargs = dict(
                 prompt=prompt,
@@ -255,6 +290,7 @@ class Runner(RunnerBase):
                 images=[ImageConditioningInput(str(ref_tmp), 0, 1.0, DEFAULT_IMAGE_CRF)],
                 tiling_config=tiling_config,
             )
+            self._progress(2, 10, "running pipeline")
             if VARIANTS[self._variant].get("pipeline") == "distilled":
                 video, audio = self._pipe(**common_kwargs)
             else:
@@ -279,6 +315,7 @@ class Runner(RunnerBase):
                         stg_blocks=[28],
                     ),
                 )
+            self._progress(8, 10, "encoding video")
             encode_video(
                 video=video,
                 fps=float(fps),
@@ -286,6 +323,7 @@ class Runner(RunnerBase):
                 output_path=str(out_tmp),
                 video_chunks_number=get_video_chunks_number(frames, tiling_config),
             )
+            self._progress(9, 10, "saving output")
 
             if self._cancel:
                 return self.asset_response([], meta={"cancelled": True, "model": self.model_id})
@@ -313,6 +351,7 @@ class Runner(RunnerBase):
 
             out_path = self.new_output_path(ext="mp4", prefix=f"{self.model_id}_{seed}")
             on_disk = self._encrypt_video_to_assets(stripped, out_path)
+            self._progress(10, 10, "done")
         finally:
             for p in (ref_tmp, out_tmp, stripped):
                 try:
@@ -347,6 +386,10 @@ class Runner(RunnerBase):
 
     # ── Helpers ──────────────────────────────────────────────────────
     @staticmethod
+    def _progress(step: int, total: int, label: str) -> None:
+        print(f"[gen] step {step} / {total} {label}", flush=True)
+
+    @staticmethod
     def _disable_torch_compile() -> None:
         try:
             import torch
@@ -354,6 +397,16 @@ class Runner(RunnerBase):
             torch._dynamo.config.disable = True
         except Exception:
             pass
+
+    @staticmethod
+    def _patch_xformers_attention() -> None:
+        try:
+            from ltx_core.model.transformer import attention as attn_mod
+            from xformers.ops import memory_efficient_attention
+            attn_mod.memory_efficient_attention = memory_efficient_attention
+            print("[runner] patched LTX attention with xformers", flush=True)
+        except Exception as e:
+            print(f"[runner] xformers attention patch skipped: {type(e).__name__}: {e}", flush=True)
 
     @staticmethod
     def _resolve_gemma_root(token: Optional[str]) -> Path:
