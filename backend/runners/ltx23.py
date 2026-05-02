@@ -35,6 +35,7 @@ import os
 import shutil
 import subprocess
 import tempfile
+import gc
 from pathlib import Path
 from typing import Optional
 
@@ -42,6 +43,7 @@ from .base import Runner as RunnerBase, WORKSPACE, _data_key
 
 os.environ.setdefault("TORCH_COMPILE_DISABLE", "1")
 os.environ.setdefault("TORCHDYNAMO_DISABLE", "1")
+os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 
 
 # Maps registry-side variant ids → the safetensors filename and an inference
@@ -74,6 +76,7 @@ SPATIAL_UPSCALER = "ltx-2.3-spatial-upscaler-x2-1.1.safetensors"
 DISTILLED_LORA = "ltx-2.3-22b-distilled-lora-384-1.1.safetensors"
 DEFAULT_IMAGE_CRF = 33
 LTX_TMP_DIR = WORKSPACE / "tmp" / "ltx23"
+PRELOAD_COMPONENTS = os.environ.get("FORGE_LTX_PRELOAD_COMPONENTS", "0").lower() in ("1", "true", "yes")
 
 
 def _normalise_lora_set(loras) -> tuple:
@@ -171,7 +174,10 @@ class Runner(RunnerBase):
                 gemma_root=str(gemma_root),
                 loras=ltx_loras,
             )
-        self._preload_pipeline_components(pipe)
+        if PRELOAD_COMPONENTS:
+            self._preload_pipeline_components(pipe)
+        else:
+            print("[runner] LTX component preload disabled; lazy loading leaves VRAM headroom for generation", flush=True)
         self._pipe = pipe
         self._loaded_lora_key = lora_set
         print("[runner] ready", flush=True)
@@ -278,6 +284,8 @@ class Runner(RunnerBase):
             from ltx_pipelines.utils.media_io import encode_video
 
             print(f"[runner] LTX-2.3 generate (variant={self._variant}, steps={steps}, cfg={cfg}, {width}x{height}@{fps}fps, frames={frames}, seed={seed})", flush=True)
+            self._log_cuda_memory("before LTX pipeline")
+            self._cleanup_memory()
             self._progress(1, 10, "prepared inputs")
             tiling_config = TilingConfig.default()
             common_kwargs = dict(
@@ -291,30 +299,42 @@ class Runner(RunnerBase):
                 tiling_config=tiling_config,
             )
             self._progress(2, 10, "running pipeline")
-            if VARIANTS[self._variant].get("pipeline") == "distilled":
-                video, audio = self._pipe(**common_kwargs)
-            else:
-                video, audio = self._pipe(
-                    **common_kwargs,
-                    negative_prompt=(params.get("negative_prompt") or "").strip() or "",
-                    num_inference_steps=steps,
-                    video_guider_params=MultiModalGuiderParams(
-                        cfg_scale=cfg,
-                        stg_scale=float(params.get("stg", 1.0)),
-                        rescale_scale=float(params.get("rescale", 0.7)),
-                        modality_scale=float(params.get("modality_scale", 3.0)),
-                        skip_step=0,
-                        stg_blocks=[28],
-                    ),
-                    audio_guider_params=MultiModalGuiderParams(
-                        cfg_scale=float(params.get("audio_cfg", 7.0)),
-                        stg_scale=1.0,
-                        rescale_scale=0.7,
-                        modality_scale=3.0,
-                        skip_step=0,
-                        stg_blocks=[28],
-                    ),
-                )
+            try:
+                if VARIANTS[self._variant].get("pipeline") == "distilled":
+                    video, audio = self._pipe(**common_kwargs)
+                else:
+                    video, audio = self._pipe(
+                        **common_kwargs,
+                        negative_prompt=(params.get("negative_prompt") or "").strip() or "",
+                        num_inference_steps=steps,
+                        video_guider_params=MultiModalGuiderParams(
+                            cfg_scale=cfg,
+                            stg_scale=float(params.get("stg", 1.0)),
+                            rescale_scale=float(params.get("rescale", 0.7)),
+                            modality_scale=float(params.get("modality_scale", 3.0)),
+                            skip_step=0,
+                            stg_blocks=[28],
+                        ),
+                        audio_guider_params=MultiModalGuiderParams(
+                            cfg_scale=float(params.get("audio_cfg", 7.0)),
+                            stg_scale=1.0,
+                            rescale_scale=0.7,
+                            modality_scale=3.0,
+                            skip_step=0,
+                            stg_blocks=[28],
+                        ),
+                    )
+            except Exception as e:
+                if self._is_cuda_oom(e):
+                    self._cleanup_memory()
+                    self._log_cuda_memory("after LTX OOM cleanup")
+                    raise RuntimeError(
+                        "LTX ran out of VRAM. Try 1024x576, a shorter duration, or lower FPS. "
+                        "The 1536x1024 preset can exceed a 94GB card in BF16 because the 22B model, "
+                        "Gemma text stack, VAE/upscaler, and video activations overlap during generation."
+                    ) from e
+                raise
+            self._log_cuda_memory("after LTX pipeline")
             self._progress(8, 10, "encoding video")
             encode_video(
                 video=video,
@@ -407,6 +427,44 @@ class Runner(RunnerBase):
             print("[runner] patched LTX attention with xformers", flush=True)
         except Exception as e:
             print(f"[runner] xformers attention patch skipped: {type(e).__name__}: {e}", flush=True)
+
+    @staticmethod
+    def _cleanup_memory() -> None:
+        try:
+            from ltx_pipelines.utils.helpers import cleanup_memory
+            cleanup_memory()
+        except Exception:
+            pass
+        gc.collect()
+        try:
+            import torch
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                torch.cuda.ipc_collect()
+        except Exception:
+            pass
+
+    @staticmethod
+    def _is_cuda_oom(e: Exception) -> bool:
+        if e.__class__.__name__ == "OutOfMemoryError":
+            return True
+        return "cuda out of memory" in str(e).lower()
+
+    @staticmethod
+    def _log_cuda_memory(tag: str) -> None:
+        try:
+            import torch
+            if not torch.cuda.is_available():
+                return
+            allocated = torch.cuda.memory_allocated() / 1024**3
+            reserved = torch.cuda.memory_reserved() / 1024**3
+            free, total = torch.cuda.mem_get_info()
+            print(
+                f"[runner] VRAM {tag}: allocated={allocated:.2f}GiB reserved={reserved:.2f}GiB free={free / 1024**3:.2f}GiB total={total / 1024**3:.2f}GiB",
+                flush=True,
+            )
+        except Exception:
+            pass
 
     @staticmethod
     def _resolve_gemma_root(token: Optional[str]) -> Path:
