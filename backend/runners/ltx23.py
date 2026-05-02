@@ -40,6 +40,9 @@ from typing import Optional
 
 from .base import Runner as RunnerBase, WORKSPACE, _data_key
 
+os.environ.setdefault("TORCH_COMPILE_DISABLE", "1")
+os.environ.setdefault("TORCHDYNAMO_DISABLE", "1")
+
 
 # Maps registry-side variant ids → the safetensors filename and an inference
 # preset hint (default steps when the user hasn't overridden). The full
@@ -66,7 +69,7 @@ VARIANTS = {
 }
 
 HF_REPO = "Lightricks/LTX-2.3"
-GEMMA_REPO = "google/gemma-3-12b-it-qat-q4_0-unquantized"
+GEMMA_REPO = "Lightricks/gemma-3-12b-it-qat-q4_0-unquantized"
 SPATIAL_UPSCALER = "ltx-2.3-spatial-upscaler-x2-1.1.safetensors"
 DISTILLED_LORA = "ltx-2.3-22b-distilled-lora-384-1.1.safetensors"
 DEFAULT_IMAGE_CRF = 33
@@ -112,8 +115,10 @@ class Runner(RunnerBase):
         Lazy imports keep cold start before /healthz cheap and ensure the
         package only resolves once we're inside the venv subprocess.
         """
+        self._disable_torch_compile()
         from huggingface_hub import hf_hub_download
-        from ltx_core.loader import LTXV_LORA_COMFY_RENAMING_MAP, LoraPathStrengthAndSDOps
+        from ltx_core.loader.primitives import LoraPathStrengthAndSDOps
+        from ltx_core.loader.sd_ops import LTXV_LORA_COMFY_RENAMING_MAP
 
         token = os.environ.get("HF_TOKEN")
         variant_cfg = VARIANTS[self._variant]
@@ -341,6 +346,15 @@ class Runner(RunnerBase):
         self._cancel = True
 
     # ── Helpers ──────────────────────────────────────────────────────
+    @staticmethod
+    def _disable_torch_compile() -> None:
+        try:
+            import torch
+            torch._dynamo.config.suppress_errors = True
+            torch._dynamo.config.disable = True
+        except Exception:
+            pass
+
     @staticmethod
     def _resolve_gemma_root(token: Optional[str]) -> Path:
         from huggingface_hub import snapshot_download

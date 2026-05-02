@@ -7,14 +7,21 @@
       "python": "3.12",
       "git": {
         "repo": "https://github.com/Lightricks/LTX-2.git",
-        "ref":  "main",
+        "ref":  "ae855f8538843825f9015a419cf4ba5edaf5eec2",
         "dest": "/workspace/repos/ltx-2",
         "required_paths": ["packages/ltx-core", "packages/ltx-pipelines"]
       },
       "pip": [
         "-e", "/workspace/repos/ltx-2/packages/ltx-core",
         "-e", "/workspace/repos/ltx-2/packages/ltx-pipelines",
-        "transformers>=4.52,<5",
+        "torch==2.8.0",
+        "torchaudio==2.8.0",
+        "transformers==4.57.6",
+        "accelerate",
+        "einops",
+        "scipy",
+        "scikit-image>=0.25.2",
+        "flashpack==0.1.2",
         "huggingface_hub",
         "fastapi",
         "uvicorn[standard]",
@@ -24,6 +31,22 @@
         "imageio-ffmpeg",
         "av",
         "cryptography==44.0.0"
+      ],
+      "verify_imports": [
+        "fastapi",
+        "uvicorn",
+        "torch",
+        "torchaudio",
+        "ltx_core",
+        "ltx_core.loader.primitives",
+        "ltx_core.loader.sd_ops",
+        "ltx_pipelines",
+        "ltx_pipelines.distilled",
+        "ltx_pipelines.ti2vid_two_stages",
+        "huggingface_hub",
+        "av",
+        "imageio",
+        "PIL"
       ]
     }
   },
@@ -202,7 +225,7 @@
       "runner_module": "backend.runners.ltx23",
       "hf_repo": "Lightricks/LTX-2.3",
       "download_snapshot": false,
-      "download_repos": ["google/gemma-3-12b-it-qat-q4_0-unquantized"],
+      "download_repos": ["Lightricks/gemma-3-12b-it-qat-q4_0-unquantized"],
       "license": {
         "type": "non-commercial",
         "label": "LTX Community License (non-commercial)",

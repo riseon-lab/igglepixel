@@ -155,7 +155,7 @@ def _run(cmd: list[str], log: Callable[[str], None], cwd: Optional[Path] = None)
 
 
 def _ensure_git_clone(spec: dict, log: Callable[[str], None]) -> None:
-    """Clone the repo if missing, fetch + reset to the requested ref otherwise."""
+    """Clone the repo if missing, fetch + checkout the requested ref otherwise."""
     repo = spec.get("repo")
     ref  = spec.get("ref", "main")
     dest = Path(spec.get("dest") or (REPOS_DIR / Path(repo).stem))
@@ -166,13 +166,46 @@ def _ensure_git_clone(spec: dict, log: Callable[[str], None]) -> None:
             return all(p.exists() for p in required_paths)
         return dest.exists() and any(dest.iterdir())
 
+    def _is_sha_ref() -> bool:
+        return len(ref) >= 7 and all(c in "0123456789abcdefABCDEF" for c in ref)
+
+    def _cached_checkout_ok() -> bool:
+        if not _has_required_checkout():
+            return False
+        if not _is_sha_ref():
+            return True
+        try:
+            head = subprocess.check_output(
+                ["git", "rev-parse", "HEAD"],
+                cwd=str(dest),
+                text=True,
+                stderr=subprocess.DEVNULL,
+            ).strip()
+            return head.startswith(ref) or ref.startswith(head)
+        except Exception:
+            return False
+
+    def _checkout_ref() -> int:
+        rc = _run(["git", "fetch", "--depth", "50", "origin", ref], log, cwd=dest)
+        if rc != 0:
+            if _is_sha_ref():
+                cached_rc = _run(["git", "checkout", "--force", ref], log, cwd=dest)
+                if cached_rc == 0:
+                    return 0
+            return rc
+        return _run(["git", "checkout", "--force", "FETCH_HEAD"], log, cwd=dest)
+
     def _clone(url: str) -> int:
-        return _run(["git", "clone", "--depth", "50", "--branch", ref, url, str(dest)], log)
+        rc = _run(["git", "clone", "--depth", "50", url, str(dest)], log)
+        if rc != 0:
+            return rc
+        return _checkout_ref()
 
     if not (dest / ".git").exists():
         dest.parent.mkdir(parents=True, exist_ok=True)
         rc = _clone(repo)
         if rc != 0 and repo and not repo.endswith(".git"):
+            shutil.rmtree(dest, ignore_errors=True)
             alt_repo = repo.rstrip("/") + ".git"
             log(f"WARN: clone failed; retrying with {alt_repo}")
             rc = _clone(alt_repo)
@@ -180,10 +213,10 @@ def _ensure_git_clone(spec: dict, log: Callable[[str], None]) -> None:
             raise RuntimeError(f"git clone failed: {repo}@{ref}")
         return
 
-    # Existing clone — fetch the requested ref and hard-reset.
-    rc = _run(["git", "fetch", "--depth", "50", "origin", ref], log, cwd=dest)
+    # Existing clone — fetch the requested branch/tag/SHA and detach there.
+    rc = _checkout_ref()
     if rc != 0:
-        if _has_required_checkout():
+        if _cached_checkout_ok():
             log(f"WARN: git fetch failed for {repo}@{ref}; using cached checkout at {dest}")
             return
         log("WARN: cached checkout incomplete; recloning")
@@ -197,12 +230,6 @@ def _ensure_git_clone(spec: dict, log: Callable[[str], None]) -> None:
         if rc == 0:
             return
         raise RuntimeError(f"git fetch failed: {repo}@{ref}")
-    rc = _run(["git", "reset", "--hard", f"origin/{ref}"], log, cwd=dest)
-    if rc != 0:
-        if _has_required_checkout():
-            log(f"WARN: git reset failed for {repo}@{ref}; using cached checkout at {dest}")
-            return
-        raise RuntimeError(f"git reset failed: {repo}@{ref}")
 
 
 def _create_venv(runtime_id: str, python_version: Optional[str], log: Callable[[str], None]) -> None:
@@ -310,6 +337,23 @@ def _pip_install(runtime_id: str, packages: list[str], log: Callable[[str], None
         raise RuntimeError(f"pip install failed for runtime '{runtime_id}'")
 
 
+def _verify_imports(runtime_id: str, imports: list[str], log: Callable[[str], None]) -> None:
+    """Fail fast if the prepared venv cannot import the runtime's essentials."""
+    if not imports:
+        return
+    py = _venv_python(runtime_id)
+    code = (
+        "import importlib\n"
+        f"mods = {imports!r}\n"
+        "for name in mods:\n"
+        "    importlib.import_module(name)\n"
+        "print('verified imports: ' + ', '.join(mods))\n"
+    )
+    rc = _run([str(py), "-c", code], log)
+    if rc != 0:
+        raise RuntimeError(f"runtime import verification failed for '{runtime_id}'")
+
+
 def ensure_runtime(spec: dict, log: Callable[[str], None] = print) -> Path:
     """Idempotently install a runtime venv described by a registry spec.
 
@@ -351,6 +395,11 @@ def ensure_runtime(spec: dict, log: Callable[[str], None] = print) -> Path:
     if pip_packages:
         log(f"== pip: {len(pip_packages)} package(s) ==")
         _pip_install(runtime_id, pip_packages, log)
+
+    verify_imports = spec.get("verify_imports") or []
+    if verify_imports:
+        log(f"== verify imports: {len(verify_imports)} module(s) ==")
+        _verify_imports(runtime_id, verify_imports, log)
 
     _spec_marker(runtime_id).write_text(_spec_hash(spec))
     log("== done ==")
