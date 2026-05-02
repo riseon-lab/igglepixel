@@ -258,9 +258,9 @@ class Runner(RunnerBase):
         seed   = int(params.get("seed", -1))
         steps  = int(params.get("steps", variant_cfg["default_steps"]))
         cfg    = float(params.get("cfg",   variant_cfg["default_cfg"]))
-        width  = self._align_dimension(int(params.get("width",  1280)))
-        height = self._align_dimension(int(params.get("height",  720)))
-        fps    = max(1, int(params.get("fps", 24)))
+        width  = self._align_dimension(int(params.get("width",  1024)))
+        height = self._align_dimension(int(params.get("height",  576)))
+        fps    = max(1, int(params.get("fps", 18)))
         duration = float(params.get("duration", 3.0))
         # LTX accepts an absolute frame count — keep this consistent with how
         # we expose seconds in the UI for Wan and others.
@@ -330,7 +330,7 @@ class Runner(RunnerBase):
                     self._log_cuda_memory("after LTX OOM cleanup")
                     raise RuntimeError(
                         "LTX ran out of VRAM. Try 1024x576, a shorter duration, or lower FPS. "
-                        "The 1536x1024 preset can exceed a 94GB card in BF16 because the 22B model, "
+                        "The high-resolution presets can exceed a 94GB card in BF16 because the 22B model, "
                         "Gemma text stack, VAE/upscaler, and video activations overlap during generation."
                     ) from e
                 raise

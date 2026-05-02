@@ -79,14 +79,15 @@ log "HEAD: $(git log -1 --pretty='%h %s')"
 # sits on the 10–20 GB ephemeral container disk, and a single model is
 # tens of GB. Pin everything model-shaped to /workspace.
 export HF_HOME=/workspace/.cache/huggingface
-export TRANSFORMERS_CACHE=/workspace/.cache/huggingface/hub
+export HF_HUB_CACHE=/workspace/.cache/huggingface/hub
 export HF_DATASETS_CACHE=/workspace/.cache/huggingface/datasets
 export PIP_CACHE_DIR=/workspace/.cache/pip
 
 # ── Workspace skeleton (the volume may be empty on first boot) ─────────
 mkdir -p /workspace/models /workspace/loras /workspace/checkpoints \
          /workspace/assets/uploads /workspace/assets/generated /workspace/logs \
-         /workspace/.cache/huggingface /workspace/.cache/pip \
+         /workspace/.cache/huggingface/hub /workspace/.cache/huggingface/datasets \
+         /workspace/.cache/pip \
          /workspace/venvs /workspace/repos
 
 # ── uv (per-runner venv tooling) ───────────────────────────────────────

@@ -34,6 +34,7 @@ PIP_CACHE_DIR    = WORKSPACE / ".cache" / "pip"
 TMP_DIR          = WORKSPACE / "tmp"
 UV_CACHE_DIR     = WORKSPACE / ".cache" / "uv"
 UV_PYTHON_DIR    = WORKSPACE / ".cache" / "uv-python"
+DOWNLOAD_MARKERS_DIR = WORKSPACE / ".cache" / "igglepixel-downloads"
 LORAS_DIR        = WORKSPACE / "loras"
 MODELS_DIR       = WORKSPACE / "models"
 COMPONENTS_DIR   = WORKSPACE / "components"     # split-file transformer/VAE/text-encoder swaps
@@ -57,7 +58,7 @@ os.environ.setdefault("UV_CACHE_DIR", str(UV_CACHE_DIR))
 os.environ.setdefault("UV_PYTHON_INSTALL_DIR", str(UV_PYTHON_DIR))
 os.environ.setdefault("XDG_CACHE_HOME", str(WORKSPACE / ".cache"))
 
-for d in (LORAS_DIR, MODELS_DIR, COMPONENTS_DIR, ASSET_UPLOADS, ASSET_GENERATED, HF_HOME_DIR, PIP_CACHE_DIR, TMP_DIR, UV_CACHE_DIR, UV_PYTHON_DIR):
+for d in (LORAS_DIR, MODELS_DIR, COMPONENTS_DIR, ASSET_UPLOADS, ASSET_GENERATED, HF_HOME_DIR, PIP_CACHE_DIR, TMP_DIR, UV_CACHE_DIR, UV_PYTHON_DIR, DOWNLOAD_MARKERS_DIR):
     try:
         d.mkdir(parents=True, exist_ok=True)
     except OSError:
@@ -492,6 +493,32 @@ def _is_repo_file_cached(repo_id: str, filename: str) -> bool:
     return any((snap / filename).exists() for snap in snaps.iterdir())
 
 
+def _download_marker_path(repo_id: str) -> Path:
+    digest = hashlib.sha256(repo_id.encode("utf-8")).hexdigest()
+    return DOWNLOAD_MARKERS_DIR / f"{digest}.json"
+
+
+def _mark_repo_downloaded(repo_id: str) -> None:
+    try:
+        DOWNLOAD_MARKERS_DIR.mkdir(parents=True, exist_ok=True)
+        _download_marker_path(repo_id).write_text(json.dumps({"repo": repo_id, "ts": time.time()}))
+    except OSError:
+        pass
+
+
+def _clear_repo_download_marker(repo_id: str) -> None:
+    try:
+        _download_marker_path(repo_id).unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def _repo_snapshot_downloaded(repo_id: str) -> bool:
+    # HF may create a snapshot dir for partial from_pretrained fetches. For
+    # whole-repo downloads, trust our own completion marker plus the cache.
+    return _download_marker_path(repo_id).exists() and _is_repo_cached(repo_id)
+
+
 def _download_key(model_id: str, variant: Optional[str] = None) -> str:
     return f"{model_id}:{variant}" if variant else model_id
 
@@ -511,6 +538,19 @@ def _download_plan(model: dict, variant: Optional[str] = None) -> tuple[str, lis
     return repo, extra_files, extra_repos, snapshot
 
 
+def _download_plan_cached(repo: str, extra_files: list[dict], extra_repos: list[str], snapshot: bool) -> bool:
+    if not repo:
+        return False
+    repo_cached = (not snapshot) or _repo_snapshot_downloaded(repo)
+    files_cached = all(
+        _is_repo_file_cached(f.get("hf_repo", ""), f.get("filename", ""))
+        for f in extra_files
+        if f.get("hf_repo") and f.get("filename")
+    )
+    repos_cached = all(_repo_snapshot_downloaded(repo_id) for repo_id in extra_repos)
+    return repo_cached and files_cached and repos_cached
+
+
 @app.get("/api/models/{model_id}/weight-status")
 def weight_status(model_id: str, variant: Optional[str] = Query(None)):
     with open(REGISTRY_PATH) as f:
@@ -520,19 +560,12 @@ def weight_status(model_id: str, variant: Optional[str] = Query(None)):
         raise HTTPException(404, "Model not found")
     repo, extra_files, extra_repos, snapshot = _download_plan(model, variant)
     tracked = downloads.get(_download_key(model_id, variant))
-    cached = bool(repo) and (not snapshot or _is_repo_cached(repo)) and all(
-        _is_repo_file_cached(f.get("hf_repo", ""), f.get("filename", ""))
-        for f in extra_files
-        if f.get("hf_repo") and f.get("filename")
-    ) and all(
-        _is_repo_cached(repo_id)
-        for repo_id in extra_repos
-    )
+    cached = _download_plan_cached(repo, extra_files, extra_repos, snapshot)
     return {
-        "downloading": tracked["downloading"],
-        "downloaded":  tracked["downloaded"] or cached,
-        "progress":    tracked["progress"],
-        "error":       tracked["error"],
+        "downloading": tracked["downloading"] and not cached,
+        "downloaded":  cached,
+        "progress":    1.0 if cached else tracked["progress"],
+        "error":       None if cached else tracked["error"],
     }
 
 
@@ -554,6 +587,9 @@ def model_download(model_id: str, body: DownloadBody):
     key = _download_key(model_id, body.variant)
     if downloads.get(key)["downloading"]:
         return {"status": "already_in_progress"}
+    if _download_plan_cached(repo, extra_files, extra_repos, snapshot):
+        downloads.set(key, downloading=False, downloaded=True, error=None, progress=1.0)
+        return {"status": "already_cached", "repo": repo, "variant": body.variant}
 
     token = body.hf_token or os.environ.get("HF_TOKEN")
 
@@ -572,6 +608,7 @@ def model_download(model_id: str, body: DownloadBody):
 
             if snapshot:
                 snapshot_download(repo_id=repo, token=token)
+                _mark_repo_downloaded(repo)
                 _mark_unit_done()
             for entry in extra_files:
                 hf_hub_download(
@@ -582,6 +619,7 @@ def model_download(model_id: str, body: DownloadBody):
                 _mark_unit_done()
             for repo_id in extra_repos:
                 snapshot_download(repo_id=repo_id, token=token)
+                _mark_repo_downloaded(repo_id)
                 _mark_unit_done()
             downloads.set(key, downloading=False, downloaded=True, progress=1.0)
         except Exception as e:
@@ -952,6 +990,7 @@ async def delete_model_weights(model_id: str):
     freed_bytes = 0
 
     for repo in repos:
+        _clear_repo_download_marker(repo)
         # HF cache layout: hub/models--{org}--{name}/
         cache_dir = cache_root / f"models--{repo.replace('/', '--')}"
         freed, err = _purge_dir(cache_dir)

@@ -1376,7 +1376,7 @@ async function refreshWeightState(m) {
       downloaded: !!ws.downloaded,
       downloading: !!ws.downloading,
       progress: ws.progress || 0,
-      ...(ws.error ? { error: ws.error } : {}),
+      error: ws.error || null,
     });
   } catch {}
 }
