@@ -39,7 +39,6 @@ UV_PYTHON_DIR = WORKSPACE / ".cache" / "uv-python"
 
 os.environ.setdefault("HF_HOME", str(HF_HOME_DIR))
 os.environ.setdefault("HF_HUB_CACHE", str(HF_HOME_DIR / "hub"))
-os.environ.setdefault("TRANSFORMERS_CACHE", str(HF_HOME_DIR / "hub"))
 os.environ.setdefault("HF_DATASETS_CACHE", str(HF_HOME_DIR / "datasets"))
 os.environ.setdefault("PIP_CACHE_DIR", str(PIP_CACHE_DIR))
 os.environ.setdefault("TMPDIR", str(TMP_DIR))
@@ -95,7 +94,6 @@ class ModelLauncher:
         env["LORAS"]     = ",".join(loras)
         env.setdefault("HF_HOME", str(HF_HOME_DIR))
         env.setdefault("HF_HUB_CACHE", str(HF_HOME_DIR / "hub"))
-        env.setdefault("TRANSFORMERS_CACHE", str(HF_HOME_DIR / "hub"))
         env.setdefault("HF_DATASETS_CACHE", str(HF_HOME_DIR / "datasets"))
         env.setdefault("PIP_CACHE_DIR", str(PIP_CACHE_DIR))
         env.setdefault("TMPDIR", str(TMP_DIR))
