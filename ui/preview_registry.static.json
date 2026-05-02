@@ -629,6 +629,101 @@
           "strength": 0.8, "default_on": false
         }
       ]
+    },
+    {
+      "id": "hunyuan-video",
+      "name": "HunyuanVideo",
+      "category": "video",
+      "description": "Tencent's flagship open video DiT (~13B). Strong text-to-video and image-to-video with a healthy LoRA ecosystem. NF4 fits a 24 GB card with offload + tiling; BF16 is the workstation path.",
+      "runner_module": "backend.runners.hunyuan_video",
+      "hf_repo": "hunyuanvideo-community/HunyuanVideo",
+      "license": {
+        "type": "non-commercial",
+        "label": "Tencent Hunyuan Community License",
+        "url": "https://huggingface.co/tencent/HunyuanVideo/blob/main/LICENSE.txt"
+      },
+      "min_vram_gb": 16,
+      "recommended_vram_gb": 80,
+      "supports_lora": true,
+      "gpu_support": ["nvidia"],
+      "variants": [
+        {
+          "id": "t2v",
+          "label": "Text → Video",
+          "description": "HunyuanVideo text-to-video. No reference frame; prompt drives the whole clip.",
+          "hf_repo": "hunyuanvideo-community/HunyuanVideo",
+          "auto_min_vram_gb": 24,
+          "quants": [
+            {
+              "id": "nf4",
+              "label": "NF4",
+              "description": "Fits a 24 GB card with model offload + VAE tiling.",
+              "vram_gb": 24,
+              "auto_min_vram_gb": 24
+            },
+            {
+              "id": "bf16",
+              "label": "BF16",
+              "description": "Workstation path — best quality.",
+              "vram_gb": 80,
+              "auto_min_vram_gb": 80
+            }
+          ]
+        },
+        {
+          "id": "i2v",
+          "label": "Image → Video",
+          "description": "HunyuanVideo image-to-video — animate a still frame.",
+          "hf_repo": "hunyuanvideo-community/HunyuanVideo-I2V",
+          "auto_min_vram_gb": 24,
+          "quants": [
+            {
+              "id": "nf4",
+              "label": "NF4",
+              "description": "Fits a 24 GB card with model offload + VAE tiling.",
+              "vram_gb": 24,
+              "auto_min_vram_gb": 24
+            },
+            {
+              "id": "bf16",
+              "label": "BF16",
+              "description": "Workstation path — best quality.",
+              "vram_gb": 80,
+              "auto_min_vram_gb": 80
+            }
+          ]
+        }
+      ],
+      "default_size_by_vram": [
+        { "min_gb": 70, "w": 1280, "h": 720 },
+        { "min_gb": 36, "w": 960, "h": 544 },
+        { "min_gb": 0,  "w": 720, "h": 480 }
+      ],
+      "param_groups": ["prompt", "generation", "dimensions", "video"],
+      "param_keys": ["prompt", "negative_prompt", "seed", "steps", "cfg", "width", "height", "duration", "fps"],
+      "param_overrides": {
+        "steps": { "default": 30, "min": 1, "max": 60 },
+        "cfg":   { "default": 6.0, "min": 0, "max": 15, "step": 0.1, "label": "Guidance" },
+        "width":  { "default": 1280, "step": 16, "min": 320, "max": 1280 },
+        "height": { "default": 720,  "step": 16, "min": 320, "max": 1280 },
+        "duration": { "default": 4.0, "step": 0.1, "min": 1, "max": 8, "label": "Seconds" },
+        "fps":    { "default": 15, "step": 1, "min": 8, "max": 30 }
+      },
+      "aspect_presets": [
+        { "label": "16:9 720p", "w": 1280, "h": 720 },
+        { "label": "16:9 480p", "w": 960,  "h": 544 },
+        { "label": "Square",     "w": 720, "h": 720 },
+        { "label": "9:16 720p",  "w": 720, "h": 1280 }
+      ],
+      "image_inputs": [
+        {
+          "key": "ref",
+          "label": "Source frame",
+          "required": false,
+          "hint": "Required for the Image → Video variant; ignored for Text → Video"
+        }
+      ],
+      "default_loras": []
     }
   ]
 }
