@@ -32,6 +32,8 @@ WORKSPACE = Path(os.environ.get("WORKSPACE", "/workspace"))
 HF_HOME_DIR      = WORKSPACE / ".cache" / "huggingface"
 PIP_CACHE_DIR    = WORKSPACE / ".cache" / "pip"
 TMP_DIR          = WORKSPACE / "tmp"
+UV_CACHE_DIR     = WORKSPACE / ".cache" / "uv"
+UV_PYTHON_DIR    = WORKSPACE / ".cache" / "uv-python"
 LORAS_DIR        = WORKSPACE / "loras"
 MODELS_DIR       = WORKSPACE / "models"
 COMPONENTS_DIR   = WORKSPACE / "components"     # split-file transformer/VAE/text-encoder swaps
@@ -49,8 +51,14 @@ os.environ.setdefault("HF_HUB_CACHE", str(HF_HOME_DIR / "hub"))
 os.environ.setdefault("TRANSFORMERS_CACHE", str(HF_HOME_DIR / "hub"))
 os.environ.setdefault("HF_DATASETS_CACHE", str(HF_HOME_DIR / "datasets"))
 os.environ.setdefault("PIP_CACHE_DIR", str(PIP_CACHE_DIR))
+os.environ.setdefault("TMPDIR", str(TMP_DIR))
+os.environ.setdefault("TEMP", str(TMP_DIR))
+os.environ.setdefault("TMP", str(TMP_DIR))
+os.environ.setdefault("UV_CACHE_DIR", str(UV_CACHE_DIR))
+os.environ.setdefault("UV_PYTHON_INSTALL_DIR", str(UV_PYTHON_DIR))
+os.environ.setdefault("XDG_CACHE_HOME", str(WORKSPACE / ".cache"))
 
-for d in (LORAS_DIR, MODELS_DIR, COMPONENTS_DIR, ASSET_UPLOADS, ASSET_GENERATED, HF_HOME_DIR, PIP_CACHE_DIR, TMP_DIR):
+for d in (LORAS_DIR, MODELS_DIR, COMPONENTS_DIR, ASSET_UPLOADS, ASSET_GENERATED, HF_HOME_DIR, PIP_CACHE_DIR, TMP_DIR, UV_CACHE_DIR, UV_PYTHON_DIR):
     try:
         d.mkdir(parents=True, exist_ok=True)
     except OSError:

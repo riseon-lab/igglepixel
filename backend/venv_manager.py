@@ -42,6 +42,9 @@ VENVS_DIR = WORKSPACE / "venvs"
 REPOS_DIR = WORKSPACE / "repos"
 HF_HOME_DIR   = WORKSPACE / ".cache" / "huggingface"
 PIP_CACHE_DIR = WORKSPACE / ".cache" / "pip"
+TMP_DIR       = WORKSPACE / "tmp"
+UV_CACHE_DIR  = WORKSPACE / ".cache" / "uv"
+UV_PYTHON_DIR = WORKSPACE / ".cache" / "uv-python"
 SPEC_MARKER = ".igglepixel-runtime-spec.sha256"
 
 os.environ.setdefault("HF_HOME", str(HF_HOME_DIR))
@@ -49,10 +52,16 @@ os.environ.setdefault("HF_HUB_CACHE", str(HF_HOME_DIR / "hub"))
 os.environ.setdefault("TRANSFORMERS_CACHE", str(HF_HOME_DIR / "hub"))
 os.environ.setdefault("HF_DATASETS_CACHE", str(HF_HOME_DIR / "datasets"))
 os.environ.setdefault("PIP_CACHE_DIR", str(PIP_CACHE_DIR))
+os.environ.setdefault("TMPDIR", str(TMP_DIR))
+os.environ.setdefault("TEMP", str(TMP_DIR))
+os.environ.setdefault("TMP", str(TMP_DIR))
+os.environ.setdefault("UV_CACHE_DIR", str(UV_CACHE_DIR))
+os.environ.setdefault("UV_PYTHON_INSTALL_DIR", str(UV_PYTHON_DIR))
+os.environ.setdefault("XDG_CACHE_HOME", str(WORKSPACE / ".cache"))
 
 # Initialised on import so callers can rely on the dirs existing. WORKSPACE
 # may not exist locally (dev sandbox); endpoints handle that on demand.
-for d in (VENVS_DIR, REPOS_DIR, HF_HOME_DIR, PIP_CACHE_DIR):
+for d in (VENVS_DIR, REPOS_DIR, HF_HOME_DIR, PIP_CACHE_DIR, TMP_DIR, UV_CACHE_DIR, UV_PYTHON_DIR):
     try:
         d.mkdir(parents=True, exist_ok=True)
     except OSError:

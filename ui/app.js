@@ -1534,7 +1534,7 @@ function renderDrawerBody() {
 
     <div class="field" style="margin-top:14px">
       <label class="field-label">HF token <span class="hint">gated repos</span></label>
-      <input class="text-input" id="drawerHFToken" type="password" placeholder="hf_…" value="${state.settings.hf_token || ''}">
+      <input class="text-input mask-text" id="drawerHFToken" type="text" placeholder="hf_…" value="${esc(state.settings.hf_token || '')}" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false" data-1p-ignore="true" data-lpignore="true" data-bwignore="true" data-form-type="other">
     </div>
 
     ${(() => {

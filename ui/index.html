@@ -166,10 +166,10 @@
     <svg class="auth-logo" viewBox="0 0 168 21" aria-label="Igglepixel"><use href="#logo-igglepixel"/></svg>
     <div class="auth-title" id="authTitle">Set up access</div>
     <div class="auth-sub" id="authSub">Create credentials for this pod. They reset when the pod stops.</div>
-    <form class="auth-form" id="authForm" autocomplete="off">
-      <input class="text-input" id="authUsername" type="text" placeholder="Username" autocomplete="off">
-      <input class="text-input" id="authPassword" type="password" placeholder="Password" autocomplete="new-password">
-      <input class="text-input" id="authConfirm"  type="password" placeholder="Confirm password" autocomplete="new-password">
+    <form class="auth-form" id="authForm" autocomplete="off" data-form-type="other">
+      <input class="text-input" id="authUsername" type="text" placeholder="Username" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false" data-1p-ignore="true" data-lpignore="true" data-bwignore="true" data-form-type="other">
+      <input class="text-input" id="authPassword" type="password" placeholder="Password" autocomplete="new-password" data-1p-ignore="true" data-lpignore="true" data-bwignore="true" data-form-type="other">
+      <input class="text-input" id="authConfirm"  type="password" placeholder="Confirm password" autocomplete="new-password" data-1p-ignore="true" data-lpignore="true" data-bwignore="true" data-form-type="other">
       <div class="auth-error" id="authError"></div>
       <button class="btn primary lg block" id="authSubmit" type="submit">Continue</button>
     </form>
@@ -373,7 +373,7 @@
 
           <div class="ws-section">
             <div class="ws-section-title">Auth</div>
-            <input class="text-input mask-text" id="wsHFToken" type="text" placeholder="HF token (gated repos)" autocomplete="off" spellcheck="false" data-1p-ignore>
+            <input class="text-input mask-text" id="wsHFToken" type="text" placeholder="HF token (gated repos)" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false" data-1p-ignore="true" data-lpignore="true" data-bwignore="true" data-form-type="other">
           </div>
         </aside>
       </div>
@@ -489,7 +489,7 @@
             </div>
             <div class="field">
               <label class="field-label">HF token <span class="hint">for gated/private repos</span></label>
-              <input class="text-input mask-text" id="hfTokenDl" type="text" placeholder="hf_…" autocomplete="off" spellcheck="false" data-1p-ignore>
+              <input class="text-input mask-text" id="hfTokenDl" type="text" placeholder="hf_…" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false" data-1p-ignore="true" data-lpignore="true" data-bwignore="true" data-form-type="other">
             </div>
             <details class="hf-advanced">
               <summary>Advanced — type an exact file path</summary>
@@ -559,7 +559,7 @@
           <div class="field-stack">
             <div class="field">
               <label class="field-label">HF token</label>
-              <input class="text-input mask-text" id="settingsHFToken" type="text" placeholder="hf_…" autocomplete="off" spellcheck="false" data-1p-ignore>
+              <input class="text-input mask-text" id="settingsHFToken" type="text" placeholder="hf_…" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false" data-1p-ignore="true" data-lpignore="true" data-bwignore="true" data-form-type="other">
             </div>
             <button class="btn block" data-save="hf_token" data-source="settingsHFToken">Save</button>
           </div>
@@ -569,7 +569,7 @@
           <div class="field-stack">
             <div class="field">
               <label class="field-label">API key</label>
-              <input class="text-input mask-text" id="settingsCivKey" type="text" placeholder="Paste key…" autocomplete="off" spellcheck="false" data-1p-ignore>
+              <input class="text-input mask-text" id="settingsCivKey" type="text" placeholder="Paste key…" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false" data-1p-ignore="true" data-lpignore="true" data-bwignore="true" data-form-type="other">
             </div>
             <button class="btn block" data-save="civitai_key" data-source="settingsCivKey">Save</button>
           </div>

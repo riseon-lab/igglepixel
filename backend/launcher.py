@@ -34,15 +34,23 @@ PORT_BASE = int(os.environ.get("RUNNER_PORT_BASE", "17000"))
 HF_HOME_DIR   = WORKSPACE / ".cache" / "huggingface"
 PIP_CACHE_DIR = WORKSPACE / ".cache" / "pip"
 TMP_DIR       = WORKSPACE / "tmp"
+UV_CACHE_DIR  = WORKSPACE / ".cache" / "uv"
+UV_PYTHON_DIR = WORKSPACE / ".cache" / "uv-python"
 
 os.environ.setdefault("HF_HOME", str(HF_HOME_DIR))
 os.environ.setdefault("HF_HUB_CACHE", str(HF_HOME_DIR / "hub"))
 os.environ.setdefault("TRANSFORMERS_CACHE", str(HF_HOME_DIR / "hub"))
 os.environ.setdefault("HF_DATASETS_CACHE", str(HF_HOME_DIR / "datasets"))
 os.environ.setdefault("PIP_CACHE_DIR", str(PIP_CACHE_DIR))
+os.environ.setdefault("TMPDIR", str(TMP_DIR))
+os.environ.setdefault("TEMP", str(TMP_DIR))
+os.environ.setdefault("TMP", str(TMP_DIR))
+os.environ.setdefault("UV_CACHE_DIR", str(UV_CACHE_DIR))
+os.environ.setdefault("UV_PYTHON_INSTALL_DIR", str(UV_PYTHON_DIR))
+os.environ.setdefault("XDG_CACHE_HOME", str(WORKSPACE / ".cache"))
 
 try:
-    for _dir in (LOGS_DIR, HF_HOME_DIR, PIP_CACHE_DIR, TMP_DIR):
+    for _dir in (LOGS_DIR, HF_HOME_DIR, PIP_CACHE_DIR, TMP_DIR, UV_CACHE_DIR, UV_PYTHON_DIR):
         _dir.mkdir(parents=True, exist_ok=True)
 except OSError:
     pass  # WORKSPACE may not exist locally; deferred to launch time.
@@ -91,6 +99,11 @@ class ModelLauncher:
         env.setdefault("HF_DATASETS_CACHE", str(HF_HOME_DIR / "datasets"))
         env.setdefault("PIP_CACHE_DIR", str(PIP_CACHE_DIR))
         env.setdefault("TMPDIR", str(TMP_DIR))
+        env.setdefault("TEMP", str(TMP_DIR))
+        env.setdefault("TMP", str(TMP_DIR))
+        env.setdefault("UV_CACHE_DIR", str(UV_CACHE_DIR))
+        env.setdefault("UV_PYTHON_INSTALL_DIR", str(UV_PYTHON_DIR))
+        env.setdefault("XDG_CACHE_HOME", str(WORKSPACE / ".cache"))
         if hf_token:
             env["HF_TOKEN"] = hf_token
         # Quantisation choice (bf16 | int8 | nf4). Runner reads FORGE_QUANT
