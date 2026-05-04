@@ -26,8 +26,8 @@
 #   Qwen/Qwen-Image-Edit-2511 uses QwenImageEditPlusPipeline. Older image
 #   builds may have the original Qwen edit pipeline but not the 2511-ready
 #   Plus loader. Qwen/Qwen-Image-2512 also expects a current QwenImage
-#   pipeline implementation. FLUX.2 [klein] uses Flux2KleinPipeline, which
-#   landed in the 0.38 series.
+#   pipeline implementation. FLUX.2 [klein] uses Flux2KleinPipeline, and
+#   Z-Image Turbo uses ZImagePipeline/ZImageImg2ImgPipeline.
 #
 # Why uv + virtualenv:
 #   Per-runtime profiles (registry `runtime_profiles` entries) need isolated

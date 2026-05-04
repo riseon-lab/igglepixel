@@ -519,6 +519,52 @@
       "default_loras": []
     },
     {
+      "id": "z-image-turbo",
+      "name": "Z-Image Turbo",
+      "category": "image",
+      "description": "Tongyi-MAI's 6B Z-Image Turbo. Apache 2.0 text-to-image with strong photorealism and bilingual text rendering, tuned for 8 DiT forwards.",
+      "runner_module": "backend.runners.z_image_turbo",
+      "hf_repo": "Tongyi-MAI/Z-Image-Turbo",
+      "license": {
+        "type": "commercial",
+        "label": "Apache 2.0",
+        "url": "https://www.apache.org/licenses/LICENSE-2.0"
+      },
+      "min_vram_gb": 16,
+      "recommended_vram_gb": 24,
+      "supports_lora": true,
+      "gpu_support": ["nvidia"],
+      "default_size_by_vram": [
+        { "min_gb": 16, "w": 1024, "h": 1024 },
+        { "min_gb": 0,  "w": 768,  "h": 768  }
+      ],
+      "quants": [
+        { "id": "bf16", "label": "BF16", "description": "Best quality",       "vram_gb": 16, "auto_min_vram_gb": 20 },
+        { "id": "int8", "label": "INT8", "description": "Lower VRAM",         "vram_gb": 10, "auto_min_vram_gb": 12 },
+        { "id": "nf4",  "label": "NF4",  "description": "Smallest",           "vram_gb": 7,  "auto_min_vram_gb": 0  }
+      ],
+      "image_inputs": [
+        { "key": "ref", "label": "Reference", "required": false, "hint": "Optional img2img starting point" }
+      ],
+      "param_groups": ["prompt", "generation", "dimensions", "reference"],
+      "param_keys":   ["prompt", "seed", "steps", "cfg", "width", "height", "ref_image", "ref_strength"],
+      "param_overrides": {
+        "steps":       { "default": 9,   "min": 1, "max": 16, "step": 1 },
+        "cfg":         { "default": 0.0, "min": 0, "max": 5,  "step": 0.1, "label": "Guidance" },
+        "width":       { "default": 1024, "step": 16, "min": 512, "max": 2048 },
+        "height":      { "default": 1024, "step": 16, "min": 512, "max": 2048 },
+        "ref_strength": { "default": 0.6, "min": 0, "max": 1, "step": 0.05, "label": "Reference strength" }
+      },
+      "aspect_presets": [
+        { "label": "Square",          "w": 1024, "h": 1024 },
+        { "label": "Landscape 16:9",  "w": 1344, "h": 768  },
+        { "label": "Portrait 9:16",   "w": 768,  "h": 1344 },
+        { "label": "3:4",             "w": 896,  "h": 1152 },
+        { "label": "4:3",             "w": 1152, "h": 896  }
+      ],
+      "default_loras": []
+    },
+    {
       "id": "qwen-image",
       "name": "Qwen-Image",
       "category": "image",
