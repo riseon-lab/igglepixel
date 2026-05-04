@@ -104,8 +104,8 @@ mkdir -p /workspace/models /workspace/loras /workspace/checkpoints \
 # but explicitly intended for ephemeral / CI environments per the docs).
 #
 # UV_PYTHON_INSTALL_DIR moves uv-managed Python interpreters onto the
-# persistent /workspace volume. Without this, every cold pod re-downloads
-# Python 3.12 (~50 MB) when LTX-2.3 needs it.
+# persistent /workspace volume. Without this, every cold pod that asks for
+# a different Python version (~50 MB) re-downloads it from scratch.
 export UV_INSTALL_DIR=/workspace/.local/bin
 export UV_PYTHON_INSTALL_DIR=/workspace/.cache/uv-python
 export PATH="$UV_INSTALL_DIR:$PATH"

@@ -30,7 +30,7 @@ A self-contained launcher that gives you a clean, commercial-grade interface ove
 | Text-to-image | FLUX.1-dev, SDXL | 🛣️ Roadmap |
 | Image edit (alt) | FLUX.1-Kontext | 🛣️ Roadmap |
 | Pose / Style ControlNet | InstantX Qwen ControlNet | 🛣️ Roadmap |
-| Video | Wan, HunyuanVideo, LTX-Video | 🛣️ Roadmap |
+| Video | Wan 2.2 I2V, HunyuanVideo | ✅ Live |
 | Voice / Audio | Whisper, Bark, MusicGen | 🛣️ Roadmap |
 | Text / LLM | Llama 3, Qwen2.5, DeepSeek | 🛣️ Roadmap |
 

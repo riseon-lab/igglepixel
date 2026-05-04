@@ -29,8 +29,9 @@
 #   pipeline implementation.
 #
 # Why uv + virtualenv:
-#   Per-model runtimes such as LTX need isolated environments. Some pod
-#   images do not have the entrypoint-installed uv binary or a working
+#   Per-runtime profiles (registry `runtime_profiles` entries) need isolated
+#   venvs when a model brings deps that conflict with the shared image. Some
+#   pod images do not have the entrypoint-installed uv binary or a working
 #   `python -m venv` / ensurepip path, so the backend prefers uv and falls
 #   back to virtualenv before giving up.
 

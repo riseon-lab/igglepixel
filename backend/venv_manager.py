@@ -1,12 +1,10 @@
 """Shared runtime-profile virtual environment lifecycle.
 
 Some model runners need a different Python version or pinned deps that
-conflict with the shared /usr/bin/python image. LTX-2.3 is the first profile
-consumer — its `ltx-pipelines` stack brings Torch ~2.7-era dependencies that
-we do not want to force onto every other runner. Rather than bumping the
-entire image (which would force every other runner to re-install its deps),
-we let models point at shared `runtime_profiles` in the registry and spin up
-isolated venvs for those dependency profiles.
+conflict with the shared /usr/bin/python image. Rather than bumping the
+entire image (which would force every other runner to re-install its deps
+on every release), we let models point at shared `runtime_profiles` in the
+registry and spin up isolated venvs for those dependency profiles.
 
 The launcher reads `model.runtime["id"]`, asks `runtime_python(id)` for
 the venv's Python interpreter, and spawns the runner subprocess against
@@ -367,12 +365,12 @@ def ensure_runtime(spec: dict, log: Callable[[str], None] = print) -> Path:
 
     Spec shape (from model_registry.json's `runtime` block):
         {
-          "id":      "ltx23",                         // venv directory
+          "id":      "<runtime-id>",                  // venv directory
           "python":  "3.12",                          // optional version
           "git":     {                                // optional source clone
             "repo": "https://github.com/...",
             "ref":  "main",
-            "dest": "/workspace/repos/ltx-2"
+            "dest": "/workspace/repos/<name>"
           },
           "pip":     ["-e", "/path/to/pkg", "transformers", ...]
         }

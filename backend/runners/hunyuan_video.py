@@ -10,9 +10,9 @@ as env vars; this runner reads them and picks the right HF repo + quant
 config. NF4 is the default for consumer cards (~24 GB with offload + VAE
 tiling); BF16 is the workstation path (~60-80 GB resident).
 
-Diffusers ships HunyuanVideo mainline, so unlike LTX-2.3 this runs on the
-shared interpreter — no per-runner venv. Frame counts must follow the
-4*k+1 rule per Tencent's reference inference recipe.
+Diffusers ships HunyuanVideo mainline, so this runs on the shared
+interpreter — no per-runner venv. Frame counts must follow the 4*k+1 rule
+per Tencent's reference inference recipe.
 """
 
 from __future__ import annotations

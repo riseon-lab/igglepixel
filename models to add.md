@@ -32,8 +32,7 @@ WAN 2.2 5B
 WAN 2.2 Animate
 WAN 2.2 S2V
 WAN 2.5 I2V / T2V as experimental
-HunyuanVideo
-LTX-Video
+HunyuanVideo DONE
 CogVideoX
 Mochi 1
 AnimateDiff

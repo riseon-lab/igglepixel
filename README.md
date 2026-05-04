@@ -42,7 +42,7 @@ The live catalogue is registry-driven, so support will keep expanding without ch
 | Text-to-image | Qwen-Image, Qwen-Image-2512, FLUX.1-dev | Qwen is Apache 2.0; FLUX.1-dev is non-commercial. |
 | Image edit | Qwen-Image-Edit, Qwen-Image-Edit 2511 | Reference-image editing with LoRA support. |
 | Image-to-video | Wan 2.2 I2V | 14B Lightning 8-step, 14B, and 5B variants. |
-| Image-to-video | LTX-2.3 | Distilled 1.1 / 1.0 and dev variants; LTX Community License, non-commercial. |
+| Text / image to video | HunyuanVideo | t2v + i2v variants, NF4 (24 GB) and BF16 (80 GB) quants. |
 | Text / chat | Qwen 2.5 Chat, TinyLlama Chat 1.1B | Qwen 7B / 14B / 32B variants with VRAM-aware context defaults. |
 
 More models are coming. The intended path is simple: add a runner, add registry metadata, expose the right controls, and keep the UX consistent.

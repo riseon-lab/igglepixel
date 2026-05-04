@@ -5007,9 +5007,9 @@ async function startHFDownload() {
 }
 
 // Accepts username/repo, full https URLs, and tree/branch URLs.
-//   "Lightricks/LTX-2.3"
-//   "https://huggingface.co/Lightricks/LTX-2.3"
-//   "https://huggingface.co/Lightricks/LTX-2.3/tree/main"
+//   "tencent/HunyuanVideo"
+//   "https://huggingface.co/tencent/HunyuanVideo"
+//   "https://huggingface.co/tencent/HunyuanVideo/tree/main"
 function parseHFRepoInput(raw) {
   const value = String(raw || '').trim();
   let repo = value, revision = 'main';
