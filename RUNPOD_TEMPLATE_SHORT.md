@@ -20,8 +20,8 @@ A self-contained launcher with a clean, commercial-grade interface over the enti
 
 | Category | Models | Status |
 |---|---|---|
-| Text-to-image | Qwen-Image | ✅ Live |
-| Image-to-image edit | Qwen-Image-Edit | ✅ Live |
+| Text-to-image | Qwen-Image, Qwen-Image-2512, FLUX.2 [klein] 4B/9B | ✅ Live |
+| Image-to-image edit | Qwen-Image-Edit, Qwen-Image-Edit 2511, FLUX.2 [klein] 4B/9B | ✅ Live |
 | Text-to-image | FLUX.1-dev, SDXL | 🛣️ Roadmap |
 | Image edit | FLUX.1-Kontext | 🛣️ Roadmap |
 | Pose / Style ControlNet | InstantX Qwen ControlNet | 🛣️ Roadmap |

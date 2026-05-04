@@ -423,6 +423,102 @@
       "default_loras": []
     },
     {
+      "id": "flux2-klein-4b",
+      "name": "FLUX.2 [klein] 4B",
+      "category": "image",
+      "description": "Black Forest Labs' compact FLUX.2 [klein] 4B. Fast 4-step text-to-image and optional multi-reference editing, fully open under Apache 2.0.",
+      "runner_module": "backend.runners.flux2_klein_4b",
+      "hf_repo": "black-forest-labs/FLUX.2-klein-4B",
+      "license": {
+        "type": "commercial",
+        "label": "Apache 2.0",
+        "url": "https://www.apache.org/licenses/LICENSE-2.0"
+      },
+      "min_vram_gb": 8,
+      "recommended_vram_gb": 16,
+      "supports_lora": true,
+      "gpu_support": ["nvidia"],
+      "default_size_by_vram": [
+        { "min_gb": 16, "w": 1024, "h": 1024 },
+        { "min_gb": 0,  "w": 768,  "h": 768  }
+      ],
+      "quants": [
+        { "id": "bf16", "label": "BF16", "description": "Best quality",        "vram_gb": 13, "auto_min_vram_gb": 16 },
+        { "id": "int8", "label": "INT8", "description": "Faster, lower VRAM",  "vram_gb": 8,  "auto_min_vram_gb": 10 },
+        { "id": "nf4",  "label": "NF4",  "description": "Smallest",           "vram_gb": 6,  "auto_min_vram_gb": 0  }
+      ],
+      "image_inputs": [
+        { "key": "ref",  "label": "Reference 1", "required": false, "hint": "Optional subject, style, or scene reference" },
+        { "key": "ref2", "label": "Reference 2", "required": false, "hint": "Optional second reference" },
+        { "key": "ref3", "label": "Reference 3", "required": false, "hint": "Optional third reference" },
+        { "key": "ref4", "label": "Reference 4", "required": false, "hint": "Optional fourth reference" }
+      ],
+      "param_groups": ["prompt", "generation", "dimensions"],
+      "param_keys":   ["prompt", "seed", "steps", "cfg", "width", "height"],
+      "param_overrides": {
+        "steps":  { "default": 4,   "min": 1, "max": 12, "step": 1 },
+        "cfg":    { "default": 1.0, "min": 0, "max": 6,  "step": 0.1, "label": "Guidance" },
+        "width":  { "default": 1024, "step": 16, "min": 256, "max": 2048 },
+        "height": { "default": 1024, "step": 16, "min": 256, "max": 2048 }
+      },
+      "aspect_presets": [
+        { "label": "Square",          "w": 1024, "h": 1024 },
+        { "label": "Landscape 16:9",  "w": 1344, "h": 768  },
+        { "label": "Portrait 9:16",   "w": 768,  "h": 1344 },
+        { "label": "3:4",             "w": 896,  "h": 1152 },
+        { "label": "4:3",             "w": 1152, "h": 896  }
+      ],
+      "default_loras": []
+    },
+    {
+      "id": "flux2-klein-9b",
+      "name": "FLUX.2 [klein] 9B",
+      "category": "image",
+      "description": "Black Forest Labs' higher-quality FLUX.2 [klein] 9B. Fast 4-step text-to-image and optional multi-reference editing. Gated Hugging Face repo under the FLUX Non-Commercial License.",
+      "runner_module": "backend.runners.flux2_klein_9b",
+      "hf_repo": "black-forest-labs/FLUX.2-klein-9B",
+      "license": {
+        "type": "non-commercial",
+        "label": "FLUX Non-Commercial",
+        "url": "https://huggingface.co/black-forest-labs/FLUX.2-klein-9B/blob/main/LICENSE.md"
+      },
+      "min_vram_gb": 24,
+      "recommended_vram_gb": 36,
+      "supports_lora": true,
+      "gpu_support": ["nvidia"],
+      "default_size_by_vram": [
+        { "min_gb": 36, "w": 1024, "h": 1024 },
+        { "min_gb": 0,  "w": 768,  "h": 768  }
+      ],
+      "quants": [
+        { "id": "bf16", "label": "BF16", "description": "Best quality",        "vram_gb": 29, "auto_min_vram_gb": 36 },
+        { "id": "int8", "label": "INT8", "description": "Faster, lower VRAM",  "vram_gb": 18, "auto_min_vram_gb": 24 },
+        { "id": "nf4",  "label": "NF4",  "description": "Smallest",           "vram_gb": 12, "auto_min_vram_gb": 0  }
+      ],
+      "image_inputs": [
+        { "key": "ref",  "label": "Reference 1", "required": false, "hint": "Optional subject, style, or scene reference" },
+        { "key": "ref2", "label": "Reference 2", "required": false, "hint": "Optional second reference" },
+        { "key": "ref3", "label": "Reference 3", "required": false, "hint": "Optional third reference" },
+        { "key": "ref4", "label": "Reference 4", "required": false, "hint": "Optional fourth reference" }
+      ],
+      "param_groups": ["prompt", "generation", "dimensions"],
+      "param_keys":   ["prompt", "seed", "steps", "cfg", "width", "height"],
+      "param_overrides": {
+        "steps":  { "default": 4,   "min": 1, "max": 12, "step": 1 },
+        "cfg":    { "default": 1.0, "min": 0, "max": 6,  "step": 0.1, "label": "Guidance" },
+        "width":  { "default": 1024, "step": 16, "min": 256, "max": 2048 },
+        "height": { "default": 1024, "step": 16, "min": 256, "max": 2048 }
+      },
+      "aspect_presets": [
+        { "label": "Square",          "w": 1024, "h": 1024 },
+        { "label": "Landscape 16:9",  "w": 1344, "h": 768  },
+        { "label": "Portrait 9:16",   "w": 768,  "h": 1344 },
+        { "label": "3:4",             "w": 896,  "h": 1152 },
+        { "label": "4:3",             "w": 1152, "h": 896  }
+      ],
+      "default_loras": []
+    },
+    {
       "id": "qwen-image",
       "name": "Qwen-Image",
       "category": "image",
