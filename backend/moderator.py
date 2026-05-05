@@ -8,35 +8,117 @@ Runs in the runner subprocess after the pipeline returns the PIL image or
 video frames, but before save_image()/save_video(). When flagged: nothing
 persists, runner returns {flagged: true} and the UI shows a neutral toast.
 
-Toggle via env:
-    IGGLEPIXEL_MODERATION=true   (default — production)
-    IGGLEPIXEL_MODERATION=false  (private dev pods, or fork operators
-                                  taking their own responsibility)
+This module owns the canonical `is_enabled()` for the whole project — the
+prompt moderator delegates here so a single switch toggles every gate
+(prompt + ref + output + CivitAI browse) consistently.
+
+## Disabling moderation: by design, deliberately friction-y
+
+A boolean env flag is too easy to flip casually, and worse — a fork can
+bake `=false` into its RunPod template defaults so end users never even
+see the choice. So there is no boolean. Two intentional paths exist:
+
+  Path 1 — fork operator declaration (visible in pod config):
+      Set env var `IGGLEPIXEL_MODERATION_DISABLE_ACK` to the value of
+      the DISABLE_TOKEN constant below. The token reads as a written
+      acknowledgement of liability — copying it is the operator
+      asserting they accept responsibility for outputs.
+
+  Path 2 — runtime override (Settings UI on the pod):
+      A logged-in operator pastes the same token into the Settings
+      dialog. Backend writes `<workspace>/.moderation-override.disabled`.
+      Survives reboot. NOT visible as a pod env var, so it lives on
+      the workspace volume only. Auth-gated endpoints prevent a
+      logged-out request from flipping it.
+
+Either path discloses *why* moderation is off in the boot log so an
+inspector reading logs can see the exact source. Both paths check the
+SAME constant — one place to audit, one place to find.
+
+This is friction-as-a-feature, not security-by-obscurity. A determined
+operator finds the token in 30 seconds. The goal is to ensure no one
+disables moderation *without realising they did*.
+
+## Other env
+
     IGGLEPIXEL_VIDEO_MODERATION_FRAMES=7
-                                  max number of evenly-spaced video frames
-                                  to score before saving
+        max number of evenly-spaced video frames to score before saving
 
 Failure mode is fail-closed: if the moderation model can't load or
-errors during inference, we block the output. If you really want no
-moderation, set the env var to false.
+errors during inference, we block the output.
 """
 
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 NSFW_THRESHOLD = 0.85         # tune after observing real flag patterns
 MODEL_REPO     = "Falconsai/nsfw_image_detection"
 DEFAULT_VIDEO_SAMPLE_FRAMES = 7
 
+# The acknowledgement token. Copying this string is the operator stating
+# the words "I accept full liability for outputs". Friction-by-design;
+# changing the wording requires a code change, which is the point.
+DISABLE_TOKEN = "i-am-a-fork-operator-and-i-accept-full-liability-for-all-outputs-from-this-pod"
+
+# Runtime override marker. Lives on the persistent workspace volume so
+# the override survives reboot but does NOT show up in pod env config.
+WORKSPACE = Path(os.environ.get("WORKSPACE", "/workspace"))
+OVERRIDE_MARKER = WORKSPACE / ".moderation-override.disabled"
+
 _processor = None
 _model     = None
 _device    = None
 _load_failed = False
+_state_logged = False
+
+
+def disable_source() -> str:
+    """Identify *why* moderation is currently off, for status/log surfaces.
+
+    Returns one of: 'default' (it's on), 'env' (fork-operator declaration),
+    'runtime_override' (UI override), 'default_fallback' (env or marker
+    held the wrong token — treated as on).
+    """
+    env_value = os.environ.get("IGGLEPIXEL_MODERATION_DISABLE_ACK")
+    if env_value is not None:
+        if env_value == DISABLE_TOKEN:
+            return "env"
+        # Anything-else-not-the-token is treated as on; we surface this
+        # so the operator's logs say their wrong token didn't take effect.
+        return "default_fallback"
+    try:
+        if OVERRIDE_MARKER.exists():
+            stored = OVERRIDE_MARKER.read_text(encoding="utf-8").strip()
+            if stored == DISABLE_TOKEN:
+                return "runtime_override"
+            return "default_fallback"
+    except OSError:
+        pass
+    return "default"
 
 
 def is_enabled() -> bool:
-    return os.environ.get("IGGLEPIXEL_MODERATION", "true").lower() != "false"
+    src = disable_source()
+    enabled = src not in ("env", "runtime_override")
+    global _state_logged
+    if not _state_logged:
+        if enabled:
+            print("[moderator] enabled", flush=True)
+        elif src == "env":
+            print("[moderator] DISABLED via fork-operator env var (IGGLEPIXEL_MODERATION_DISABLE_ACK)", flush=True)
+        elif src == "runtime_override":
+            print(f"[moderator] DISABLED via runtime override ({OVERRIDE_MARKER})", flush=True)
+        _state_logged = True
+    return enabled
+
+
+def reset_state_log() -> None:
+    """Force the next is_enabled() call to re-announce the source. Called
+    by the API endpoints after toggling so log readers see the transition."""
+    global _state_logged
+    _state_logged = False
 
 
 def init() -> None:

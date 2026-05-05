@@ -49,6 +49,16 @@ def _data_key() -> Optional[bytes]:
     return bytes.fromhex(hex_key) if hex_key else None
 
 
+class RefImageFlaggedError(RuntimeError):
+    """Raised by Runner.load_image when the user-supplied ref fails NSFW
+    moderation. The runner_host translates this into a 422 with a
+    structured body so the UI can render an inline "ref flagged" error
+    in the same shape as prompt moderation rejections."""
+    def __init__(self, ref_path: str):
+        self.ref_path = ref_path
+        super().__init__(f"Reference image flagged by moderation ({ref_path})")
+
+
 def save_latent_preview(pipe, latents, height: int, width: int, path: Path) -> bool:
     """Best-effort decode of in-progress diffusion latents to a JPEG preview.
 
@@ -859,20 +869,50 @@ class Runner(ABC):
         return normalized
 
     @staticmethod
-    def load_image(visible_path: Path):
+    def load_image(visible_path: Path, *, moderate: bool = True):
         """Open whichever of <name>.enc or <name> exists; return a PIL.Image.
 
         `visible_path` is the user-facing path (no .enc). We resolve the
         encrypted form transparently when the data key is present.
+
+        For user-supplied reference/content images, pass moderate=True
+        (default). We moderate once, post-decrypt, so a flagged ref never
+        reaches a model. Browser-encrypted uploads would otherwise be
+        invisible to server-side moderation; this hook restores the check
+        at first use without breaking E2E encryption on upload.
+
+        Non-content utility images such as binary masks should pass
+        moderate=False.
         """
         from PIL import Image
         key = _data_key()
         if key:
             import backend.crypto as fcrypto
             data = fcrypto.read_decrypted(key, visible_path)
-            return Image.open(io.BytesIO(data))
-        # Legacy plaintext path.
-        on_disk = visible_path
-        if not on_disk.exists():
-            raise FileNotFoundError(visible_path)
-        return Image.open(on_disk)
+            img = Image.open(io.BytesIO(data))
+        else:
+            on_disk = visible_path
+            if not on_disk.exists():
+                raise FileNotFoundError(visible_path)
+            img = Image.open(on_disk)
+
+        # Run the existing image moderator on the decrypted ref. Reuses
+        # the runner subprocess's already-warm Falconsai classifier — no
+        # extra VRAM cost. Runners catch this RefImageFlaggedError and
+        # surface a structured 422 to the UI (same shape as the prompt
+        # moderation rejection).
+        try:
+            from backend import moderator
+            if moderate and moderator.is_enabled():
+                # Force eager decode: PIL is lazy, and the classifier
+                # needs pixels in hand to score them.
+                probe = img.convert("RGB") if img.mode != "RGB" else img.copy()
+                if moderator.is_flagged(probe):
+                    raise RefImageFlaggedError(str(visible_path))
+        except RefImageFlaggedError:
+            raise
+        except Exception as e:
+            # Moderator import / inference errors are logged but don't
+            # block — the output moderator still gates generation.
+            print(f"[runner] ref moderation skipped: {type(e).__name__}: {e}", flush=True)
+        return img

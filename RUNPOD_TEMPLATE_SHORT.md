@@ -1,85 +1,79 @@
 # Igglepixel
 
-**One UI for every open-source generation model you actually want to run.**
+**One UI, every open generation model — image, edit, video, chat, LoRA.**
 
-A self-contained launcher with a clean, commercial-grade interface over the entire open-source generation stack — image, edit, and (soon) video, text, and voice. Deploy, sign in, generate. No ComfyUI node graphs, no Python scripts.
+A self-hosted launcher with a clean UI over the open-source generation stack. Pick a model, click Download → Start → Open. No ComfyUI graphs, no Python.
 
 ## What you get
 
-- **One UI, every model** — pick from the catalogue, click Download, click Start, generate.
-- **Auth gate** — pod boots locked, you set username/password on first run. Credentials live in the pod, not on a server.
-- **Live previews** — ComfyUI-style step-by-step image previews while inference runs.
-- **Multi-image carousel** — reference cells hold multiple images per slot (◀ ▶).
-- **LoRA support** — browse CivitAI in-app, download to pod, assign to models, per-LoRA strength sliders.
-- **Quantisation** — BF16 / INT8 / NF4 with auto-pick by GPU. INT8 lets larger generations fit smaller cards.
-- **VRAM-aware defaults** — output size, steps, and quant default to what your card can handle.
-- **Encrypted storage** — uploads and outputs are AES-GCM encrypted at rest, key derived from your password.
-- **HF / CivitAI integration** — gated repos and LoRA browsing inside the app.
+- **Catalogue UI** — browse, download, run; per-model workspaces with VRAM-aware defaults.
+- **Quantisation** — BF16 / INT8 / NF4 auto-picked for your GPU.
+- **Live previews** — step-by-step previews where the runner supports them.
+- **LoRA support** — browse CivitAI in-app; per-LoRA strength sliders on supported models.
+- **Encrypted storage** — AES-GCM at rest; key derived from your password.
+- **Auth gate** — username + password set on first boot, never on a server.
+- **Hot reload** — UI/backend pulled from the public Git repo on every boot.
 
-## What it currently runs
+## Pick the right GPU
 
-| Category | Models | Status |
-|---|---|---|
-| Text-to-image | Qwen-Image, Qwen-Image-2512, FLUX.2 [klein] 4B/9B | ✅ Live |
-| Image-to-image edit | Qwen-Image-Edit, Qwen-Image-Edit 2511, FLUX.2 [klein] 4B/9B | ✅ Live |
-| Text-to-image | FLUX.1-dev, SDXL | 🛣️ Roadmap |
-| Image edit | FLUX.1-Kontext | 🛣️ Roadmap |
-| Pose / Style ControlNet | InstantX Qwen ControlNet | 🛣️ Roadmap |
-| Video | Wan 2.2 I2V, HunyuanVideo | ✅ Live |
-| Voice / Audio | Whisper, Bark, MusicGen | 🛣️ Roadmap |
-| Text / LLM | Llama 3, Qwen2.5, DeepSeek | 🛣️ Roadmap |
+The UI now groups families into model cards with variants. Quants are auto-picked where available; tiers below show the smallest sensible GPU for each current variant path.
+
+**Grouped variants in the app:** Wan 2.2 I2V/T2V each expose 5B, 14B, and 14B Lightning 4/8-step; Qwen 2.5 Chat exposes 7B/14B/32B; HunyuanVideo exposes T2V/I2V; HiDream-I1 exposes Fast/Dev/Full; SenseNova-U1 exposes 8B-MoT, 8-step preview, and SFT.
+
+### 16 GB
+FLUX.2 [klein] 4B · Z-Image Turbo · FLUX.1-dev INT8/NF4 · LongCat Image/Edit INT8/NF4 · Qwen-Image / Edit / 2511 / 2512 NF4 · Qwen ControlNet Union/Inpaint NF4 · Qwen 2.5 7B BF16 · Qwen 2.5 14B INT8/NF4 · Qwen 2.5 32B NF4 · Wan 2.2 5B INT8/NF4
+
+### 24 GB
+HunyuanVideo NF4 T2V/I2V · HiDream-I1 Fast · Qwen-Image / Edit / 2511 / 2512 INT8 · Qwen ControlNet INT8 · Wan 2.2 14B NF4 · FLUX.2 [klein] 9B INT8 · LongCat Image/Edit BF16 · FLUX.1-dev BF16
+
+### 36 – 48 GB
+Wan 2.2 5B BF16 · Wan 2.2 14B INT8 · FLUX.2 [klein] 9B BF16 · Qwen 2.5 14B BF16 · Qwen 2.5 32B INT8 · Qwen-Image / Edit / 2511 / 2512 BF16 · Qwen ControlNet BF16 · SenseNova-U1 BF16 minimum · HiDream-I1 Dev
+
+### 80 GB+
+Wan 2.2 14B BF16 · Wan 2.2 14B Lightning 4/8-step I2V/T2V · HunyuanVideo BF16 T2V/I2V · HiDream-I1 Full · Qwen 2.5 32B BF16 · SenseNova-U1 all variants comfortably
+
+### CPU only — 🛣️ planned
+Closed-source / API-driven video models with no open weights: **Kling**, **Seedance**, **Veo 3**, **Sora 2**, **Runway**, **Pika**. The pod brokers the API call — no GPU needed. Bring your own provider key.
+
+> **Running locally:** this image targets RunPod's `/workspace` volume layout. To run on your own Docker host, mount any persistent dir at `/workspace` and override `FORGE_REPO` to point at your fork.
 
 ## Quick start
 
-1. **Deploy** this template, pick a GPU (24 GB+ for INT8, 48 GB+ for BF16).
+1. Deploy → pick a GPU from the tier above.
 2. Open the proxy URL on port `3000`.
-3. Set username + password. **No password recovery** — it's bound to your encryption key.
-4. Pick a model → Download → Start → Open workspace → generate.
+3. Set username + password (**no recovery — bound to your encryption key**).
+4. Pick a model → Download → Start → generate.
 
-First model load pulls ~40 GB to the persistent volume (one-time). Subsequent boots load from cache in seconds.
+First load pulls weights to the persistent volume (one-time). Subsequent boots load in seconds from cache.
 
 ## Configuration
 
-All optional. Defaults work out of the box.
-
 | Variable | Default | Purpose |
 |---|---|---|
-| `HF_TOKEN` | — | Gated HuggingFace repos (or paste in Settings tab) |
-| `IGGLEPIXEL_MODERATION` | `true` | NSFW classifier on every output (see below) |
+| `HF_TOKEN` | — | Gated HuggingFace repos (or paste in Settings) |
+| `IGGLEPIXEL_MODERATION_DISABLE_ACK` | — | Fork-operator opt-out token (see Moderation) |
 
 The container pulls latest UI/backend from [github.com/riseon-lab/igglepixel](https://github.com/riseon-lab/igglepixel) on every boot — fixes ship without rebuilds.
 
 ## Content moderation
 
-Ships with NSFW image moderation **enabled by default**. Outputs are classified before they hit disk; flagged ones are dropped silently with a neutral toast. Classifier is `Falconsai/nsfw_image_detection` (~350 MB VRAM, on-pod, no external calls).
+On by default; the shared moderation policy gates four stages:
 
-Set `IGGLEPIXEL_MODERATION=false` to disable. **If you do, you accept full responsibility for your deployment's outputs.** Appropriate for private dev pods, not for any deployment where untrusted users can generate.
+- **Prompt** — `KoalaAI/Text-Moderation` (CPU) catches sexual / hate / violence / harassment / self-harm before any model spins up.
+- **Reference image** — `Falconsai/nsfw_image_detection` scans uploaded refs at first use, post-decrypt inside the runner.
+- **Output** — same classifier scans generated stills and sampled video frames before anything lands on disk.
+- **CivitAI browse** — NSFW-tagged LoRAs filtered server-side; tampered clients can't bypass.
 
-## Source
+HF downloads aren't gated — checks happen at *use*, not *download*. Disabling is friction-by-design: paste the acknowledgement token from `backend/moderator.py` either as `IGGLEPIXEL_MODERATION_DISABLE_ACK` (fork operator, visible in pod config) or in Settings → Content moderation (runtime override, requires login). **The token is the operator's written declaration of liability.**
 
-[github.com/riseon-lab/igglepixel](https://github.com/riseon-lab/igglepixel) — MIT licensed. Issues, PRs, and new model contributions welcome (one-file drop-in under `backend/runners/`).
+## Privacy & terms
 
-## Terms & responsibility
+- Credentials and outputs live encrypted on `/workspace`. No telemetry, no external auth.
+- HF / CivitAI requests come from your pod's IP; tokens browser-stored only.
+- No model weights are bundled — they're pulled from their publishers under each publisher's licence. You are responsible for compliance and for what you generate.
+- Provided as-is, without warranty. **Forks own their own moderation policy and liability.**
 
-This template provides infrastructure to run open-source generation models. **No model weights are bundled.** Models are downloaded directly from their original publishers under whatever licence those publishers set. You are responsible for complying with each model's licence.
-
-Generated outputs are your responsibility:
-
-- Moderation is a defensive measure, not a guarantee. It catches NSFW; it does not catch every category of harmful content.
-- You are responsible for what you generate, what you publish, and what you allow others to generate via your deployment.
-- Outputs are statistical — may be unexpected, biased, or reflect training data biases.
-
-**Forks operate under their own moderation policy and own their own responsibility.** The maintainer is responsible only for the official `riseonlab/igglepixel` image with its default-on moderation. Forks may disable moderation; that is the fork operator's choice and liability.
-
-Provided as-is, without warranty of any kind, express or implied. In no event shall the maintainer be liable for any claim or damages arising from use of this software.
-
-## Privacy
-
-- Credentials live in the pod's `/workspace` volume. No external auth.
-- Generated content is encrypted on the pod's volume. No telemetry.
-- Moderation runs entirely on-pod. No external moderation calls.
-- HF / CivitAI requests come from your pod's IP; tokens are browser-stored only.
+[Source · github.com/riseon-lab/igglepixel](https://github.com/riseon-lab/igglepixel) — MIT.
 
 ---
-
 _Built on RunPod. Powered by open-source models._

@@ -575,6 +575,24 @@
           </div>
         </div>
         <div class="card settings-full" style="padding:14px">
+          <div class="section-title" style="margin:0 0 10px;border:0;padding:0">Content moderation</div>
+          <div id="moderationCard" style="display:flex;flex-direction:column;gap:10px">
+            <div class="field" style="margin:0">
+              <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+                <span class="status-pill" id="moderationPill" data-state="loading">Checking…</span>
+                <span style="font-size:12px;color:var(--t-3)" id="moderationSource"></span>
+              </div>
+            </div>
+            <div style="font-size:12px;color:var(--t-3);line-height:1.45">
+              On by default. Gates prompts, reference uploads, generated outputs, and CivitAI browsing. Disabling is a deliberate-friction control — see the moderator source for the acknowledgement token.
+            </div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap">
+              <button class="btn" id="moderationDisableBtn">Disable moderation…</button>
+              <button class="btn" id="moderationEnableBtn" style="display:none">Re-enable moderation</button>
+            </div>
+          </div>
+        </div>
+        <div class="card settings-full" style="padding:14px">
           <div class="section-title" style="margin:0 0 10px;border:0;padding:0">GPU</div>
           <pre id="gpuDebug" style="font-family:var(--font-mono);font-size:11px;color:var(--t-3);white-space:pre-wrap;margin:0">Loading…</pre>
         </div>

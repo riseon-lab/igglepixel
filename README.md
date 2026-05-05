@@ -75,7 +75,7 @@ This keeps the Docker image stable while the public repo can move quickly.
 | `UI_PORT` | `3000` | FastAPI/UI port. |
 | `HF_TOKEN` | unset | Hugging Face token for gated repos. You can also set this in the UI. |
 | `HF_HOME` | `/workspace/.cache/huggingface` | Hugging Face cache location. |
-| `IGGLEPIXEL_MODERATION` | `true` | Enables image moderation before outputs are saved. |
+| `IGGLEPIXEL_MODERATION_DISABLE_ACK` | unset | Deliberate-friction moderation opt-out token for fork operators. |
 | `FORGE_QUANT` | unset | Set by launcher per runner from the UI. Usually do not set manually. |
 
 If GitHub is unavailable during boot, the entrypoint falls back to the cached clone when possible.
@@ -250,13 +250,12 @@ PRs that touch safety, downloads, auth, encryption, or model execution should ex
 
 ## Content Moderation
 
-Generated images and sampled video frames pass through `Falconsai/nsfw_image_detection` before they are saved. Flagged outputs are dropped and never reach the asset library.
+Moderation is on by default and gates prompts, reference images, generated images/video frames, and CivitAI browsing. Prompt checks use `KoalaAI/Text-Moderation` on CPU; image/reference/output checks use `Falconsai/nsfw_image_detection` before content reaches the model or asset library.
 
-- Default: on.
-- Disable with `IGGLEPIXEL_MODERATION=false`.
-- Scope: image outputs and sampled video frames.
+- Disable only by pasting `backend/moderator.py`'s acknowledgement token into `IGGLEPIXEL_MODERATION_DISABLE_ACK`, or through Settings after login.
+- Scope: prompts, reference images, image outputs, sampled video frames, and CivitAI browse/detail responses.
 - Video sample count: `IGGLEPIXEL_VIDEO_MODERATION_FRAMES` (default `7`).
-- Threshold and behavior live in `backend/moderator.py`.
+- Threshold and behavior live in `backend/moderator.py` and `backend/prompt_moderator.py`.
 
 Fork operators are responsible for their own deployments and outputs.
 

@@ -1,6 +1,23 @@
 {
   "_comment": "Each entry declares a Python runner_module under backend/runners/. The runner owns weight loading + inference. backend/runner_host.py wraps it behind a localhost FastAPI; backend/launcher.py spawns it.",
-  "runtime_profiles": {},
+  "runtime_profiles": {
+    "sensenova-u1": {
+      "id": "sensenova-u1",
+      "python": "3.11",
+      "git": {
+        "repo": "https://github.com/OpenSenseNova/SenseNova-U1.git",
+        "ref": "main",
+        "dest": "/workspace/repos/SenseNova-U1",
+        "required_paths": ["src/sensenova_u1", "pyproject.toml"]
+      },
+      "pip": [
+        "--extra-index-url", "https://download.pytorch.org/whl/cu128",
+        "-e", "/workspace/repos/SenseNova-U1",
+        "fastapi", "uvicorn", "pydantic", "cryptography"
+      ],
+      "verify_imports": ["sensenova_u1", "transformers", "torch", "fastapi", "uvicorn", "cryptography"]
+    }
+  },
   "upscalers": [
     {
       "id": "realesrgan-x4-plus",
@@ -565,6 +582,80 @@
       "default_loras": []
     },
     {
+      "id": "longcat-image",
+      "name": "LongCat-Image",
+      "category": "image",
+      "description": "Meituan LongCat's 6B bilingual text-to-image model. Apache 2.0, strong photorealism, efficient deployment, and explicit quoted-text handling for English and Chinese typography.",
+      "runner_module": "backend.runners.longcat_image",
+      "hf_repo": "meituan-longcat/LongCat-Image",
+      "license": {
+        "type": "commercial",
+        "label": "Apache 2.0",
+        "url": "https://www.apache.org/licenses/LICENSE-2.0"
+      },
+      "min_vram_gb": 17,
+      "recommended_vram_gb": 32,
+      "supports_lora": true,
+      "gpu_support": ["nvidia"],
+      "default_size_by_vram": [
+        { "min_gb": 24, "w": 1024, "h": 1024 },
+        { "min_gb": 0,  "w": 768,  "h": 768  }
+      ],
+      "quants": [
+        { "id": "bf16", "label": "BF16", "description": "Best quality",       "vram_gb": 17, "auto_min_vram_gb": 24 },
+        { "id": "int8", "label": "INT8", "description": "Lower VRAM",         "vram_gb": 10, "auto_min_vram_gb": 12 },
+        { "id": "nf4",  "label": "NF4",  "description": "Smallest",           "vram_gb": 7,  "auto_min_vram_gb": 0  }
+      ],
+      "param_groups": ["prompt", "generation", "dimensions"],
+      "param_keys":   ["prompt", "seed", "steps", "cfg", "width", "height"],
+      "param_overrides": {
+        "steps":  { "default": 50,  "min": 1, "max": 80, "step": 1 },
+        "cfg":    { "default": 4.0, "min": 0, "max": 8,  "step": 0.1, "label": "Guidance" },
+        "width":  { "default": 1024, "step": 16, "min": 512, "max": 2048 },
+        "height": { "default": 1024, "step": 16, "min": 512, "max": 2048 }
+      },
+      "aspect_presets": [
+        { "label": "Square",          "w": 1024, "h": 1024 },
+        { "label": "Landscape 16:9",  "w": 1344, "h": 768  },
+        { "label": "Portrait 9:16",   "w": 768,  "h": 1344 },
+        { "label": "3:4",             "w": 896,  "h": 1152 },
+        { "label": "4:3",             "w": 1152, "h": 896  }
+      ],
+      "default_loras": []
+    },
+    {
+      "id": "longcat-image-edit-turbo",
+      "name": "LongCat-Image-Edit Turbo",
+      "category": "image",
+      "description": "Distilled LongCat image editing model. Apache 2.0, instruction-based edits from a reference image with an 8-NFE fast path.",
+      "runner_module": "backend.runners.longcat_image_edit_turbo",
+      "hf_repo": "meituan-longcat/LongCat-Image-Edit-Turbo",
+      "license": {
+        "type": "commercial",
+        "label": "Apache 2.0",
+        "url": "https://www.apache.org/licenses/LICENSE-2.0"
+      },
+      "min_vram_gb": 18,
+      "recommended_vram_gb": 32,
+      "supports_lora": true,
+      "gpu_support": ["nvidia"],
+      "quants": [
+        { "id": "bf16", "label": "BF16", "description": "Best quality",       "vram_gb": 18, "auto_min_vram_gb": 24 },
+        { "id": "int8", "label": "INT8", "description": "Lower VRAM",         "vram_gb": 10, "auto_min_vram_gb": 12 },
+        { "id": "nf4",  "label": "NF4",  "description": "Smallest",           "vram_gb": 7,  "auto_min_vram_gb": 0  }
+      ],
+      "image_inputs": [
+        { "key": "ref", "label": "Reference", "required": true, "hint": "Image to edit" }
+      ],
+      "param_groups": ["prompt", "generation"],
+      "param_keys":   ["prompt", "negative_prompt", "seed", "steps", "cfg"],
+      "param_overrides": {
+        "steps": { "default": 8,   "min": 1, "max": 16, "step": 1 },
+        "cfg":   { "default": 1.0, "min": 0, "max": 5,  "step": 0.1, "label": "Guidance" }
+      },
+      "default_loras": []
+    },
+    {
       "id": "qwen-image",
       "name": "Qwen-Image",
       "category": "image",
@@ -664,6 +755,253 @@
         { "label": "Portrait 9:16",   "w": 928,  "h": 1664 },
         { "label": "3:4",             "w": 1152, "h": 1536 },
         { "label": "4:3",             "w": 1536, "h": 1152 }
+      ],
+      "default_loras": []
+    },
+    {
+      "id": "qwen-controlnet-union",
+      "name": "Qwen ControlNet Union",
+      "category": "image",
+      "description": "InstantX ControlNet for Qwen-Image. Guide composition with canny, soft-edge, depth, or pose control maps; normal images can be auto-converted to canny.",
+      "runner_module": "backend.runners.qwen_controlnet_union",
+      "hf_repo": "InstantX/Qwen-Image-ControlNet-Union",
+      "download_repos": ["Qwen/Qwen-Image"],
+      "license": {
+        "type": "commercial",
+        "label": "Apache 2.0",
+        "url": "https://www.apache.org/licenses/LICENSE-2.0"
+      },
+      "min_vram_gb": 16,
+      "recommended_vram_gb": 47,
+      "supports_lora": true,
+      "gpu_support": ["nvidia"],
+      "default_size_by_vram": [
+        { "min_gb": 47, "w": 1328, "h": 1328 },
+        { "min_gb": 36, "w": 1024, "h": 1024 },
+        { "min_gb": 0,  "w": 768,  "h": 768  }
+      ],
+      "quants": [
+        { "id": "bf16", "label": "BF16", "description": "Best quality",       "vram_gb": 47, "auto_min_vram_gb": 47 },
+        { "id": "int8", "label": "INT8", "description": "Faster, near-bf16",  "vram_gb": 24, "auto_min_vram_gb": 36 },
+        { "id": "nf4",  "label": "NF4",  "description": "Fits any modern card","vram_gb": 14, "auto_min_vram_gb": 0  }
+      ],
+      "image_inputs": [
+        { "key": "control", "label": "Control", "required": true, "hint": "Canny, depth, pose, soft-edge, or source image for auto-canny" }
+      ],
+      "param_groups": ["prompt", "generation", "dimensions"],
+      "param_keys":   ["prompt", "negative_prompt", "seed", "steps", "cfg", "width", "height"],
+      "params": [
+        { "key": "control_mode", "label": "Control type", "type": "select", "options": ["preprocessed", "canny"], "default": "preprocessed", "hint": "Use canny to auto-edge a normal image" },
+        { "key": "control_strength", "label": "Control strength", "type": "slider", "min": 0, "max": 2, "step": 0.05, "default": 1 }
+      ],
+      "param_overrides": {
+        "steps":  { "default": 30,  "min": 1, "max": 60, "step": 1 },
+        "cfg":    { "default": 4.0, "min": 0, "max": 10, "step": 0.1, "label": "Guidance" },
+        "width":  { "default": 1024, "step": 16, "min": 256, "max": 2048 },
+        "height": { "default": 1024, "step": 16, "min": 256, "max": 2048 }
+      },
+      "aspect_presets": [
+        { "label": "Square",          "w": 1328, "h": 1328 },
+        { "label": "Landscape 16:9",  "w": 1664, "h": 928  },
+        { "label": "Portrait 9:16",   "w": 928,  "h": 1664 },
+        { "label": "3:4",             "w": 1152, "h": 1536 },
+        { "label": "4:3",             "w": 1536, "h": 1152 }
+      ],
+      "default_loras": []
+    },
+    {
+      "id": "qwen-controlnet-inpaint",
+      "name": "Qwen ControlNet Inpainting",
+      "category": "image",
+      "description": "InstantX inpainting and outpainting ControlNet for Qwen-Image. Use a source image plus a white-mask asset for replacement, background edits, text edits, or canvas extension.",
+      "runner_module": "backend.runners.qwen_controlnet_inpaint",
+      "hf_repo": "InstantX/Qwen-Image-ControlNet-Inpainting",
+      "download_repos": ["Qwen/Qwen-Image"],
+      "license": {
+        "type": "commercial",
+        "label": "Apache 2.0",
+        "url": "https://www.apache.org/licenses/LICENSE-2.0"
+      },
+      "min_vram_gb": 16,
+      "recommended_vram_gb": 47,
+      "supports_lora": true,
+      "gpu_support": ["nvidia"],
+      "quants": [
+        { "id": "bf16", "label": "BF16", "description": "Best quality",       "vram_gb": 47, "auto_min_vram_gb": 47 },
+        { "id": "int8", "label": "INT8", "description": "Faster, near-bf16",  "vram_gb": 24, "auto_min_vram_gb": 36 },
+        { "id": "nf4",  "label": "NF4",  "description": "Fits any modern card","vram_gb": 14, "auto_min_vram_gb": 0  }
+      ],
+      "image_inputs": [
+        { "key": "ref",  "label": "Source", "required": true, "hint": "Image to edit or extend" },
+        { "key": "mask", "label": "Mask",   "required": true, "hint": "White area is regenerated" }
+      ],
+      "param_groups": ["prompt", "generation"],
+      "param_keys":   ["prompt", "negative_prompt", "seed", "steps", "cfg"],
+      "params": [
+        { "key": "control_strength", "label": "Mask strength", "type": "slider", "min": 0, "max": 2, "step": 0.05, "default": 1 }
+      ],
+      "param_overrides": {
+        "steps": { "default": 30,  "min": 1, "max": 60, "step": 1 },
+        "cfg":   { "default": 4.0, "min": 0, "max": 10, "step": 0.1, "label": "Guidance" }
+      },
+      "default_loras": []
+    },
+    {
+      "id": "sensenova-u1",
+      "name": "SenseNova-U1",
+      "category": "image",
+      "description": "SenseTime/SenseNova's unified multimodal image model. Native text-to-image, optional reference-image editing, and a model-side think mode for reasoning-led generations.",
+      "runner_module": "backend.runners.sensenova_u1",
+      "hf_repo": "sensenova/SenseNova-U1-8B-MoT",
+      "runtime_profile": "sensenova-u1",
+      "license": {
+        "type": "commercial",
+        "label": "Apache 2.0",
+        "url": "https://www.apache.org/licenses/LICENSE-2.0"
+      },
+      "min_vram_gb": 48,
+      "recommended_vram_gb": 80,
+      "supports_lora": false,
+      "supports_preview": false,
+      "gpu_support": ["nvidia"],
+      "variants": [
+        {
+          "id": "base",
+          "label": "8B-MoT",
+          "description": "Full-quality SenseNova-U1 8B-MoT checkpoint. Recommended default is 50 steps, CFG 4.",
+          "hf_repo": "sensenova/SenseNova-U1-8B-MoT",
+          "auto_min_vram_gb": 80,
+          "default_params": { "steps": 50, "cfg": 4.0, "width": 2048, "height": 2048 }
+        },
+        {
+          "id": "8step",
+          "label": "8-step preview",
+          "description": "Preview distillation checkpoint for faster tests. Recommended default is 8 steps, CFG 1.",
+          "hf_repo": "sensenova/SenseNova-U1-8B-MoT-8step-preview",
+          "auto_min_vram_gb": 80,
+          "default_params": { "steps": 8, "cfg": 1.0, "width": 2048, "height": 2048 },
+          "param_overrides": {
+            "steps": { "default": 8, "min": 1, "max": 16, "step": 1 },
+            "cfg":   { "default": 1.0, "min": 0, "max": 4,  "step": 0.1, "label": "Guidance" }
+          }
+        },
+        {
+          "id": "sft",
+          "label": "8B-MoT SFT",
+          "description": "SFT checkpoint from the initial U1 release. Useful for A/B testing the released model family.",
+          "hf_repo": "sensenova/SenseNova-U1-8B-MoT-SFT",
+          "auto_min_vram_gb": 80,
+          "default_params": { "steps": 50, "cfg": 4.0, "width": 2048, "height": 2048 }
+        }
+      ],
+      "default_size_by_vram": [
+        { "min_gb": 80, "w": 2048, "h": 2048 },
+        { "min_gb": 48, "w": 1024, "h": 1024 }
+      ],
+      "quants": [
+        { "id": "bf16", "label": "BF16", "description": "Official checkpoint dtype", "vram_gb": 48, "auto_min_vram_gb": 48 }
+      ],
+      "image_inputs": [
+        { "key": "ref", "label": "Reference", "required": false, "hint": "Optional image-edit source" }
+      ],
+      "param_groups": ["prompt", "generation", "dimensions", "reference"],
+      "param_keys":   ["prompt", "seed", "steps", "cfg", "width", "height", "ref_image"],
+      "params": [
+        { "key": "think", "label": "Think mode", "type": "bool", "default": false },
+        { "key": "cfg_norm", "label": "CFG norm", "type": "select", "options": ["none", "global", "channel", "cfg_zero_star"], "default": "none" },
+        { "key": "timestep_shift", "label": "Timestep shift", "type": "number", "min": 0, "max": 10, "step": 0.1, "default": 3.0 },
+        { "key": "img_cfg", "label": "Image CFG (edit)", "type": "slider", "min": 0, "max": 4, "step": 0.1, "default": 1.0 }
+      ],
+      "param_overrides": {
+        "steps":  { "default": 50,  "min": 1, "max": 80, "step": 1 },
+        "cfg":    { "default": 4.0, "min": 0, "max": 8,  "step": 0.1, "label": "Guidance" },
+        "width":  { "default": 2048, "step": 32, "min": 512, "max": 3456 },
+        "height": { "default": 2048, "step": 32, "min": 512, "max": 3456 }
+      },
+      "aspect_presets": [
+        { "label": "Square",          "w": 2048, "h": 2048 },
+        { "label": "16:9",            "w": 2720, "h": 1536 },
+        { "label": "9:16",            "w": 1536, "h": 2720 },
+        { "label": "4:3",             "w": 2368, "h": 1760 },
+        { "label": "3:4",             "w": 1760, "h": 2368 },
+        { "label": "2:1",             "w": 2880, "h": 1440 }
+      ],
+      "default_loras": []
+    },
+    {
+      "id": "hidream-i1",
+      "name": "HiDream-I1",
+      "category": "image",
+      "description": "HiDream.ai's MIT-licensed 17B text-to-image model family. Strong prompt following and photoreal output, with Full, Dev, and Fast variants.",
+      "runner_module": "backend.runners.hidream_i1",
+      "hf_repo": "HiDream-ai/HiDream-I1-Full",
+      "download_repos": ["meta-llama/Meta-Llama-3.1-8B-Instruct"],
+      "license": {
+        "type": "commercial",
+        "label": "MIT + component licences",
+        "url": "https://huggingface.co/HiDream-ai/HiDream-I1-Full"
+      },
+      "min_vram_gb": 24,
+      "recommended_vram_gb": 80,
+      "supports_lora": false,
+      "supports_preview": false,
+      "gpu_support": ["nvidia"],
+      "variants": [
+        {
+          "id": "full",
+          "label": "Full",
+          "description": "Highest-quality path. Defaults: 50 steps, guidance 5.",
+          "hf_repo": "HiDream-ai/HiDream-I1-Full",
+          "auto_min_vram_gb": 80,
+          "default_params": { "steps": 50, "cfg": 5.0, "width": 1024, "height": 1024 }
+        },
+        {
+          "id": "dev",
+          "label": "Dev",
+          "description": "Distilled development checkpoint. Defaults: 28 steps, guidance 0.",
+          "hf_repo": "HiDream-ai/HiDream-I1-Dev",
+          "auto_min_vram_gb": 48,
+          "default_params": { "steps": 28, "cfg": 0.0, "width": 1024, "height": 1024 },
+          "param_overrides": {
+            "steps": { "default": 28,  "min": 1, "max": 50, "step": 1 },
+            "cfg":   { "default": 0.0, "min": 0, "max": 8,  "step": 0.1, "label": "Guidance" }
+          }
+        },
+        {
+          "id": "fast",
+          "label": "Fast",
+          "description": "Fast distilled checkpoint. Defaults: 16 steps, guidance 0.",
+          "hf_repo": "HiDream-ai/HiDream-I1-Fast",
+          "auto_min_vram_gb": 24,
+          "default_params": { "steps": 16, "cfg": 0.0, "width": 1024, "height": 1024 },
+          "param_overrides": {
+            "steps": { "default": 16,  "min": 1, "max": 30, "step": 1 },
+            "cfg":   { "default": 0.0, "min": 0, "max": 8,  "step": 0.1, "label": "Guidance" }
+          }
+        }
+      ],
+      "default_size_by_vram": [
+        { "min_gb": 24, "w": 1024, "h": 1024 }
+      ],
+      "quants": [
+        { "id": "bf16", "label": "BF16", "description": "Official diffusers path", "vram_gb": 24, "auto_min_vram_gb": 24 }
+      ],
+      "param_groups": ["prompt", "generation", "dimensions"],
+      "param_keys":   ["prompt", "negative_prompt", "seed", "steps", "cfg", "width", "height"],
+      "param_overrides": {
+        "steps":  { "default": 50,  "min": 1, "max": 80, "step": 1 },
+        "cfg":    { "default": 5.0, "min": 0, "max": 10, "step": 0.1, "label": "Guidance" },
+        "width":  { "default": 1024, "step": 16, "min": 512, "max": 1536 },
+        "height": { "default": 1024, "step": 16, "min": 512, "max": 1536 }
+      },
+      "aspect_presets": [
+        { "label": "Square",          "w": 1024, "h": 1024 },
+        { "label": "Landscape 16:9",  "w": 1360, "h": 768  },
+        { "label": "Portrait 9:16",   "w": 768,  "h": 1360 },
+        { "label": "3:4",             "w": 880,  "h": 1168 },
+        { "label": "4:3",             "w": 1168, "h": 880  },
+        { "label": "3:2",             "w": 1248, "h": 832  },
+        { "label": "2:3",             "w": 832,  "h": 1248 }
       ],
       "default_loras": []
     },

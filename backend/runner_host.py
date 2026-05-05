@@ -65,6 +65,12 @@ def _last_meaningful_frame(tb: str) -> Optional[str]:
     return f"{short}:{line}"
 
 
+def _access_logs_enabled() -> bool:
+    import os
+
+    return os.environ.get("IGGLEPIXEL_ACCESS_LOGS", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 def main() -> None:
     if len(sys.argv) != 3:
         sys.exit("usage: python -m backend.runner_host <runner_module> <port>")
@@ -117,6 +123,24 @@ def main() -> None:
         try:
             return runner.generate(req.params or {}, req.loras or [])
         except Exception as e:
+            # Lazy import — base.py defines this exception, but runner_host
+            # is imported in dev contexts where the runners package may not
+            # be fully constructible (e.g. compile-only checks).
+            try:
+                from backend.runners.base import RefImageFlaggedError
+            except Exception:
+                RefImageFlaggedError = None  # type: ignore
+            if RefImageFlaggedError is not None and isinstance(e, RefImageFlaggedError):
+                # Same structured shape main.py emits for prompt moderation.
+                # The UI uses `stage` to decide which input to point at.
+                raise HTTPException(422, {
+                    "moderated": True,
+                    "stage":     "ref_image",
+                    "category":  "NSFW",
+                    "label":     "nsfw",
+                    "score":     1.0,
+                    "message":   "Reference image was flagged as NSFW. Replace the ref and try again.",
+                })
             tb = traceback.format_exc()
             traceback.print_exc()
             # Surface the deepest non-library frame in our error response so
@@ -145,7 +169,13 @@ def main() -> None:
         return {"supported": False}
 
     print(f"[host] listening on 127.0.0.1:{port}", flush=True)
-    uvicorn.run(app, host="127.0.0.1", port=port, log_level="warning")
+    uvicorn.run(
+        app,
+        host="127.0.0.1",
+        port=port,
+        log_level="warning",
+        access_log=_access_logs_enabled(),
+    )
 
 
 if __name__ == "__main__":

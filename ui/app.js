@@ -325,6 +325,7 @@ async function apiCall(url, opts = {}) {
   if (!res.ok) {
     // Extract FastAPI's detail message if available, otherwise fall back to status.
     let msg = `Server error ${res.status}`;
+    let moderation = null;
     if (res.status === 524) {
       msg = 'The public proxy timed out before the server replied. Long generations now use background jobs; please retry after refreshing the app.';
     }
@@ -332,10 +333,20 @@ async function apiCall(url, opts = {}) {
       const ct = res.headers.get('content-type') || '';
       if (ct.includes('application/json')) {
         const body = await res.json();
-        if (body.detail) msg = String(body.detail);
+        // Structured moderation rejection: detail is a dict with `moderated: true`.
+        // Attach to the Error so callers can render the right input-side hint
+        // (prompt vs ref) instead of collapsing to "[object Object]".
+        if (body.detail && typeof body.detail === 'object' && body.detail.moderated) {
+          moderation = body.detail;
+          msg = body.detail.message || 'Flagged by moderation';
+        } else if (body.detail) {
+          msg = String(body.detail);
+        }
       }
     } catch {}
-    throw new Error(msg);
+    const err = new Error(msg);
+    if (moderation) err.moderation = moderation;
+    throw err;
   }
   return res;
 }
@@ -441,6 +452,9 @@ const api = {
     return json(apiCall(`/api/civitai/model/${id}${qs}`));
   },
   civDownload:   (b) => json(apiCall('/api/civitai/download', jsonBody(b))),
+  modStatus:     ()      => json(apiCall('/api/moderation/status')),
+  modOverride:   (token) => json(apiCall('/api/moderation/override', jsonBody({ token }))),
+  modClear:      ()      => json(apiCall('/api/moderation/override', { method: 'DELETE' })),
 };
 
 // ── Boot ─────────────────────────────────────────────────────────────────
@@ -905,6 +919,9 @@ function bindShell() {
     toast('Saved', 'success');
   }));
 
+  $('#moderationDisableBtn')?.addEventListener('click', disableModeration);
+  $('#moderationEnableBtn')?.addEventListener('click', enableModeration);
+
   $('#uploadBtn').addEventListener('click', () => $('#uploadInput').click());
   $('#uploadZone').addEventListener('click', () => $('#uploadInput').click());
   $('#uploadInput').addEventListener('change', (e) => uploadFiles([...e.target.files]));
@@ -922,6 +939,77 @@ function applySettingsToInputs() {
   if (state.settings.hf_token)    $('#settingsHFToken').value = state.settings.hf_token;
   if (state.settings.civitai_key) $('#settingsCivKey').value  = state.settings.civitai_key;
   syncHFTokenInputs();
+}
+
+// ── Moderation card ──────────────────────────────────────────────────────
+async function renderModerationCard() {
+  const pill = $('#moderationPill');
+  const sub  = $('#moderationSource');
+  const off  = $('#moderationDisableBtn');
+  const on   = $('#moderationEnableBtn');
+  if (!pill || !off || !on) return;
+  try {
+    const s = await api.modStatus();
+    pill.dataset.state = s.enabled ? 'on' : 'off';
+    pill.textContent   = s.enabled ? 'Moderation: ON' : 'Moderation: OFF';
+    // 'source' explains where the current state came from. The fallback
+    // branch is when an env var or marker held a wrong-token value — we
+    // surface that explicitly so the operator knows their value didn't
+    // take effect.
+    const sourceLabel = {
+      'default':          '',
+      'env':              'Disabled via fork-operator env var',
+      'runtime_override': 'Disabled via Settings override on this pod',
+      'default_fallback': 'A disable token was provided but did not match — moderation remains on',
+    }[s.source] || '';
+    sub.textContent = sourceLabel;
+    // Hide the runtime "re-enable" button when the env var is what's
+    // disabling things — clearing the marker won't override env config.
+    if (s.enabled) {
+      off.style.display = '';
+      on.style.display  = 'none';
+    } else if (s.source === 'runtime_override') {
+      off.style.display = 'none';
+      on.style.display  = '';
+    } else {
+      off.style.display = 'none';
+      on.style.display  = 'none';
+    }
+  } catch (e) {
+    pill.dataset.state = 'unknown';
+    pill.textContent   = 'Moderation: status unavailable';
+    sub.textContent    = e.message || '';
+  }
+}
+
+async function disableModeration() {
+  // Friction-by-design: the operator must paste the acknowledgement
+  // token from the source. Plain prompt() is fine here — the awkwardness
+  // of pasting a long literal IS the deliberate-act surface. A fancy
+  // dialog would lower the friction we're trying to preserve.
+  const token = window.prompt(
+    'Disabling moderation requires the acknowledgement token from backend/moderator.py (DISABLE_TOKEN).\n\n' +
+    'Paste the token to confirm. The token reads as a written acknowledgement of liability for outputs from this pod.'
+  );
+  if (token == null) return;        // cancel
+  try {
+    const s = await api.modOverride(token.trim());
+    toast(s.enabled ? 'Token did not take effect — moderation still on' : 'Moderation disabled', s.enabled ? 'error' : 'success');
+    renderModerationCard();
+  } catch (e) {
+    toast(`Disable failed: ${e.message || 'unknown'}`, 'error');
+  }
+}
+
+async function enableModeration() {
+  if (!window.confirm('Re-enable moderation now?')) return;
+  try {
+    await api.modClear();
+    toast('Moderation re-enabled', 'success');
+    renderModerationCard();
+  } catch (e) {
+    toast(`Re-enable failed: ${e.message || 'unknown'}`, 'error');
+  }
 }
 
 function saveHFToken(value) {
@@ -966,6 +1054,7 @@ function switchView(name, push = true) {
   if (name === 'loras')   loadLoras();
   if (name === 'assets')  loadAssets();
   if (name === 'running') renderRunning();
+  if (name === 'settings') renderModerationCard();
   if (name === 'downloads') {
     // Make the queue panel visible (or render the empty state) and wake the
     // poller so freshly-queued jobs appear right away when the user lands
@@ -4063,19 +4152,23 @@ async function runJob(job) {
   let previewInterval = null;
   let progressStream = null;
   let previewProgressInterval = null;
+  const m = state.models.find(x => x.id === job.model_id);
   job.startedAt = Date.now();
   job.progress = 0;
   job.progressStep = 0;
   job.progressTotal = 0;
   job.etaMs = null;
   progressStream = startJobProgress(job);
-  if (!state.preview) {
+  const canPollPreview = !state.preview && m?.category === 'image' && m.supports_preview !== false;
+  if (canPollPreview) {
     previewInterval = setInterval(async () => {
       if (state.workspace !== job.model_id) return;
       try {
         const r = await fetch(`/api/runner/${job.model_id}/preview?t=${Date.now()}`, { credentials: 'same-origin' });
+        if (r.status === 204 || r.status === 404) return;
         if (!r.ok) return;
         const blob = await r.blob();
+        if (!blob.size) return;
         const objUrl = URL.createObjectURL(blob);
         const genCell = document.querySelector('.img-cell.generated');
         if (!genCell) return;
@@ -4108,7 +4201,6 @@ async function runJob(job) {
       }, 180);
       await new Promise(r => setTimeout(r, 1500));
       updateJobProgress(job, previewTotal, previewTotal);
-      const m = state.models.find(x => x.id === job.model_id);
       const usedSeed = job.params.seed >= 0
         ? Number(job.params.seed)
         : Math.floor(Math.random() * 2147483647);
@@ -4171,7 +4263,14 @@ async function runJob(job) {
     }
   } catch (e) {
     job.error = e.message;
-    toast(`Job failed: ${e.message || 'unknown'}`, 'error');
+    if (e.moderation) {
+      // Friendlier copy than a generic "Job failed" — points the user at
+      // the input that needs editing (prompt vs ref image).
+      const stage = e.moderation.stage === 'ref_image' ? 'Reference image' : 'Prompt';
+      toast(`${stage} flagged: ${e.moderation.label || 'NSFW'}. Edit and try again.`, 'error');
+    } else {
+      toast(`Job failed: ${e.message || 'unknown'}`, 'error');
+    }
   } finally {
     if (previewInterval) clearInterval(previewInterval);
     if (previewProgressInterval) clearInterval(previewProgressInterval);

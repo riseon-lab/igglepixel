@@ -21,6 +21,8 @@ from pydantic import BaseModel
 from gpu_detect import detect_gpu
 from launcher import ModelLauncher
 import crypto as fcrypto
+import moderator
+import prompt_moderator
 
 # ── Paths ────────────────────────────────────────────────────────────────
 BASE_DIR      = Path(__file__).resolve().parent.parent
@@ -69,6 +71,15 @@ VIDEO_EXTS = {".mp4", ".webm", ".mov", ".m4v", ".mkv"}
 
 app = FastAPI(title="Forge — RunPod Launcher")
 launcher = ModelLauncher()
+
+# Warm the prompt moderator off the request path so the first generate
+# call doesn't pay the ~330 MB classifier download. CPU-only, no GPU
+# contention with running runners.
+threading.Thread(target=prompt_moderator.init, daemon=True).start()
+
+
+def _access_logs_enabled() -> bool:
+    return os.environ.get("IGGLEPIXEL_ACCESS_LOGS", "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 # ── Auth (persisted to a writable volume) ────────────────────────────────
@@ -290,6 +301,7 @@ def require_token(request: Request, authorization: Optional[str] = Header(None))
     path = request.url.path
     if (path.startswith("/api/auth/")
             or path.startswith("/api/assets/file/")
+            or path == "/api/moderation/status"
             or not path.startswith("/api/")):
         return
     if not auth.is_setup():
@@ -679,6 +691,67 @@ def get_gpu():
     return detect_gpu()
 
 
+# ── Moderation status + runtime override ────────────────────────────────
+class ModerationOverrideRequest(BaseModel):
+    token: str
+
+
+@app.get("/api/moderation/status")
+def moderation_status():
+    """Lightweight, unauthenticated status endpoint so the lock-screen and
+    Settings tab can render the current state. Returns enabled + the
+    source of the current state (default | env | runtime_override |
+    default_fallback).
+    """
+    return {
+        "enabled": moderator.is_enabled(),
+        "source":  moderator.disable_source(),
+    }
+
+
+@app.post("/api/moderation/override")
+def moderation_override(req: ModerationOverrideRequest):
+    """Disable moderation at runtime by writing the override marker file.
+
+    Auth-required so a logged-out request can never flip the policy. The
+    submitted token must equal moderator.DISABLE_TOKEN exactly — the same
+    constant the env-var path checks against.
+    """
+    _require_unlocked()
+    if (req.token or "").strip() != moderator.DISABLE_TOKEN:
+        raise HTTPException(403, "Invalid acknowledgement token")
+    try:
+        moderator.OVERRIDE_MARKER.parent.mkdir(parents=True, exist_ok=True)
+        moderator.OVERRIDE_MARKER.write_text(moderator.DISABLE_TOKEN, encoding="utf-8")
+    except OSError as e:
+        raise HTTPException(500, f"Could not write marker: {e}")
+    moderator.reset_state_log()
+    # Force a re-announce on the next is_enabled() call so the audit log
+    # captures the transition.
+    return {
+        "enabled": moderator.is_enabled(),
+        "source":  moderator.disable_source(),
+    }
+
+
+@app.delete("/api/moderation/override")
+def moderation_override_clear():
+    """Re-enable moderation by deleting the runtime override marker. Has no
+    effect on the env-var path — that's the fork operator's declaration
+    and only the env removal can revoke it. Auth-required.
+    """
+    _require_unlocked()
+    try:
+        moderator.OVERRIDE_MARKER.unlink(missing_ok=True)
+    except OSError as e:
+        raise HTTPException(500, f"Could not remove marker: {e}")
+    moderator.reset_state_log()
+    return {
+        "enabled": moderator.is_enabled(),
+        "source":  moderator.disable_source(),
+    }
+
+
 # ── Launcher ─────────────────────────────────────────────────────────────
 class LaunchRequest(BaseModel):
     model_id: str
@@ -752,6 +825,21 @@ async def _generate_result(req: GenerateRequest) -> dict:
     info = launcher.get(req.model_id)
     if not info or info["status"] != "running":
         raise HTTPException(409, "Runner not running. Launch the model first.")
+    # Prompt moderation runs here — before any model work — so flagged
+    # prompts never spin up a runner call. The 422 carries category +
+    # label so the UI can render an inline "your prompt was flagged as X"
+    # error instead of a silent failure.
+    prompt_text = (req.params or {}).get("prompt") or ""
+    flagged = prompt_moderator.is_flagged(prompt_text)
+    if flagged:
+        raise HTTPException(422, {
+            "moderated": True,
+            "stage":     "prompt",
+            "category":  flagged["category"],
+            "label":     flagged["label"],
+            "score":     flagged["score"],
+            "message":   f"Prompt was flagged as {flagged['label']}. Edit the prompt and try again.",
+        })
     preview_path = WORKSPACE / "assets" / f".preview_{req.model_id}.jpg"
     try:
         preview_path.unlink(missing_ok=True)
@@ -761,7 +849,15 @@ async def _generate_result(req: GenerateRequest) -> dict:
     async with httpx.AsyncClient(timeout=None) as c:
         r = await c.post(f"http://127.0.0.1:{info['port']}/generate", json=payload)
         if r.status_code >= 400:
-            raise HTTPException(r.status_code, r.text)
+            # Preserve structured FastAPI error bodies (e.g. the ref-image
+            # moderation 422 from runner_host) so the UI gets a parsed dict
+            # instead of a string-encoded JSON in detail.
+            try:
+                body = r.json()
+                detail = body.get("detail", body) if isinstance(body, dict) else body
+            except Exception:
+                detail = r.text
+            raise HTTPException(r.status_code, detail)
         result = r.json()
     # Re-sign asset URLs emitted by the runner. Runners use the legacy
     # /workspace-assets/... shape from base.py; we override here so the
@@ -905,11 +1001,13 @@ async def runner_preview(model_id: str):
 
     Runners write a low-quality JPEG to .preview_<model_id>.jpg every 5 steps.
     The frontend polls this during generation to show a live ComfyUI-style preview.
-    Returns 404 if no preview exists yet (start of generation or model idle).
+    Returns 204 if no preview exists yet (start of generation, model idle, or
+    a runner that does not emit step previews). This keeps expected polling
+    misses out of access/error logs.
     """
     path = WORKSPACE / "assets" / f".preview_{model_id}.jpg"
     if not path.exists():
-        raise HTTPException(404, "No preview available")
+        return Response(status_code=204, headers={"Cache-Control": "no-store"})
     return FileResponse(str(path), media_type="image/jpeg",
                         headers={"Cache-Control": "no-store"})
 
@@ -1448,6 +1546,34 @@ async def download_hf(req: HFDownloadRequest):
 CIVITAI_BASE = "https://civitai.com/api/v1"
 
 
+def _moderation_on() -> bool:
+    # Centralised in backend.moderator so prompt + ref + output + CivitAI
+    # gates can never silently disagree. See moderator.is_enabled.
+    return moderator.is_enabled()
+
+
+def _nsfw_level(value) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _strip_nsfw_civitai(payload: dict) -> dict:
+    """Drop NSFW items from a CivitAI search response.
+
+    CivitAI flags content via `nsfw: bool` and a graded `nsfwLevel: int`. We
+    drop anything with `nsfw: true` or a level above the safe band (1).
+    Applied server-side so a tampered client can't bypass it.
+    """
+    items = payload.get("items") or []
+    payload["items"] = [
+        m for m in items
+        if not m.get("nsfw") and _nsfw_level(m.get("nsfwLevel")) <= 1
+    ]
+    return payload
+
+
 @app.get("/api/civitai/search")
 async def civitai_search(
     query: str = Query(""),
@@ -1457,12 +1583,17 @@ async def civitai_search(
     nsfw: bool = Query(False),
     api_key: Optional[str] = Query(None),
 ):
+    if _moderation_on():
+        nsfw = False
     params = {"query": query, "types": types, "limit": limit, "page": page, "nsfw": str(nsfw).lower()}
     headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
     async with httpx.AsyncClient() as client:
         r = await client.get(f"{CIVITAI_BASE}/models", params=params, headers=headers, timeout=15)
         r.raise_for_status()
-        return r.json()
+        data = r.json()
+    if _moderation_on():
+        data = _strip_nsfw_civitai(data)
+    return data
 
 
 @app.get("/api/civitai/model/{model_id}")
@@ -1471,7 +1602,12 @@ async def civitai_model(model_id: int, api_key: Optional[str] = Query(None)):
     async with httpx.AsyncClient() as client:
         r = await client.get(f"{CIVITAI_BASE}/models/{model_id}", headers=headers, timeout=15)
         r.raise_for_status()
-        return r.json()
+        data = r.json()
+    # Block fetching the detail page for an NSFW model — UI shouldn't be able
+    # to bypass the search filter by deep-linking a known model id.
+    if _moderation_on() and (data.get("nsfw") or _nsfw_level(data.get("nsfwLevel")) > 1):
+        raise HTTPException(403, "Model unavailable under current moderation policy")
+    return data
 
 
 class CivitaiDownloadRequest(BaseModel):
@@ -2215,4 +2351,9 @@ app.mount("/", StaticFiles(directory=str(UI_DIR), html=True), name="ui")
 
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("UI_PORT", 3000)))
+    uvicorn.run(
+        app,
+        host="0.0.0.0",
+        port=int(os.environ.get("UI_PORT", 3000)),
+        access_log=_access_logs_enabled(),
+    )
