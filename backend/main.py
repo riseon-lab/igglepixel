@@ -1578,21 +1578,45 @@ def _strip_nsfw_civitai(payload: dict) -> dict:
 async def civitai_search(
     query: str = Query(""),
     types: str = Query("LORA"),
-    limit: int = Query(20),
+    limit: int = Query(48),
     page: int = Query(1),
+    sort: str = Query("Most Downloaded"),
     nsfw: bool = Query(False),
     api_key: Optional[str] = Query(None),
 ):
     if _moderation_on():
         nsfw = False
-    params = {"query": query, "types": types, "limit": limit, "page": page, "nsfw": str(nsfw).lower()}
+    # Over-fetch when moderation is on so the post-strip count is roughly
+    # the requested limit. Otherwise a query where ~half of results carry
+    # NSFW tags shows the user a sparse 8-item grid for a 24-item request.
+    upstream_limit = min(100, limit * 2 if _moderation_on() else limit)
+    params = {
+        "query":  query,
+        "types":  types,
+        "limit":  upstream_limit,
+        "page":   page,
+        "sort":   sort,
+        "nsfw":   str(nsfw).lower(),
+    }
     headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
     async with httpx.AsyncClient() as client:
         r = await client.get(f"{CIVITAI_BASE}/models", params=params, headers=headers, timeout=15)
         r.raise_for_status()
         data = r.json()
+    raw_count = len(data.get("items") or [])
     if _moderation_on():
         data = _strip_nsfw_civitai(data)
+    visible = len(data.get("items") or [])
+    if not isinstance(data.get("metadata"), dict):
+        data["metadata"] = {}
+    # Surface the strip cost so the UI can show "12 hidden by moderation",
+    # plus pagination hints used by the Load More button.
+    data["metadata"]["forge_raw_count"] = raw_count
+    data["metadata"]["forge_hidden"]    = max(0, raw_count - visible)
+    data["metadata"]["forge_page"]      = page
+    data["metadata"]["forge_has_more"]  = bool(data["metadata"].get("nextPage")) or raw_count >= upstream_limit
+    if visible > limit:
+        data["items"] = data["items"][:limit]
     return data
 
 

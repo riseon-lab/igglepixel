@@ -1921,7 +1921,10 @@ body::before {
     height: calc(100vh - var(--topbar-h) - 18px);
   }
   .llm-workspace {
-    padding-bottom: 64px;
+    padding-bottom: calc(74px + env(safe-area-inset-bottom));
+  }
+  .llm-fixed {
+    background: linear-gradient(180deg, rgba(0,0,0,0), #050505 18px);
   }
   .llm-shell {
     grid-template-columns: minmax(0, 1fr);
@@ -1929,18 +1932,42 @@ body::before {
   .llm-shell.drawer-open {
     grid-template-columns: minmax(0, 1fr);
   }
-  .llm-thread { min-height: 280px; padding-inline: 0; }
+  .llm-thread {
+    min-height: 280px;
+    padding-inline: 0;
+    padding-bottom: 22px;
+  }
   .llm-bubble { max-width: 94%; font-size: 13.5px; }
+  .llm-message.assistant .llm-bubble {
+    max-width: 100%;
+  }
+  .llm-msg-actions {
+    opacity: 1;
+  }
+  .llm-controls,
+  .llm-composer {
+    background: rgba(16,16,18,0.98);
+  }
   .llm-composer { grid-template-columns: 1fr; }
   .llm-send { width: 100%; }
   .llm-sessions.open {
     position: fixed;
     top: calc(var(--topbar-h) + 10px);
     right: 10px;
-    bottom: 74px;
+    bottom: calc(74px + env(safe-area-inset-bottom));
     width: min(320px, calc(100vw - 20px));
     z-index: 40;
+    background: rgba(14,14,16,0.98);
+    border-color: rgba(255,255,255,0.16);
     box-shadow: 0 24px 80px rgba(0,0,0,0.65);
+  }
+  .llm-session {
+    background: rgba(24,24,26,0.98);
+    border-color: rgba(255,255,255,0.08);
+  }
+  .llm-session.active {
+    background: rgba(42,42,44,0.98);
+    border-color: rgba(255,255,255,0.2);
   }
 }
 
@@ -3175,7 +3202,37 @@ body::before {
 }
 .hf-file-row:hover { background: rgba(255,255,255,0.04); }
 .hf-file-row.selected { background: rgba(255,24,189,0.08); }
-.hf-file-row input[type="checkbox"] { accent-color: #ff18bd; cursor: pointer; }
+/* Custom checkbox so iOS Safari doesn't render an invisible-tick native one.
+   Matches the .check-row pattern used elsewhere — visible filled box, white
+   tick — so desktop and mobile look identical and the tick is unmistakable. */
+.hf-file-row input[type="checkbox"] {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 18px;
+  height: 18px;
+  flex: 0 0 18px;
+  border: 1px solid var(--line-3);
+  border-radius: 5px;
+  background: rgba(255,255,255,0.08);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  margin: 0;
+}
+.hf-file-row input[type="checkbox"]::after {
+  content: "";
+  width: 8px;
+  height: 4px;
+  border-left: 2px solid #050505;
+  border-bottom: 2px solid #050505;
+  transform: rotate(-45deg) translateY(-1px);
+  opacity: 0;
+}
+.hf-file-row input[type="checkbox"]:checked {
+  background: var(--t-1);
+  border-color: var(--t-1);
+}
+.hf-file-row input[type="checkbox"]:checked::after { opacity: 1; }
 .hf-file-name {
   font-family: var(--font-mono);
   font-size: 12px;

@@ -27,10 +27,10 @@ FLUX.2 [klein] 4B · Z-Image Turbo · FLUX.1-dev INT8/NF4 · LongCat Image/Edit 
 HunyuanVideo NF4 T2V/I2V · HiDream-I1 Fast · Qwen-Image / Edit / 2511 / 2512 INT8 · Qwen ControlNet INT8 · Wan 2.2 14B NF4 · FLUX.2 [klein] 9B INT8 · LongCat Image/Edit BF16 · FLUX.1-dev BF16
 
 ### 36 – 48 GB
-Wan 2.2 5B BF16 · Wan 2.2 14B INT8 · FLUX.2 [klein] 9B BF16 · Qwen 2.5 14B BF16 · Qwen 2.5 32B INT8 · Qwen-Image / Edit / 2511 / 2512 BF16 · Qwen ControlNet BF16 · SenseNova-U1 BF16 minimum · HiDream-I1 Dev
+Wan 2.2 5B BF16 · Wan 2.2 14B INT8 · FLUX.2 [klein] 9B BF16 · Qwen 2.5 14B BF16 · Qwen 2.5 32B INT8 · SenseNova-U1 BF16 minimum · HiDream-I1 Dev
 
 ### 80 GB+
-Wan 2.2 14B BF16 · Wan 2.2 14B Lightning 4/8-step I2V/T2V · HunyuanVideo BF16 T2V/I2V · HiDream-I1 Full · Qwen 2.5 32B BF16 · SenseNova-U1 all variants comfortably
+Wan 2.2 14B BF16 · Wan 2.2 14B Lightning 4/8-step I2V/T2V · HunyuanVideo BF16 T2V/I2V · HiDream-I1 Full · Qwen-Image / Edit / 2511 / 2512 BF16 · Qwen ControlNet BF16 · Qwen 2.5 32B BF16 · SenseNova-U1 all variants comfortably
 
 ### CPU only — 🛣️ planned
 Closed-source / API-driven video models with no open weights: **Kling**, **Seedance**, **Veo 3**, **Sora 2**, **Runway**, **Pika**. The pod brokers the API call — no GPU needed. Bring your own provider key.

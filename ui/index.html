@@ -411,7 +411,13 @@
         </div>
       </div>
       <div class="filterbar">
-        <input class="input wide" id="civSearch" placeholder="Search CivitAI">
+        <input class="input wide" id="civSearch" placeholder="Search CivitAI (name, character, style…)">
+        <select class="input" id="civSort" style="max-width:170px">
+          <option value="Most Downloaded">Most downloaded</option>
+          <option value="Highest Rated">Highest rated</option>
+          <option value="Newest">Newest</option>
+          <option value="Most Liked">Most liked</option>
+        </select>
         <button class="btn" id="civSearchBtn"><svg><use href="#i-search"/></svg>Search</button>
         <span style="flex:1"></span>
         <input class="input" id="civUrl" placeholder="Paste civitai.com/models/… URL" style="width:280px">

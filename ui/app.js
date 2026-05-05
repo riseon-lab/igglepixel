@@ -440,9 +440,15 @@ const api = {
       headers,
     }));
   },
-  civSearch:     (q, key) => {
-    const p = new URLSearchParams({ query: q, types: 'LORA', limit: 24 });
-    if (key) p.append('api_key', key);
+  civSearch:     (q, opts = {}) => {
+    const p = new URLSearchParams({
+      query: q || '',
+      types: 'LORA',
+      limit: String(opts.limit ?? 48),
+      page:  String(opts.page  ?? 1),
+      sort:  opts.sort || 'Most Downloaded',
+    });
+    if (opts.key) p.append('api_key', opts.key);
     return json(apiCall(`/api/civitai/search?${p}`));
   },
   civModel:      (id, key) => {
@@ -873,8 +879,9 @@ function bindShell() {
   $('#modalScrim').addEventListener('click', (e) => { if (e.target.id === 'modalScrim') closeModal(); });
   $('#modalClose').addEventListener('click', closeModal);
 
-  $('#civSearchBtn').addEventListener('click', civSearch);
+  $('#civSearchBtn').addEventListener('click', () => civSearch());
   $('#civSearch').addEventListener('keydown', (e) => { if (e.key === 'Enter') civSearch(); });
+  $('#civSort')?.addEventListener('change', () => civSearch());
   $('#civUrlGo').addEventListener('click', civOpenByUrl);
   $('#civUrl').addEventListener('keydown', (e) => { if (e.key === 'Enter') civOpenByUrl(); });
 
@@ -4764,14 +4771,30 @@ function renderLoraPanel() {
 }
 
 // ── CivitAI ──────────────────────────────────────────────────────────────
-async function civSearch() {
+// Pagination state lives on the module so Load More keeps appending. Reset
+// on every new search (different query OR sort).
+let civPage = 1;
+let civHasMore = false;
+let civHiddenTotal = 0;
+
+async function civSearch(opts = {}) {
   const q = $('#civSearch').value;
+  const sort = $('#civSort')?.value || 'Most Downloaded';
   const key = state.settings.civitai_key || '';
   const out = $('#civResults');
-  out.innerHTML = `<div class="empty" style="grid-column:1/-1"><div class="spinner"></div></div>`;
+  const append = !!opts.append;
+  if (!append) {
+    civPage = 1;
+    civHiddenTotal = 0;
+    state.civResults = [];
+    out.innerHTML = `<div class="empty" style="grid-column:1/-1"><div class="spinner"></div></div>`;
+  }
   try {
-    const data = await api.civSearch(q, key);
-    state.civResults = data.items || [];
+    const data = await api.civSearch(q, { sort, key, page: civPage });
+    const items = data.items || [];
+    state.civResults = append ? [...state.civResults, ...items] : items;
+    civHasMore = !!data.metadata?.forge_has_more && items.length > 0;
+    civHiddenTotal += Number(data.metadata?.forge_hidden || 0);
     renderCivResults();
   } catch {
     out.innerHTML = `<div class="empty" style="grid-column:1/-1">Failed to reach CivitAI.</div>`;
@@ -4781,10 +4804,10 @@ async function civSearch() {
 function renderCivResults() {
   const out = $('#civResults');
   if (!state.civResults.length) {
-    out.innerHTML = `<div class="empty" style="grid-column:1/-1">No results.</div>`;
+    out.innerHTML = `<div class="empty" style="grid-column:1/-1">No results — try a different sort or query.</div>`;
     return;
   }
-  out.innerHTML = state.civResults.map((m, i) => {
+  const cards = state.civResults.map((m, i) => {
     const img = m.modelVersions?.[0]?.images?.[0]?.url || '';
     const dl = m.stats?.downloadCount || 0;
     const r = m.stats?.rating?.toFixed(1) || '—';
@@ -4796,8 +4819,21 @@ function renderCivResults() {
       </div>
     </div>`;
   }).join('');
+  // Hidden-by-moderation note only shows when there's something to report.
+  // Load More appears whenever the upstream said there's more to fetch.
+  const noteParts = [];
+  if (civHiddenTotal > 0) noteParts.push(`<span style="color:var(--t-3);font-size:11.5px">${civHiddenTotal} hidden by moderation</span>`);
+  noteParts.push(`<span style="color:var(--t-3);font-size:11.5px">${state.civResults.length} shown</span>`);
+  const more = civHasMore
+    ? `<button class="btn" id="civLoadMore" style="grid-column:1/-1;margin-top:10px">Load more</button>`
+    : '';
+  out.innerHTML = cards + `<div style="grid-column:1/-1;display:flex;gap:12px;align-items:center;justify-content:center;margin-top:12px">${noteParts.join('')}</div>` + more;
   out.querySelectorAll('.civ-card').forEach(c =>
     c.addEventListener('click', () => openCivDetail(Number(c.dataset.idx))));
+  $('#civLoadMore')?.addEventListener('click', async () => {
+    civPage += 1;
+    await civSearch({ append: true });
+  });
 }
 
 // ── CivitAI: paste URL → version picker modal ────────────────────────────
