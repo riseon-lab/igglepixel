@@ -43,7 +43,8 @@ The live catalogue is registry-driven, so support will keep expanding without ch
 | Image edit | Qwen-Image-Edit, Qwen-Image-Edit 2511, FLUX.2 [klein] 4B/9B | Reference and multi-reference editing with LoRA support. |
 | Image-to-video | Wan 2.2 I2V | 14B Lightning 8-step, 14B, and 5B variants. |
 | Text / image to video | HunyuanVideo | t2v + i2v variants, NF4 (24 GB) and BF16 (80 GB) quants. |
-| Text / chat | Qwen 2.5 Chat, TinyLlama Chat 1.1B | Qwen 7B / 14B / 32B variants with VRAM-aware context defaults. |
+| Text / chat | Qwen 2.5 Chat | Qwen 7B / 14B / 32B variants with VRAM-aware context defaults. |
+| Audio / TTS | Kyutai Pocket TTS | CPU-first speech generation with built-in voices. |
 
 More models are coming. The intended path is simple: add a runner, add registry metadata, expose the right controls, and keep the UX consistent.
 

@@ -225,5 +225,7 @@ function guessMime(url) {
     webp: "image/webp", gif: "image/gif", bmp: "image/bmp",
     mp4: "video/mp4", webm: "video/webm", mov: "video/quicktime",
     m4v: "video/x-m4v", mkv: "video/x-matroska",
+    wav: "audio/wav", mp3: "audio/mpeg", flac: "audio/flac",
+    ogg: "audio/ogg", m4a: "audio/mp4", aac: "audio/aac",
   }[ext];
 }

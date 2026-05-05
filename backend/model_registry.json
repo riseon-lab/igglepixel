@@ -1,6 +1,16 @@
 {
   "_comment": "Each entry declares a Python runner_module under backend/runners/. The runner owns weight loading + inference. backend/runner_host.py wraps it behind a localhost FastAPI; backend/launcher.py spawns it.",
   "runtime_profiles": {
+    "pocket-tts": {
+      "id": "pocket-tts",
+      "python": "3.11",
+      "pip": [
+        "pocket-tts==1.1.1",
+        "scipy",
+        "fastapi", "uvicorn", "pydantic", "cryptography"
+      ],
+      "verify_imports": ["pocket_tts", "scipy", "torch", "fastapi", "uvicorn", "cryptography"]
+    },
     "sensenova-u1": {
       "id": "sensenova-u1",
       "python": "3.11",
@@ -395,6 +405,43 @@
         "top_p":          { "default": 0.9, "min": 0, "max": 1, "step": 0.01 },
         "thinking":       { "default": true }
       }
+    },
+    {
+      "id": "kyutai-pocket-tts",
+      "name": "Kyutai Pocket TTS",
+      "category": "audio",
+      "description": "Kyutai's lightweight CPU text-to-speech model. 100M parameters, low-latency generation, built-in voices, and no GPU required.",
+      "runner_module": "backend.runners.kyutai_pocket_tts",
+      "hf_repo": "kyutai/pocket-tts",
+      "runtime_profile": "pocket-tts",
+      "license": {
+        "type": "commercial",
+        "label": "CC-BY 4.0",
+        "url": "https://creativecommons.org/licenses/by/4.0/"
+      },
+      "min_vram_gb": 0,
+      "recommended_vram_gb": 0,
+      "supports_lora": false,
+      "gpu_support": ["cpu", "nvidia"],
+      "param_groups": ["prompt"],
+      "param_keys": ["prompt"],
+      "params": [
+        {
+          "key": "voice",
+          "label": "Voice",
+          "type": "select",
+          "options": ["alba", "anna", "azelma", "bill_boerst", "caro_davy", "charles", "cosette", "eponine", "eve", "fantine", "george", "jane", "jean", "javert", "marius", "mary", "michael", "paul", "peter_yearsley", "stuart_bell", "vera"],
+          "default": "alba"
+        },
+        {
+          "key": "language",
+          "label": "Language",
+          "type": "select",
+          "options": ["english"],
+          "default": "english",
+          "hint": "English first; multilingual and voice cloning can follow."
+        }
+      ]
     },
     {
       "id": "flux-dev",

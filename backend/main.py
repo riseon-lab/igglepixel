@@ -68,6 +68,7 @@ for d in (LORAS_DIR, MODELS_DIR, COMPONENTS_DIR, ASSET_UPLOADS, ASSET_GENERATED,
 
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}
 VIDEO_EXTS = {".mp4", ".webm", ".mov", ".m4v", ".mkv"}
+AUDIO_EXTS = {".wav", ".mp3", ".flac", ".ogg", ".m4a", ".aac"}
 
 app = FastAPI(title="Forge — RunPod Launcher")
 launcher = ModelLauncher()
@@ -2222,6 +2223,8 @@ def _scan_assets(root: Path, source: str):
             kind = "image"
         elif ext in VIDEO_EXTS:
             kind = "video"
+        elif ext in AUDIO_EXTS:
+            kind = "audio"
         else:
             continue
         rel = visible.relative_to(WORKSPACE)
@@ -2267,7 +2270,7 @@ async def upload_asset(
     auth unlocked), encrypt server-side. Else just store plaintext bytes.
     """
     ext = Path(file.filename).suffix.lower()
-    if ext not in IMAGE_EXTS | VIDEO_EXTS:
+    if ext not in IMAGE_EXTS | VIDEO_EXTS | AUDIO_EXTS:
         raise HTTPException(400, "Unsupported file type")
 
     # Pick a free visible name; the on-disk file is <visible>.enc.
@@ -2361,6 +2364,8 @@ def get_asset_file(
         ".webp": "image/webp", ".gif": "image/gif", ".bmp": "image/bmp",
         ".mp4": "video/mp4", ".webm": "video/webm", ".mov": "video/quicktime",
         ".m4v": "video/x-m4v", ".mkv": "video/x-matroska",
+        ".wav": "audio/wav", ".mp3": "audio/mpeg", ".flac": "audio/flac",
+        ".ogg": "audio/ogg", ".m4a": "audio/mp4", ".aac": "audio/aac",
     }.get(visible.suffix.lower(), "application/octet-stream")
     response = FileResponse(on_disk, media_type=media_type)
     # Hint to the SW so it knows whether to attempt decryption. Plaintext

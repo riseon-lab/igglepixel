@@ -1172,6 +1172,9 @@ function modelVramProfile(m) {
   const values = modelVramValues(m);
   const min = Number(m.min_vram_gb) || (values.length ? Math.min(...values) : 0);
   const max = values.length ? Math.max(...values) : (Number(m.recommended_vram_gb) || min);
+  if (m.category === 'audio' && max === 0) {
+    return { min: 0, max: 0, label: 'CPU' };
+  }
   return {
     min,
     max,
@@ -1199,9 +1202,10 @@ function renderModels() {
     let btnText = 'Configure';
     if (phase === 'ready') btnText = 'Open';
     else if (phase === 'downloaded') btnText = 'Start';
-    const pct = gpu && vramProfile.max ? Math.min(100, (vram / Math.max(vramProfile.max, 1)) * 100) : 50;
-    const vramClass = !gpu ? '' : vram >= vramProfile.max ? '' : vram >= vramProfile.min ? 'warn' : 'bad';
-    const vramTag = !gpu ? '' : vram >= vramProfile.max
+    const cpuProfile = vramProfile.label === 'CPU';
+    const pct = cpuProfile ? 100 : gpu && vramProfile.max ? Math.min(100, (vram / Math.max(vramProfile.max, 1)) * 100) : 50;
+    const vramClass = cpuProfile || !gpu ? '' : vram >= vramProfile.max ? '' : vram >= vramProfile.min ? 'warn' : 'bad';
+    const vramTag = cpuProfile ? '<span class="tag solid">CPU</span>' : !gpu ? '' : vram >= vramProfile.max
       ? `<span class="tag solid">✓ ${vramProfile.max} GB</span>`
       : vram >= vramProfile.min
         ? `<span class="tag warn">${vramProfile.min} GB min</span>`
@@ -2886,9 +2890,11 @@ function generatedCellHtml(asset) {
       </button>` : ''}
     <div class="img-cell-content" ${asset ? 'data-zoom="1"' : ''}>
       ${asset
-        ? (asset.kind === 'video'
-            ? `<video src="${u}" muted playsinline preload="metadata"></video>`
-            : `<img src="${u}" alt="${n}">`)
+        ? (asset.kind === 'audio'
+            ? `<div class="asset-audio generated-audio"><svg aria-hidden="true"><use href="#i-audio"/></svg><div class="asset-audio-label">Audio</div><audio src="${u}" controls preload="metadata"></audio></div>`
+            : asset.kind === 'video'
+              ? `<video src="${u}" muted playsinline preload="metadata"></video>`
+              : `<img src="${u}" alt="${n}">`)
         : `<div class="img-cell-empty">
              <svg class="icon" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M5 12h14"/><path d="M12 5v14"/></svg>
              Output appears here
@@ -3422,9 +3428,8 @@ function renderRecents(modelId) {
   const recentHtml = items.slice().reverse().map((_, i) => {
     const idx = items.length - 1 - i;
     const a = items[idx];
-    const u = esc(a.url);
     return `<div class="asset" data-recent-idx="${idx}">
-      ${a.kind === 'video' ? `<video src="${u}" muted playsinline preload="metadata"></video>` : `<img src="${u}" loading="lazy">`}
+      ${assetMediaHtml(a, { lazy: true })}
       <button class="asset-menu-btn" data-asset-menu="${idx}" data-asset-source="recent" title="Actions">
         <svg><use href="#i-dots"/></svg>
       </button>
@@ -3437,6 +3442,7 @@ function renderRecents(modelId) {
   // Recent tile click → lightbox; 3-dot → asset menu (Download / Delete).
   $$('.asset[data-recent-idx]', grid).forEach(el => el.addEventListener('click', (e) => {
     if (e.target.closest('[data-asset-menu]')) return;
+    if (e.target.closest('audio')) return;
     const idx = Number(el.dataset.recentIdx);
     openLightbox(items[idx], { list: items, index: idx });
   }));
@@ -3446,6 +3452,22 @@ function renderRecents(modelId) {
     showAssetMenu(items[idx], b);
   }));
   bindQueueCardMenus(grid);
+}
+
+function assetMediaHtml(asset, opts = {}) {
+  const u = esc(asset?.url || '');
+  const n = esc(asset?.name || '');
+  if (asset?.kind === 'video') {
+    return `<video src="${u}" muted playsinline preload="metadata"></video>`;
+  }
+  if (asset?.kind === 'audio') {
+    return `<div class="asset-audio">
+      <svg aria-hidden="true"><use href="#i-audio"/></svg>
+      <div class="asset-audio-label">Audio</div>
+      <audio src="${u}" controls preload="metadata"></audio>
+    </div>`;
+  }
+  return `<img src="${u}" ${opts.lazy ? 'loading="lazy"' : ''} alt="${n}">`;
 }
 
 function queueCardsHtml(jobs, opts = {}) {
@@ -3716,6 +3738,7 @@ function bindWorkspaceInputs() {
 
 function promptModeForModel(m = state.selected) {
   if (!m) return 'builder';
+  if (!['image', 'video'].includes(m.category)) return 'raw';
   return state.promptModes[m.id] || 'builder';
 }
 
@@ -3751,17 +3774,23 @@ function setPromptMode(mode) {
 
 function renderPromptMode(m) {
   const mode = promptModeForModel(m);
+  const supportsBuilder = ['image', 'video'].includes(m?.category);
   const builder = $('#wsPromptBuilder');
   const raw = $('#wsPromptRaw');
-  if (builder) builder.style.display = mode === 'builder' ? '' : 'none';
+  if (builder) builder.style.display = supportsBuilder && mode === 'builder' ? '' : 'none';
   if (raw) raw.style.display = mode === 'raw' ? '' : 'none';
+  $('.prompt-mode-toggle')?.style.setProperty('display', supportsBuilder ? '' : 'none');
+  $('#wsEnhancePrompt')?.style.setProperty('display', supportsBuilder ? '' : 'none');
   $('#wsPromptModeBuilder')?.classList.toggle('active', mode === 'builder');
   $('#wsPromptModeRaw')?.classList.toggle('active', mode === 'raw');
 }
 
 function renderPromptBuilder(m) {
   const root = $('#wsPromptBuilder');
-  if (!root || !m || m.category === 'llm') return;
+  if (!root || !m || !['image', 'video'].includes(m.category)) {
+    if (root) root.innerHTML = '';
+    return;
+  }
   const values = promptBuilderForModel(m);
   const textFields = PROMPT_BUILDER_TEXT_FIELDS.map(f => `
     <label class="pb-field">
@@ -4441,7 +4470,13 @@ function _renderLightbox() {
   ` : '';
   stage.innerHTML = (asset.kind === 'video'
     ? `<video src="${u}" controls autoplay loop playsinline preload="metadata"></video>`
-    : `<img src="${u}" alt="${esc(asset.name || '')}">`) + navArrows;
+    : asset.kind === 'audio'
+      ? `<div class="lightbox-audio">
+           <svg aria-hidden="true"><use href="#i-audio"/></svg>
+           <div class="lightbox-audio-title">${esc(asset.name || 'Audio')}</div>
+           <audio src="${u}" controls autoplay preload="metadata"></audio>
+         </div>`
+      : `<img src="${u}" alt="${esc(asset.name || '')}">`) + navArrows;
   $('#lightboxFoot').textContent = asset.path || '';
   $('#lightboxDownload').onclick = () => {
     downloadAsset(asset);
@@ -5058,7 +5093,7 @@ function renderAssets() {
   const queued = state.queue.filter(j => j.status !== 'done');
   const items = state.assets.filter(a => {
     if (f === 'all') return true;
-    if (f === 'image' || f === 'video') return a.kind === f;
+    if (f === 'image' || f === 'video' || f === 'audio') return a.kind === f;
     return a.source === f;
   });
   if (!items.length && !queued.length) {
@@ -5067,11 +5102,9 @@ function renderAssets() {
   }
   const queueHtml = queueCardsHtml(queued, { showModel: true });
   const assetHtml = items.map((a, i) => {
-    const u = esc(a.url), n = esc(a.name);
+    const n = esc(a.name);
     return `<div class="asset" data-asset-idx="${i}">
-      ${a.kind === 'video'
-        ? `<video src="${u}" muted playsinline preload="metadata"></video>`
-        : `<img src="${u}" loading="lazy" alt="${n}">`}
+      ${assetMediaHtml(a, { lazy: true })}
       <span class="asset-kind">${esc(a.source)}</span>
       <button class="asset-menu-btn" data-asset-menu="${i}" data-asset-source="library" title="Actions">
         <svg><use href="#i-dots"/></svg>
@@ -5084,6 +5117,7 @@ function renderAssets() {
   // Click an asset → lightbox; click the 3-dot → menu
   $$('.asset[data-asset-idx]', grid).forEach(el => el.addEventListener('click', (e) => {
     if (e.target.closest('[data-asset-menu]')) return;
+    if (e.target.closest('audio')) return;
     const idx = Number(el.dataset.assetIdx);
     openLightbox(items[idx], { list: items, index: idx });
   }));
@@ -5100,7 +5134,8 @@ async function uploadFiles(files) {
   for (const f of files) {
     if (state.preview) {
       const url = URL.createObjectURL(f);
-      state.assets.unshift({ name: f.name, url, path: f.name, kind: f.type.startsWith('video') ? 'video' : 'image', source: 'upload' });
+      const kind = f.type.startsWith('video') ? 'video' : f.type.startsWith('audio') ? 'audio' : 'image';
+      state.assets.unshift({ name: f.name, url, path: f.name, kind, source: 'upload' });
     } else {
       try { await api.uploadAsset(f); } catch {}
     }

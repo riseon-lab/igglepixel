@@ -834,6 +834,40 @@ body::before {
 .asset img, .asset video {
   width: 100%; height: 100%; object-fit: cover; display: block;
 }
+.asset-audio {
+  width: 100%;
+  height: 100%;
+  display: grid;
+  grid-template-rows: 1fr auto auto;
+  place-items: center;
+  gap: 8px;
+  padding: 18px 12px 34px;
+  background:
+    radial-gradient(circle at 50% 36%, rgba(214,185,125,0.18), rgba(214,185,125,0) 42%),
+    rgba(16,16,18,0.98);
+  color: var(--t-1);
+}
+.asset-audio svg {
+  width: 40px;
+  height: 40px;
+  color: var(--cat-audio);
+  opacity: 0.9;
+}
+.asset-audio-label {
+  font-size: 11px;
+  color: var(--t-3);
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+.asset-audio audio {
+  width: 100%;
+  max-width: 180px;
+  height: 30px;
+}
+.generated-audio {
+  padding-bottom: 18px;
+}
 .asset .asset-meta {
   position: absolute;
   left: 0; right: 0; bottom: 0;
@@ -2602,6 +2636,36 @@ body::before {
   object-fit: contain;
   border-radius: var(--r-md);
   box-shadow: 0 24px 80px rgba(0,0,0,0.6);
+}
+.lightbox-audio {
+  width: min(520px, calc(100vw - 48px));
+  min-height: 240px;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 14px;
+  padding: 28px;
+  border-radius: var(--r-lg);
+  background: rgba(18,18,20,0.98);
+  border: 1px solid var(--line-2);
+  box-shadow: 0 24px 80px rgba(0,0,0,0.6);
+}
+.lightbox-audio svg {
+  width: 56px;
+  height: 56px;
+  color: var(--cat-audio);
+}
+.lightbox-audio-title {
+  max-width: 100%;
+  color: var(--t-1);
+  font-size: 13px;
+  font-family: var(--font-mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.lightbox-audio audio {
+  width: min(420px, 100%);
 }
 
 /* Prev / Next nav arrows — overlay on the stage, only render when there's
