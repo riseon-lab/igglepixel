@@ -73,14 +73,22 @@ AUDIO_EXTS = {".wav", ".mp3", ".flac", ".ogg", ".m4a", ".aac"}
 app = FastAPI(title="Forge — RunPod Launcher")
 launcher = ModelLauncher()
 
-# Warm the prompt moderator off the request path so the first generate
-# call doesn't pay the ~330 MB classifier download. CPU-only, no GPU
-# contention with running runners.
-threading.Thread(target=prompt_moderator.init, daemon=True).start()
+def _truthy_env(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+# Prompt moderation now lazy-loads on first generation request. Preloading at
+# boot is nice on a settled pod, but on RunPod it can make startup look like a
+# repo/moderation loop if the process is restarted while the classifier is
+# still downloading. Operators who want the old warm path can opt in.
+if _truthy_env("IGGLEPIXEL_PROMPT_MODERATION_WARMUP"):
+    threading.Thread(target=prompt_moderator.init, daemon=True).start()
+else:
+    print("[prompt_moderator] lazy startup; set IGGLEPIXEL_PROMPT_MODERATION_WARMUP=true to preload", flush=True)
 
 
 def _access_logs_enabled() -> bool:
-    return os.environ.get("IGGLEPIXEL_ACCESS_LOGS", "").strip().lower() in {"1", "true", "yes", "on"}
+    return _truthy_env("IGGLEPIXEL_ACCESS_LOGS")
 
 
 # ── Auth (persisted to a writable volume) ────────────────────────────────
