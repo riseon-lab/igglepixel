@@ -544,10 +544,14 @@ def _download_key(model_id: str, variant: Optional[str] = None) -> str:
     return f"{model_id}:{variant}" if variant else model_id
 
 
-def _download_plan(model: dict, variant: Optional[str] = None) -> tuple[str, list[dict], list[str], bool]:
-    selected = None
+def _selected_variant(model: dict, variant: Optional[str] = None) -> Optional[dict]:
     if variant:
-        selected = next((v for v in model.get("variants", []) if v.get("id") == variant), None)
+        return next((v for v in model.get("variants", []) if v.get("id") == variant), None)
+    return None
+
+
+def _download_plan(model: dict, variant: Optional[str] = None) -> tuple[str, list[dict], list[str], bool]:
+    selected = _selected_variant(model, variant)
     repo = (selected or {}).get("hf_repo") or model.get("hf_repo", "")
     extra_files = list(model.get("download_files") or [])
     extra_repos = list(model.get("download_repos") or [])
@@ -557,6 +561,64 @@ def _download_plan(model: dict, variant: Optional[str] = None) -> tuple[str, lis
         extra_repos.extend(selected.get("download_repos") or [])
         snapshot = bool(selected.get("download_snapshot", snapshot))
     return repo, extra_files, extra_repos, snapshot
+
+
+def _download_access(model: dict, variant: Optional[str] = None) -> dict:
+    """Metadata for repos that require HF terms/contact acceptance.
+
+    This is intentionally registry-driven. Hugging Face exposes gating at
+    runtime, but checking it live before every download would add another
+    network request to a path that already has enough ways to be slow.
+    """
+    selected = _selected_variant(model, variant)
+    merged: dict = {
+        "gated": False,
+        "requires_hf_token": False,
+        "repos": [],
+        "note": "",
+    }
+    seen: set[str] = set()
+
+    def _add_repo(entry) -> None:
+        if not entry:
+            return
+        if isinstance(entry, str):
+            item = {"repo": entry, "url": f"https://huggingface.co/{entry}"}
+        elif isinstance(entry, dict):
+            repo = entry.get("repo")
+            if not repo:
+                return
+            item = {
+                "repo": repo,
+                "url": entry.get("url") or f"https://huggingface.co/{repo}",
+                "label": entry.get("label") or repo,
+            }
+        else:
+            return
+        if item["repo"] in seen:
+            return
+        seen.add(item["repo"])
+        merged["repos"].append(item)
+
+    def _merge(access: Optional[dict]) -> None:
+        if not isinstance(access, dict):
+            return
+        merged["gated"] = bool(merged["gated"] or access.get("gated"))
+        merged["requires_hf_token"] = bool(merged["requires_hf_token"] or access.get("requires_hf_token"))
+        if access.get("note"):
+            merged["note"] = access["note"]
+        for entry in access.get("repos") or access.get("gated_repos") or []:
+            _add_repo(entry)
+
+    _merge(model.get("access"))
+    if selected:
+        _merge(selected.get("access"))
+    if model.get("gated") or model.get("requires_hf_token"):
+        merged["gated"] = bool(model.get("gated", True))
+        merged["requires_hf_token"] = bool(model.get("requires_hf_token", True))
+        if model.get("hf_repo"):
+            _add_repo(model["hf_repo"])
+    return merged
 
 
 def _download_plan_cached(repo: str, extra_files: list[dict], extra_repos: list[str], snapshot: bool) -> bool:
@@ -587,6 +649,7 @@ def weight_status(model_id: str, variant: Optional[str] = Query(None)):
         "downloaded":  cached,
         "progress":    1.0 if cached else tracked["progress"],
         "error":       None if cached else tracked["error"],
+        "access":      _download_access(model, variant),
     }
 
 
@@ -613,6 +676,13 @@ def model_download(model_id: str, body: DownloadBody):
         return {"status": "already_cached", "repo": repo, "variant": body.variant}
 
     token = body.hf_token or os.environ.get("HF_TOKEN")
+    access = _download_access(model, body.variant)
+    if access.get("gated") and not token:
+        repos = ", ".join(r.get("repo", "") for r in access.get("repos", []) if r.get("repo")) or repo
+        raise HTTPException(
+            400,
+            f"HF access required for {repos}. Accept the repo terms on Hugging Face, then paste a read HF token before downloading.",
+        )
 
     def _worker():
         downloads.set(key, downloading=True, downloaded=False, error=None, progress=0.05)
@@ -644,7 +714,7 @@ def model_download(model_id: str, body: DownloadBody):
                 _mark_unit_done()
             downloads.set(key, downloading=False, downloaded=True, progress=1.0)
         except Exception as e:
-            downloads.set(key, downloading=False, error=f"{type(e).__name__}: {e}")
+            downloads.set(key, downloading=False, error=_format_hf_error(e), progress=0.0)
 
     threading.Thread(target=_worker, daemon=True).start()
     return {"status": "started", "repo": repo, "variant": body.variant}
@@ -1017,8 +1087,14 @@ async def runner_preview(model_id: str):
     path = WORKSPACE / "assets" / f".preview_{model_id}.jpg"
     if not path.exists():
         return Response(status_code=204, headers={"Cache-Control": "no-store"})
-    return FileResponse(str(path), media_type="image/jpeg",
-                        headers={"Cache-Control": "no-store"})
+    try:
+        body = path.read_bytes()
+    except OSError:
+        return Response(status_code=204, headers={"Cache-Control": "no-store"})
+    if not body:
+        return Response(status_code=204, headers={"Cache-Control": "no-store"})
+    return Response(content=body, media_type="image/jpeg",
+                    headers={"Cache-Control": "no-store"})
 
 
 def _dir_size_bytes(p: Path) -> int:
@@ -1186,7 +1262,7 @@ def _format_hf_error(e: Exception) -> str:
     # 401/403 from gated/private repos lands as HfHubHTTPError. Highlight
     # the auth dimension since that's the action the user can take.
     if "401" in msg or "403" in msg or "Unauthorized" in msg or "gated" in msg.lower():
-        return f"Auth required — set an HF token with read access to this repo. ({name})"
+        return f"HF access required — accept the repo terms on Hugging Face, then set a read HF token with access to this repo. ({name})"
     if "404" in msg:
         return f"Repo or revision not found. ({name})"
     return f"{name}: {msg}"
@@ -1590,6 +1666,7 @@ async def civitai_search(
     limit: int = Query(48),
     page: int = Query(1),
     sort: str = Query("Most Downloaded"),
+    base_model: Optional[str] = Query(None),
     nsfw: bool = Query(False),
     api_key: Optional[str] = Query(None),
 ):
@@ -1599,7 +1676,7 @@ async def civitai_search(
     # the requested limit. Otherwise a query where ~half of results carry
     # NSFW tags shows the user a sparse 8-item grid for a 24-item request.
     upstream_limit = min(100, limit * 2 if _moderation_on() else limit)
-    params = {
+    params: dict = {
         "query":  query,
         "types":  types,
         "limit":  upstream_limit,
@@ -1607,6 +1684,14 @@ async def civitai_search(
         "sort":   sort,
         "nsfw":   str(nsfw).lower(),
     }
+    # CivitAI's `baseModels` filter accepts an array. The string values
+    # must match the labels CivitAI uses in their own UI filter exactly
+    # (e.g. "Flux.1 D", "Qwen", "Wan Video") — we surface a curated list
+    # in the frontend so callers don't have to guess.
+    if base_model:
+        bm_list = [s.strip() for s in base_model.split(",") if s.strip()]
+        if bm_list:
+            params["baseModels"] = bm_list
     headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
     async with httpx.AsyncClient() as client:
         r = await client.get(f"{CIVITAI_BASE}/models", params=params, headers=headers, timeout=15)

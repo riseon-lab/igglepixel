@@ -99,7 +99,9 @@ def save_latent_preview(pipe, latents, height: int, width: int, path: Path) -> b
                 arr = (image / 2 + 0.5).clamp(0, 1)[0].permute(1, 2, 0).cpu().float().numpy()
                 pil = Image.fromarray((arr * 255).astype(np.uint8))
             path.parent.mkdir(parents=True, exist_ok=True)
-            pil.convert("RGB").save(path, "JPEG", quality=80)
+            tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+            pil.convert("RGB").save(tmp, "JPEG", quality=80)
+            tmp.replace(path)
             return True
     except Exception as e:
         print(f"[preview] failed: {type(e).__name__}: {e}", flush=True)

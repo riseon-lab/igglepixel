@@ -450,6 +450,18 @@
       "description": "Black Forest Labs' open-weight rectified-flow transformer. Excellent photorealism, hands, faces, and text-in-image. Native 1024×1024. Gated repo — accept the licence on HuggingFace and set HF_TOKEN.",
       "runner_module": "backend.runners.flux_dev",
       "hf_repo": "black-forest-labs/FLUX.1-dev",
+      "access": {
+        "gated": true,
+        "requires_hf_token": true,
+        "note": "FLUX.1-dev uses a non-commercial access gate.",
+        "repos": [
+          {
+            "repo": "black-forest-labs/FLUX.1-dev",
+            "label": "FLUX.1-dev terms",
+            "url": "https://huggingface.co/black-forest-labs/FLUX.1-dev"
+          }
+        ]
+      },
       "license": {
         "type": "non-commercial",
         "label": "Non-commercial",
@@ -541,6 +553,18 @@
       "description": "Black Forest Labs' higher-quality FLUX.2 [klein] 9B. Fast 4-step text-to-image and optional multi-reference editing. Gated Hugging Face repo under the FLUX Non-Commercial License.",
       "runner_module": "backend.runners.flux2_klein_9b",
       "hf_repo": "black-forest-labs/FLUX.2-klein-9B",
+      "access": {
+        "gated": true,
+        "requires_hf_token": true,
+        "note": "FLUX.2 [klein] 9B is gated under the FLUX Non-Commercial License.",
+        "repos": [
+          {
+            "repo": "black-forest-labs/FLUX.2-klein-9B",
+            "label": "FLUX.2 [klein] 9B terms",
+            "url": "https://huggingface.co/black-forest-labs/FLUX.2-klein-9B"
+          }
+        ]
+      },
       "license": {
         "type": "non-commercial",
         "label": "FLUX Non-Commercial",
@@ -983,6 +1007,18 @@
       "runner_module": "backend.runners.hidream_i1",
       "hf_repo": "HiDream-ai/HiDream-I1-Full",
       "download_repos": ["meta-llama/Meta-Llama-3.1-8B-Instruct"],
+      "access": {
+        "gated": true,
+        "requires_hf_token": true,
+        "note": "HiDream loads Meta Llama 3.1 as a text encoder, so the Llama terms must be accepted too.",
+        "repos": [
+          {
+            "repo": "meta-llama/Meta-Llama-3.1-8B-Instruct",
+            "label": "Llama 3.1 terms",
+            "url": "https://huggingface.co/meta-llama/Meta-Llama-3.1-8B-Instruct"
+          }
+        ]
+      },
       "license": {
         "type": "commercial",
         "label": "MIT + component licences",

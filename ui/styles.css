@@ -2818,6 +2818,53 @@ body::before {
 .drawer-state.error  { border-color: rgba(240,200,200,0.25); }
 .drawer-state.error  .state-icon { color: var(--bad); }
 
+.drawer-access {
+  display: flex;
+  gap: 10px;
+  padding: 12px 13px;
+  margin: -2px 0 14px;
+  border-radius: var(--r-md);
+  border: 1px solid rgba(245, 158, 11, 0.28);
+  background: rgba(245, 158, 11, 0.08);
+}
+.drawer-access .access-icon {
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  border-radius: var(--r-sm);
+  color: var(--warn);
+  background: rgba(245, 158, 11, 0.10);
+}
+.drawer-access .access-icon svg { width: 15px; height: 15px; }
+.drawer-access .access-copy { min-width: 0; }
+.drawer-access .access-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--t-1);
+}
+.drawer-access .access-text {
+  margin-top: 3px;
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--t-2);
+}
+.drawer-access .access-text span { display: block; margin-top: 3px; }
+.drawer-access .access-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+.drawer-access .access-links a {
+  color: var(--warn);
+  font-size: 11.5px;
+  text-decoration: none;
+  border-bottom: 1px dotted rgba(245, 158, 11, 0.45);
+}
+.drawer-access .access-links a:hover { color: #ffd392; border-bottom-color: currentColor; }
+
 .drawer-progress {
   height: 3px;
   background: var(--line-1);

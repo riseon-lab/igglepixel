@@ -448,7 +448,8 @@ const api = {
       page:  String(opts.page  ?? 1),
       sort:  opts.sort || 'Most Downloaded',
     });
-    if (opts.key) p.append('api_key', opts.key);
+    if (opts.baseModel) p.append('base_model', opts.baseModel);
+    if (opts.key)       p.append('api_key',   opts.key);
     return json(apiCall(`/api/civitai/search?${p}`));
   },
   civModel:      (id, key) => {
@@ -882,6 +883,7 @@ function bindShell() {
   $('#civSearchBtn').addEventListener('click', () => civSearch());
   $('#civSearch').addEventListener('keydown', (e) => { if (e.key === 'Enter') civSearch(); });
   $('#civSort')?.addEventListener('change', () => civSearch());
+  $('#civBaseModel')?.addEventListener('change', () => civSearch());
   $('#civUrlGo').addEventListener('click', civOpenByUrl);
   $('#civUrl').addEventListener('keydown', (e) => { if (e.key === 'Enter') civOpenByUrl(); });
 
@@ -1212,6 +1214,7 @@ function renderModels() {
         : `<span class="tag bad">need ${vramProfile.min} GB</span>`;
     const gpuOk = !gpu || gpu.type === 'cpu' || (m.gpu_support || []).includes(gpu.type);
     const dim = gpu && !gpuOk;
+    const access = downloadAccessFor(m);
     return `
       <article class="model-card${dim ? ' dim' : ''}" data-id="${m.id}">
         <div class="mc-head">
@@ -1225,6 +1228,7 @@ function renderModels() {
         <div class="mc-tags">
           ${vramTag}
           ${m.supports_lora ? '<span class="tag">LoRA</span>' : ''}
+          ${access.gated ? '<span class="tag warn">HF terms</span>' : ''}
           ${dim ? '<span class="tag bad">GPU mismatch</span>' : ''}
         </div>
         <div class="vram-bar"><div class="vram-fill ${vramClass}" style="width:${Math.min(pct,100)}%"></div></div>
@@ -1403,6 +1407,51 @@ function selectedVariantId(m) {
   return selectedVariant(m)?.id;
 }
 
+function downloadAccessFor(m) {
+  const variant = selectedVariant(m);
+  const out = {
+    gated: false,
+    requiresHFToken: false,
+    repos: [],
+    note: '',
+  };
+  const seen = new Set();
+
+  const addRepo = (entry) => {
+    if (!entry) return;
+    const repo = typeof entry === 'string' ? entry : entry.repo;
+    if (!repo || seen.has(repo)) return;
+    seen.add(repo);
+    out.repos.push({
+      repo,
+      label: typeof entry === 'object' && entry.label ? entry.label : repo,
+      url: typeof entry === 'object' && entry.url ? entry.url : `https://huggingface.co/${repo}`,
+    });
+  };
+
+  const merge = (access) => {
+    if (!access) return;
+    out.gated = !!(out.gated || access.gated);
+    out.requiresHFToken = !!(out.requiresHFToken || access.requires_hf_token || access.requiresHFToken);
+    if (access.note) out.note = access.note;
+    (access.repos || access.gated_repos || []).forEach(addRepo);
+  };
+
+  merge(m.access);
+  merge(variant?.access);
+  if (m.gated || m.requires_hf_token) {
+    out.gated = m.gated !== false;
+    out.requiresHFToken = m.requires_hf_token !== false;
+    addRepo(m.hf_repo);
+  }
+  return out;
+}
+
+function accessAckKey(m, access, variant) {
+  const repos = access.repos.map(r => r.repo).join('|') || m.hf_repo || m.id;
+  return `forge_hf_access_ack:${m.id}:${variant || 'base'}:${repos}`;
+}
+
 // Pick the highest-quality quant the detected GPU can comfortably run.
 // For variant-based models, the quant list comes from the resolved variant.
 // Registry lists quants best-first; first match wins. Falls back to the
@@ -1524,6 +1573,7 @@ function renderDrawerBody() {
   const m = state.selected;
   if (!m) return;
   const phase = drawerPhase(m.id);
+  const access = downloadAccessFor(m);
   const sizeStr = modelVramProfile(m).label;
   const rt = m.runtime ? state.runtimes[m.id] : null;
   const startingTitle = rt?.state === 'installing' ? 'Preparing runtime…' : 'Starting runner…';
@@ -1568,6 +1618,22 @@ function renderDrawerBody() {
           </div>
         </div>` : ''}
     </div>
+
+    ${access.gated ? `
+      <div class="drawer-access">
+        <div class="access-icon"><svg><use href="#i-lock"/></svg></div>
+        <div class="access-copy">
+          <div class="access-title">Hugging Face access required</div>
+          <div class="access-text">
+            Accept the repo terms on Hugging Face, then paste a read token before downloading.
+            ${access.note ? `<span>${esc(access.note)}</span>` : ''}
+          </div>
+          <div class="access-links">
+            ${access.repos.map(r => `<a href="${esc(r.url)}" target="_blank" rel="noopener">${esc(r.label || r.repo)} ↗</a>`).join('')}
+          </div>
+        </div>
+      </div>
+    ` : ''}
 
     <div class="drawer-state ${stateBlocks.cls}">
       <div class="state-icon"><svg><use href="#${stateBlocks.icon}"/></svg></div>
@@ -1753,12 +1819,19 @@ function renderDrawerPrimary() {
   const btn = $('#drawerPrimary');
 
   const phase = drawerPhase(m.id);
+  const access = downloadAccessFor(m);
   const rt = m.runtime ? state.runtimes[m.id] : null;
   const startingHtml = rt?.state === 'installing'
     ? '<span class="spinner"></span><span>Preparing runtime…</span>'
     : '<span class="spinner"></span><span>Starting…</span>';
   const labels = {
-    not_downloaded: { html: '<svg><use href="#i-down"/></svg>Download weights',  busy: false, action: 'download' },
+    not_downloaded: {
+      html: access.gated
+        ? '<svg><use href="#i-lock"/></svg>Download with HF token'
+        : '<svg><use href="#i-down"/></svg>Download weights',
+      busy: false,
+      action: 'download',
+    },
     downloading:    { html: '<span class="spinner"></span><span>Downloading…</span>', busy: true, action: null },
     downloaded:     { html: '<svg><use href="#i-bolt"/></svg>Start runner',      busy: false, action: 'start' },
     starting:       { html: startingHtml, busy: true, action: null },
@@ -2096,6 +2169,31 @@ async function downloadWeights(m) {
   // Read token before any re-render that would wipe the typed value.
   const hfToken = currentHFToken('#drawerHFToken');
   const variant = selectedVariantId(m);
+  const access = downloadAccessFor(m);
+
+  if (access.gated && !hfToken) {
+    const names = access.repos.map(r => r.repo).join(', ') || m.hf_repo || m.name;
+    toast(`HF access required for ${names}. Accept the terms on Hugging Face, then paste a read token.`, 'error');
+    $('#drawerHFToken')?.focus();
+    return;
+  }
+
+  if (access.gated) {
+    const key = accessAckKey(m, access, variant);
+    if (localStorage.getItem(key) !== '1') {
+      const names = access.repos.map(r => r.repo).join(', ') || m.hf_repo || m.name;
+      const ok = await confirmModal(
+        'HF Access Required',
+        `Before downloading ${m.name}, open the Hugging Face link in this card and accept the access terms for ${names}. Your token must have read access to those repos.`,
+        'I accepted terms'
+      );
+      if (!ok) {
+        $('#drawerHFToken')?.focus();
+        return;
+      }
+      localStorage.setItem(key, '1');
+    }
+  }
 
   // Check upfront — snapshot_download returns instantly for cached repos, which
   // looks like a broken 1-second download. Detect it here and skip the POST.
@@ -2121,6 +2219,7 @@ async function downloadWeights(m) {
     toast(`${m.name} weights ready`, 'success');
   } catch (e) {
     setModelState(m.id, { downloading: false, downloaded: false, error: e.message || 'Download failed' });
+    toast(e.message || 'Download failed', 'error');
   }
   renderDrawerBody();
 }
@@ -2128,16 +2227,20 @@ async function downloadWeights(m) {
 async function waitForDownload(modelId, maxSeconds, variant) {
   const deadline = Date.now() + maxSeconds * 1000;
   while (Date.now() < deadline) {
+    let ws = null;
     try {
-      const ws = await api.weightStatus(modelId, variant);
-      if (ws.error)       throw new Error(ws.error);
-      if (ws.downloaded)  return true;
-      if (typeof ws.progress === 'number') {
-        setModelState(modelId, { progress: ws.progress });
-        const fill = $('#drawerProgress');
-        if (fill) fill.style.width = `${Math.min(100, ws.progress * 100)}%`;
-      }
-    } catch { /* tolerate transient errors */ }
+      ws = await api.weightStatus(modelId, variant);
+    } catch {
+      // Tolerate transient status-poll failures. Stored backend download
+      // errors are handled below so gated/private repos don't look stuck.
+    }
+    if (ws?.error)       throw new Error(ws.error);
+    if (ws?.downloaded)  return true;
+    if (typeof ws?.progress === 'number') {
+      setModelState(modelId, { progress: ws.progress });
+      const fill = $('#drawerProgress');
+      if (fill) fill.style.width = `${Math.min(100, ws.progress * 100)}%`;
+    }
     await new Promise(r => setTimeout(r, 2000));
   }
   return false;
@@ -4815,6 +4918,7 @@ let civHiddenTotal = 0;
 async function civSearch(opts = {}) {
   const q = $('#civSearch').value;
   const sort = $('#civSort')?.value || 'Most Downloaded';
+  const baseModel = $('#civBaseModel')?.value || '';
   const key = state.settings.civitai_key || '';
   const out = $('#civResults');
   const append = !!opts.append;
@@ -4825,7 +4929,7 @@ async function civSearch(opts = {}) {
     out.innerHTML = `<div class="empty" style="grid-column:1/-1"><div class="spinner"></div></div>`;
   }
   try {
-    const data = await api.civSearch(q, { sort, key, page: civPage });
+    const data = await api.civSearch(q, { sort, baseModel, key, page: civPage });
     const items = data.items || [];
     state.civResults = append ? [...state.civResults, ...items] : items;
     civHasMore = !!data.metadata?.forge_has_more && items.length > 0;
