@@ -4994,7 +4994,7 @@ function trainerPayload() {
     output_name: $('#trainerOutputName')?.value.trim() || 'kerry_qwen_lora',
     trigger_phrase: $('#trainerTriggerPhrase')?.value.trim() || 'A woman named Kerry',
     base_model: $('#trainerBaseModel')?.value || 'Qwen/Qwen-Image',
-    steps: Number($('#trainerSteps')?.value || 2500),
+    steps: Number($('#trainerSteps')?.value || 3000),
     rank: Number($('#trainerRank')?.value || 64),
     learning_rate: Number($('#trainerLearningRate')?.value || 0.0002),
     resolution: Number($('#trainerResolution')?.value || 1024),

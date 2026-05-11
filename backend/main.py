@@ -5,8 +5,10 @@ import hashlib
 import json
 import os
 import secrets
+import shlex
 import shutil
 import subprocess
+import sys
 import threading
 import time
 from pathlib import Path
@@ -2295,6 +2297,7 @@ def update_lora(filename: str, req: LoraTagRequest):
 # ── Trainers ─────────────────────────────────────────────────────────────
 TRAINER_ID_QWEN_CHARACTER = "qwen-character-lora"
 QWEN_TRAINER_COMMAND_ENV = "IGGLEPIXEL_QWEN_LORA_TRAIN_CMD"
+QWEN_TRAINER_SCRIPT = BASE_DIR / "trainers" / "qwen_lora_train.py"
 QWEN_TRAINER_BASE_MODELS = (
     "Qwen/Qwen-Image",
     "Qwen/Qwen-Image-2512",
@@ -2322,7 +2325,7 @@ class TrainJobRequest(BaseModel):
     output_name: str = "kerry_qwen_lora"
     trigger_phrase: str = "A woman named Kerry"
     base_model: str = "Qwen/Qwen-Image"
-    steps: int = 2500
+    steps: int = 3000
     rank: int = 64
     learning_rate: float = 0.0002
     resolution: int = 1024
@@ -2423,8 +2426,17 @@ def _scan_training_dataset(dataset_dir: Path) -> dict:
     }
 
 
+def _trainer_command() -> str:
+    command = os.environ.get(QWEN_TRAINER_COMMAND_ENV, "").strip()
+    if command:
+        return command
+    if QWEN_TRAINER_SCRIPT.exists():
+        return f"{shlex.quote(sys.executable)} {shlex.quote(str(QWEN_TRAINER_SCRIPT))}"
+    return ""
+
+
 def _trainer_command_configured() -> bool:
-    return bool(os.environ.get(QWEN_TRAINER_COMMAND_ENV, "").strip())
+    return bool(_trainer_command())
 
 
 @app.get("/api/trainers")
@@ -2438,6 +2450,7 @@ def list_trainers():
                 "description": "Train a Qwen-compatible character LoRA from a curated image/caption folder.",
                 "configured": _trainer_command_configured(),
                 "command_env": QWEN_TRAINER_COMMAND_ENV,
+                "default_command": _trainer_command(),
                 "dataset_root": str(WORKSPACE),
                 "output_root": str(TRAINING_DIR),
                 "base_models": [
@@ -2528,7 +2541,7 @@ def _run_train_job(job_id: str) -> None:
         _set_train_job_error(job, scan.get("error") or "Dataset validation failed")
         return
 
-    command = os.environ.get(QWEN_TRAINER_COMMAND_ENV, "").strip()
+    command = _trainer_command()
     if not command:
         _set_train_job_error(
             job,
