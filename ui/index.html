@@ -209,6 +209,11 @@
         <span class="label">Running</span>
         <span class="live-dot" id="runningDot" style="display:none"></span>
       </div>
+      <div class="nav-item" data-view="trainers">
+        <svg><use href="#i-bolt"/></svg>
+        <span class="label">Trainers</span>
+        <span class="meta" id="trainerNavCount">0</span>
+      </div>
 
       <div class="nav-section">Library</div>
       <div class="nav-item" data-view="loras">
@@ -399,6 +404,133 @@
       </div>
       <div class="run-list" id="runList">
         <div class="empty"><div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 6v6l4 2"/><circle cx="12" cy="12" r="9"/></svg></div>Nothing running.</div>
+      </div>
+    </section>
+
+    <!-- Trainers -->
+    <section class="view" data-view="trainers">
+      <div class="page-head">
+        <div>
+          <div class="page-title">Trainers</div>
+          <div class="page-sub">Build local LoRA adapters from curated datasets.</div>
+        </div>
+      </div>
+
+      <div class="trainer-layout">
+        <div class="trainer-card">
+          <div class="trainer-card-head">
+            <div>
+              <div class="trainer-title">Qwen Character LoRA</div>
+              <div class="trainer-sub" id="trainerConfigState">Checking trainer setup…</div>
+            </div>
+            <span class="tag solid" id="trainerReadyTag">Setup</span>
+          </div>
+
+          <div class="trainer-import">
+            <div class="trainer-title">Pull Dataset From Hugging Face</div>
+            <div class="trainer-form compact">
+              <label class="field wide">
+                <span class="field-label">Dataset repo</span>
+                <input class="text-input" id="trainerDatasetRepo" placeholder="username/kerry-dataset" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false">
+              </label>
+              <label class="field">
+                <span class="field-label">Repo type</span>
+                <select class="select" id="trainerDatasetRepoType">
+                  <option value="dataset" selected>Dataset</option>
+                  <option value="model">Model</option>
+                </select>
+              </label>
+              <label class="field">
+                <span class="field-label">Save as folder</span>
+                <input class="text-input" id="trainerDatasetTarget" value="kerry" placeholder="kerry">
+              </label>
+            </div>
+            <div class="trainer-actions">
+              <button class="btn" id="trainerDatasetDownloadBtn"><svg><use href="#i-down"/></svg>Pull dataset</button>
+            </div>
+          </div>
+
+          <div class="trainer-form">
+            <label class="field">
+              <span class="field-label">Dataset folder</span>
+              <input class="text-input" id="trainerDatasetPath" value="datasets/kerry" placeholder="datasets/kerry">
+            </label>
+            <label class="field">
+              <span class="field-label">Output name</span>
+              <input class="text-input" id="trainerOutputName" value="kerry_qwen_lora">
+            </label>
+            <label class="field wide">
+              <span class="field-label">Trigger phrase</span>
+              <input class="text-input" id="trainerTriggerPhrase" value="A woman named Kerry">
+            </label>
+            <label class="field wide">
+              <span class="field-label">Base model</span>
+              <select class="select" id="trainerBaseModel">
+                <option value="Qwen/Qwen-Image">Qwen-Image</option>
+                <option value="Qwen/Qwen-Image-2512">Qwen-Image-2512</option>
+                <option value="Qwen/Qwen-Image-Edit">Qwen-Image-Edit</option>
+                <option value="Qwen/Qwen-Image-Edit-2511">Qwen-Image-Edit 2511</option>
+              </select>
+            </label>
+            <label class="field">
+              <span class="field-label">Steps</span>
+              <input class="text-input" type="number" id="trainerSteps" min="1" max="100000" step="100" value="2500">
+            </label>
+            <label class="field">
+              <span class="field-label">Rank</span>
+              <select class="select" id="trainerRank">
+                <option value="8">8</option>
+                <option value="16">16</option>
+                <option value="32">32</option>
+                <option value="64" selected>64</option>
+              </select>
+            </label>
+            <label class="field">
+              <span class="field-label">Learning rate</span>
+              <input class="text-input" type="number" id="trainerLearningRate" min="0" step="0.00001" value="0.0002">
+            </label>
+            <label class="field">
+              <span class="field-label">Resolution</span>
+              <select class="select" id="trainerResolution">
+                <option value="768">768</option>
+                <option value="1024" selected>1024</option>
+                <option value="1328">1328</option>
+              </select>
+            </label>
+            <label class="field">
+              <span class="field-label">Batch size</span>
+              <input class="text-input" type="number" id="trainerBatchSize" min="1" max="16" step="1" value="1">
+            </label>
+            <label class="field">
+              <span class="field-label">Repeats</span>
+              <input class="text-input" type="number" id="trainerRepeats" min="1" max="100" step="1" value="1">
+            </label>
+            <label class="field wide">
+              <span class="field-label">HF token <span class="hint">for gated/private trainers or models</span></span>
+              <input class="text-input mask-text" id="trainerHFToken" type="text" placeholder="hf_…" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false" data-1p-ignore="true" data-lpignore="true" data-bwignore="true" data-form-type="other">
+            </label>
+          </div>
+
+          <div class="trainer-actions">
+            <button class="btn" id="trainerValidateBtn"><svg><use href="#i-check"/></svg>Validate dataset</button>
+            <button class="btn primary" id="trainerStartBtn"><svg><use href="#i-bolt"/></svg>Start training</button>
+          </div>
+        </div>
+
+        <aside class="trainer-side">
+          <div class="trainer-card">
+            <div class="trainer-title">Dataset</div>
+            <div id="trainerDatasetSummary" class="trainer-summary">
+              <div class="empty" style="padding:18px">No validation yet.</div>
+            </div>
+          </div>
+          <div class="trainer-card">
+            <div class="trainer-title">Jobs</div>
+            <div id="trainerJobList" class="trainer-job-list">
+              <div class="empty" style="padding:18px">No training jobs yet.</div>
+            </div>
+          </div>
+        </aside>
       </div>
     </section>
 

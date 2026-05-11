@@ -6,6 +6,7 @@ import json
 import os
 import secrets
 import shutil
+import subprocess
 import threading
 import time
 from pathlib import Path
@@ -40,6 +41,8 @@ DOWNLOAD_MARKERS_DIR = WORKSPACE / ".cache" / "igglepixel-downloads"
 LORAS_DIR        = WORKSPACE / "loras"
 MODELS_DIR       = WORKSPACE / "models"
 COMPONENTS_DIR   = WORKSPACE / "components"     # split-file transformer/VAE/text-encoder swaps
+TRAINING_DIR     = WORKSPACE / "training"
+DATASETS_DIR     = WORKSPACE / "datasets"
 ASSETS_DIR       = WORKSPACE / "assets"
 ASSET_UPLOADS    = ASSETS_DIR / "uploads"
 ASSET_GENERATED  = ASSETS_DIR / "generated"
@@ -60,7 +63,7 @@ os.environ.setdefault("UV_CACHE_DIR", str(UV_CACHE_DIR))
 os.environ.setdefault("UV_PYTHON_INSTALL_DIR", str(UV_PYTHON_DIR))
 os.environ.setdefault("XDG_CACHE_HOME", str(WORKSPACE / ".cache"))
 
-for d in (LORAS_DIR, MODELS_DIR, COMPONENTS_DIR, ASSET_UPLOADS, ASSET_GENERATED, HF_HOME_DIR, PIP_CACHE_DIR, TMP_DIR, UV_CACHE_DIR, UV_PYTHON_DIR, DOWNLOAD_MARKERS_DIR):
+for d in (LORAS_DIR, MODELS_DIR, COMPONENTS_DIR, TRAINING_DIR, DATASETS_DIR, ASSET_UPLOADS, ASSET_GENERATED, HF_HOME_DIR, PIP_CACHE_DIR, TMP_DIR, UV_CACHE_DIR, UV_PYTHON_DIR, DOWNLOAD_MARKERS_DIR):
     try:
         d.mkdir(parents=True, exist_ok=True)
     except OSError:
@@ -2287,6 +2290,547 @@ def update_lora(filename: str, req: LoraTagRequest):
     with open(meta_path, "w") as f:
         json.dump(meta, f)
     return {"status": "updated", "meta": meta}
+
+
+# ── Trainers ─────────────────────────────────────────────────────────────
+TRAINER_ID_QWEN_CHARACTER = "qwen-character-lora"
+QWEN_TRAINER_COMMAND_ENV = "IGGLEPIXEL_QWEN_LORA_TRAIN_CMD"
+QWEN_TRAINER_BASE_MODELS = (
+    "Qwen/Qwen-Image",
+    "Qwen/Qwen-Image-2512",
+    "Qwen/Qwen-Image-Edit",
+    "Qwen/Qwen-Image-Edit-2511",
+)
+train_jobs: dict[str, dict] = {}
+
+
+class TrainerDatasetRequest(BaseModel):
+    dataset_path: str
+
+
+class TrainerDatasetDownloadRequest(BaseModel):
+    hf_repo: str
+    target_name: Optional[str] = None
+    repo_type: str = "dataset"
+    revision: Optional[str] = None
+    hf_token: Optional[str] = None
+
+
+class TrainJobRequest(BaseModel):
+    trainer_id: str = TRAINER_ID_QWEN_CHARACTER
+    dataset_path: str
+    output_name: str = "kerry_qwen_lora"
+    trigger_phrase: str = "A woman named Kerry"
+    base_model: str = "Qwen/Qwen-Image"
+    steps: int = 2500
+    rank: int = 64
+    learning_rate: float = 0.0002
+    resolution: int = 1024
+    batch_size: int = 1
+    repeats: int = 1
+    hf_token: Optional[str] = None
+
+
+class HFLoraUploadRequest(BaseModel):
+    filename: str
+    hf_repo: str
+    private: bool = True
+    hf_token: Optional[str] = None
+    commit_message: Optional[str] = None
+
+
+def _safe_name(value: str, fallback: str = "qwen_lora") -> str:
+    out = "".join(c if c.isalnum() or c in "-_." else "_" for c in (value or "").strip())
+    out = out.strip("._-")
+    return out or fallback
+
+
+def _resolve_training_path(value: str) -> Path:
+    if not value or not value.strip():
+        raise HTTPException(400, "Dataset path is required")
+    raw = Path(value.strip()).expanduser()
+    path = raw if raw.is_absolute() else WORKSPACE / raw
+    path = path.resolve()
+    try:
+        path.relative_to(WORKSPACE.resolve())
+    except ValueError:
+        raise HTTPException(400, "Dataset path must be inside /workspace")
+    return path
+
+
+def _scan_training_dataset(dataset_dir: Path) -> dict:
+    if not dataset_dir.exists():
+        return {
+            "valid": False,
+            "dataset_path": str(dataset_dir),
+            "error": "Dataset folder does not exist",
+            "image_count": 0,
+            "caption_count": 0,
+            "pairs": [],
+            "missing_captions": [],
+            "orphan_captions": [],
+            "empty_captions": [],
+        }
+    if not dataset_dir.is_dir():
+        return {
+            "valid": False,
+            "dataset_path": str(dataset_dir),
+            "error": "Dataset path is not a folder",
+            "image_count": 0,
+            "caption_count": 0,
+            "pairs": [],
+            "missing_captions": [],
+            "orphan_captions": [],
+            "empty_captions": [],
+        }
+
+    images = sorted(p for p in dataset_dir.rglob("*") if p.is_file() and p.suffix.lower() in IMAGE_EXTS)
+    captions = sorted(p for p in dataset_dir.rglob("*.txt") if p.is_file())
+    image_keys = {(p.parent.relative_to(dataset_dir).as_posix(), p.stem): p for p in images}
+    caption_keys = {(p.parent.relative_to(dataset_dir).as_posix(), p.stem): p for p in captions}
+
+    pairs = []
+    missing = []
+    empty = []
+    for key, img in image_keys.items():
+        cap = caption_keys.get(key)
+        rel_img = img.relative_to(dataset_dir).as_posix()
+        if cap is None:
+            missing.append(rel_img)
+            continue
+        rel_cap = cap.relative_to(dataset_dir).as_posix()
+        try:
+            caption_text = cap.read_text(encoding="utf-8").strip()
+        except UnicodeDecodeError:
+            caption_text = cap.read_text(errors="ignore").strip()
+        if not caption_text:
+            empty.append(rel_cap)
+        pairs.append({"image": rel_img, "caption": rel_cap})
+
+    orphan = [p.relative_to(dataset_dir).as_posix() for key, p in caption_keys.items() if key not in image_keys]
+    valid = bool(images) and not missing and not orphan and not empty
+    return {
+        "valid": valid,
+        "dataset_path": str(dataset_dir),
+        "image_count": len(images),
+        "caption_count": len(captions),
+        "pair_count": len(pairs),
+        "pairs": pairs[:12],
+        "missing_captions": missing[:25],
+        "orphan_captions": orphan[:25],
+        "empty_captions": empty[:25],
+        "error": None if valid else "Dataset needs one non-empty .txt caption beside each image",
+    }
+
+
+def _trainer_command_configured() -> bool:
+    return bool(os.environ.get(QWEN_TRAINER_COMMAND_ENV, "").strip())
+
+
+@app.get("/api/trainers")
+def list_trainers():
+    return {
+        "trainers": [
+            {
+                "id": TRAINER_ID_QWEN_CHARACTER,
+                "name": "Qwen Character LoRA",
+                "category": "lora",
+                "description": "Train a Qwen-compatible character LoRA from a curated image/caption folder.",
+                "configured": _trainer_command_configured(),
+                "command_env": QWEN_TRAINER_COMMAND_ENV,
+                "dataset_root": str(WORKSPACE),
+                "output_root": str(TRAINING_DIR),
+                "base_models": [
+                    {"id": model_id, "label": model_id.replace("Qwen/", "").replace("-2511", " 2511")}
+                    for model_id in QWEN_TRAINER_BASE_MODELS
+                ],
+            }
+        ],
+        "jobs": [_public_train_job(j) for j in sorted(train_jobs.values(), key=lambda x: x.get("created_at", 0), reverse=True)],
+    }
+
+
+@app.post("/api/trainers/validate")
+def validate_trainer_dataset(req: TrainerDatasetRequest):
+    _require_unlocked()
+    return _scan_training_dataset(_resolve_training_path(req.dataset_path))
+
+
+@app.post("/api/trainers/datasets/download")
+def download_trainer_dataset(req: TrainerDatasetDownloadRequest):
+    _require_unlocked()
+    repo = (req.hf_repo or "").strip()
+    if not repo or " " in repo or repo.startswith("/") or repo.endswith("/"):
+        raise HTTPException(400, "Enter a Hugging Face repo id like username/kerry-dataset")
+    repo_type = (req.repo_type or "dataset").strip()
+    if repo_type not in ("dataset", "model"):
+        raise HTTPException(400, "Dataset source must be a dataset or model repo")
+
+    from huggingface_hub import snapshot_download
+
+    target_name = _safe_name(req.target_name or repo.split("/")[-1], "dataset")
+    target_dir = (DATASETS_DIR / target_name).resolve()
+    try:
+        target_dir.relative_to(DATASETS_DIR.resolve())
+    except ValueError:
+        raise HTTPException(400, "Invalid dataset folder name")
+    target_dir.mkdir(parents=True, exist_ok=True)
+
+    token = req.hf_token or os.environ.get("HF_TOKEN")
+    try:
+        snapshot_download(
+            repo_id=repo,
+            repo_type=repo_type,
+            revision=req.revision or None,
+            token=token,
+            local_dir=str(target_dir),
+        )
+    except Exception as e:
+        raise HTTPException(400, _format_hf_error(e))
+
+    scan = _scan_training_dataset(target_dir)
+    try:
+        rel = target_dir.relative_to(WORKSPACE.resolve()).as_posix()
+    except ValueError:
+        rel = str(target_dir)
+    return {
+        "status": "downloaded",
+        "repo": repo,
+        "repo_type": repo_type,
+        "dataset_path": rel,
+        "path": str(target_dir),
+        "scan": scan,
+    }
+
+
+def _public_train_job(job: dict) -> dict:
+    out = {k: v for k, v in job.items() if not k.startswith("_")}
+    out["log_tail"] = out.get("log_tail", [])[-80:]
+    return out
+
+
+def _set_train_job_error(job: dict, message: str) -> None:
+    job["status"] = "error"
+    job["error"] = message
+    job["finished_at"] = time.time()
+
+
+def _run_train_job(job_id: str) -> None:
+    job = train_jobs[job_id]
+    req: TrainJobRequest = job["_request"]
+    job["status"] = "running"
+    job["started_at"] = time.time()
+    job["log_tail"].append("Validating dataset")
+
+    scan = _scan_training_dataset(Path(job["dataset_path"]))
+    job["dataset"] = scan
+    if not scan["valid"]:
+        _set_train_job_error(job, scan.get("error") or "Dataset validation failed")
+        return
+
+    command = os.environ.get(QWEN_TRAINER_COMMAND_ENV, "").strip()
+    if not command:
+        _set_train_job_error(
+            job,
+            f"Trainer command is not configured. Set {QWEN_TRAINER_COMMAND_ENV} on the pod to enable training.",
+        )
+        return
+
+    output_dir = TRAINING_DIR / job_id
+    output_dir.mkdir(parents=True, exist_ok=True)
+    manifest_path = output_dir / "manifest.json"
+    manifest = {
+        "trainer_id": req.trainer_id,
+        "dataset_path": job["dataset_path"],
+        "output_name": job["output_name"],
+        "trigger_phrase": req.trigger_phrase,
+        "base_model": req.base_model,
+        "steps": req.steps,
+        "rank": req.rank,
+        "learning_rate": req.learning_rate,
+        "resolution": req.resolution,
+        "batch_size": req.batch_size,
+        "repeats": req.repeats,
+        "dataset": scan,
+    }
+    manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    job["manifest_path"] = str(manifest_path)
+    job["output_dir"] = str(output_dir)
+    job["log_tail"].append("Starting trainer command")
+
+    env = os.environ.copy()
+    if req.hf_token:
+        env["HF_TOKEN"] = req.hf_token
+    env.update(
+        {
+            "DATASET_DIR": job["dataset_path"],
+            "OUTPUT_DIR": str(output_dir),
+            "OUTPUT_NAME": job["output_name"],
+            "OUTPUT_PATH": str(output_dir / f"{job['output_name']}.safetensors"),
+            "BASE_MODEL": req.base_model,
+            "TRIGGER_PHRASE": req.trigger_phrase,
+            "TRAIN_STEPS": str(req.steps),
+            "TRAIN_RANK": str(req.rank),
+            "TRAIN_LR": str(req.learning_rate),
+            "TRAIN_RESOLUTION": str(req.resolution),
+            "TRAIN_BATCH_SIZE": str(req.batch_size),
+            "TRAIN_REPEATS": str(req.repeats),
+            "TRAIN_MANIFEST": str(manifest_path),
+        }
+    )
+
+    try:
+        proc = subprocess.Popen(
+            command,
+            cwd=str(BASE_DIR),
+            env=env,
+            shell=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+        )
+        job["_process"] = proc
+        assert proc.stdout is not None
+        for line in proc.stdout:
+            line = line.rstrip()
+            if not line:
+                continue
+            job["log_tail"].append(line)
+            job["log_tail"] = job["log_tail"][-120:]
+            # Best effort progress: many trainers print "step 123/2500".
+            lower = line.lower()
+            if "step" in lower and "/" in lower:
+                for token in lower.replace(",", " ").split():
+                    if "/" not in token:
+                        continue
+                    a, b = token.split("/", 1)
+                    if a.isdigit() and b.isdigit() and int(b) > 0:
+                        job["progress"] = min(100, round((int(a) / int(b)) * 100, 1))
+                        break
+            if job.get("_cancel"):
+                proc.terminate()
+                job["status"] = "cancelled"
+                job["finished_at"] = time.time()
+                return
+        rc = proc.wait()
+        if rc != 0:
+            _set_train_job_error(job, f"Trainer command exited with code {rc}")
+            return
+    except Exception as e:
+        _set_train_job_error(job, f"{type(e).__name__}: {e}")
+        return
+    finally:
+        job.pop("_process", None)
+
+    outputs = sorted(output_dir.rglob("*.safetensors"), key=lambda p: p.stat().st_mtime, reverse=True)
+    if not outputs:
+        _set_train_job_error(job, "Training finished but no .safetensors file was found in the output folder")
+        return
+    src = outputs[0]
+    dest = LORAS_DIR / f"{job['output_name']}.safetensors"
+    i = 1
+    while dest.exists():
+        dest = LORAS_DIR / f"{job['output_name']}_{i}.safetensors"
+        i += 1
+    shutil.copy2(src, dest)
+    meta_path = dest.with_suffix(dest.suffix + ".meta.json")
+    meta_path.write_text(
+        json.dumps(
+            {
+                "tags": ["trained", "qwen", "character"],
+                "model_id": "",
+                "trainer_id": req.trainer_id,
+                "base_model": req.base_model,
+                "trigger_phrase": req.trigger_phrase,
+                "dataset_path": job["dataset_path"],
+                "steps": req.steps,
+                "rank": req.rank,
+                "learning_rate": req.learning_rate,
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    job["status"] = "done"
+    job["progress"] = 100
+    job["finished_at"] = time.time()
+    job["lora_path"] = str(dest)
+    job["lora_filename"] = dest.name
+    job["log_tail"].append(f"LoRA imported: {dest.name}")
+
+
+@app.post("/api/train-jobs")
+def create_train_job(req: TrainJobRequest):
+    _require_unlocked()
+    if req.trainer_id != TRAINER_ID_QWEN_CHARACTER:
+        raise HTTPException(404, "Trainer not found")
+    dataset_dir = _resolve_training_path(req.dataset_path)
+    scan = _scan_training_dataset(dataset_dir)
+    if not scan["valid"]:
+        raise HTTPException(400, scan.get("error") or "Dataset validation failed")
+    if req.steps < 1 or req.steps > 100000:
+        raise HTTPException(400, "Steps must be between 1 and 100000")
+    if req.rank not in (4, 8, 16, 32, 64, 128):
+        raise HTTPException(400, "Rank must be one of 4, 8, 16, 32, 64, 128")
+    if req.base_model not in QWEN_TRAINER_BASE_MODELS:
+        raise HTTPException(400, "Unsupported Qwen base model")
+    if req.learning_rate <= 0 or req.learning_rate > 1:
+        raise HTTPException(400, "Learning rate must be greater than 0 and at most 1")
+    if req.resolution not in (512, 768, 1024, 1328):
+        raise HTTPException(400, "Resolution must be one of 512, 768, 1024, 1328")
+    if req.batch_size < 1 or req.batch_size > 16:
+        raise HTTPException(400, "Batch size must be between 1 and 16")
+    if req.repeats < 1 or req.repeats > 100:
+        raise HTTPException(400, "Repeats must be between 1 and 100")
+
+    job_id = secrets.token_hex(8)
+    output_name = _safe_name(req.output_name, "qwen_lora")
+    job = {
+        "id": job_id,
+        "trainer_id": req.trainer_id,
+        "status": "queued",
+        "created_at": time.time(),
+        "dataset_path": str(dataset_dir),
+        "dataset": scan,
+        "output_name": output_name,
+        "trigger_phrase": req.trigger_phrase,
+        "base_model": req.base_model,
+        "steps": req.steps,
+        "rank": req.rank,
+        "learning_rate": req.learning_rate,
+        "resolution": req.resolution,
+        "batch_size": req.batch_size,
+        "repeats": req.repeats,
+        "progress": 0,
+        "log_tail": [],
+        "_request": req,
+        "_cancel": False,
+    }
+    train_jobs[job_id] = job
+    threading.Thread(target=_run_train_job, args=(job_id,), daemon=True).start()
+    return {"job_id": job_id, "job": _public_train_job(job)}
+
+
+@app.get("/api/train-jobs")
+def list_train_jobs():
+    items = sorted(train_jobs.values(), key=lambda x: x.get("created_at", 0), reverse=True)
+    return {"jobs": [_public_train_job(j) for j in items]}
+
+
+@app.get("/api/train-jobs/{job_id}")
+def get_train_job(job_id: str):
+    job = train_jobs.get(job_id)
+    if not job:
+        raise HTTPException(404, "Job not found")
+    return _public_train_job(job)
+
+
+@app.delete("/api/train-jobs/{job_id}")
+def cancel_or_dismiss_train_job(job_id: str):
+    job = train_jobs.get(job_id)
+    if not job:
+        raise HTTPException(404, "Job not found")
+    if job["status"] in ("done", "error", "cancelled"):
+        train_jobs.pop(job_id, None)
+        return {"status": "dismissed"}
+    job["_cancel"] = True
+    proc = job.get("_process")
+    if proc is not None:
+        try:
+            proc.terminate()
+        except Exception:
+            pass
+    if job["status"] == "queued":
+        job["status"] = "cancelled"
+        job["finished_at"] = time.time()
+    return {"status": "cancelling"}
+
+
+@app.post("/api/loras/upload-hf")
+def upload_lora_to_hf(req: HFLoraUploadRequest):
+    _require_unlocked()
+    repo = (req.hf_repo or "").strip()
+    if not repo or " " in repo or repo.startswith("/") or repo.endswith("/"):
+        raise HTTPException(400, "Enter a Hugging Face model repo id like username/kerry-qwen-lora")
+    token = req.hf_token or os.environ.get("HF_TOKEN")
+    if not token:
+        raise HTTPException(400, "A Hugging Face token with write access is required")
+
+    lora_path = _find_lora(req.filename)
+    if not lora_path or not lora_path.exists():
+        raise HTTPException(404, "LoRA not found")
+    try:
+        lora_path.resolve().relative_to(LORAS_DIR.resolve())
+    except ValueError:
+        raise HTTPException(400, "LoRA must be inside /workspace/loras")
+
+    meta_path = lora_path.with_suffix(lora_path.suffix + ".meta.json")
+    meta = {}
+    if meta_path.exists():
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        except Exception:
+            meta = {}
+
+    from huggingface_hub import HfApi
+
+    api = HfApi(token=token)
+    try:
+        api.create_repo(repo_id=repo, repo_type="model", private=bool(req.private), exist_ok=True)
+        commit = req.commit_message or f"Upload {lora_path.name}"
+        api.upload_file(
+            path_or_fileobj=str(lora_path),
+            path_in_repo=lora_path.name,
+            repo_id=repo,
+            repo_type="model",
+            commit_message=commit,
+        )
+        if meta_path.exists():
+            api.upload_file(
+                path_or_fileobj=str(meta_path),
+                path_in_repo=meta_path.name,
+                repo_id=repo,
+                repo_type="model",
+                commit_message="Upload Igglepixel metadata",
+            )
+        tags = ["lora", "qwen-image", "igglepixel"]
+        trigger = meta.get("trigger_phrase") or ""
+        base_model = meta.get("base_model") or ""
+        readme = "\n".join(
+            [
+                "---",
+                "tags:",
+                *[f"- {tag}" for tag in tags],
+                *(["base_model: " + base_model] if base_model else []),
+                "---",
+                "",
+                f"# {repo.split('/')[-1]}",
+                "",
+                "LoRA trained and exported from Igglepixel.",
+                "",
+                *(["Trigger phrase: `" + trigger + "`", ""] if trigger else []),
+                *(["Base model: `" + base_model + "`", ""] if base_model else []),
+                f"File: `{lora_path.name}`",
+                "",
+            ]
+        ).encode("utf-8")
+        api.upload_file(
+            path_or_fileobj=readme,
+            path_in_repo="README.md",
+            repo_id=repo,
+            repo_type="model",
+            commit_message="Add model card",
+        )
+    except Exception as e:
+        raise HTTPException(400, _format_hf_error(e))
+
+    return {
+        "status": "uploaded",
+        "repo": repo,
+        "filename": lora_path.name,
+        "url": f"https://huggingface.co/{repo}",
+    }
 
 
 # ── Assets ───────────────────────────────────────────────────────────────

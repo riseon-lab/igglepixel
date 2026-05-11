@@ -54,6 +54,10 @@ const state = {
   recents:       {},          // model_id -> [asset, …] (this session only)
   imgInputs:     {},          // { model_id -> { ref:{img,enabled}, pose:{...}, ... } }
   loraStates:    readJSONStorage('forge_lora_states', {}), // persisted per-model LoRA toggles + strengths
+  trainers:      [],
+  trainJobs:     [],
+  trainPoll:     null,
+  trainValidation: null,
   components:    [],          // installed split-file components: [{target, filename, size_mb, path}]
   runtimes:      {},          // { model_id -> {state: 'missing'|'installing'|'ready'|'error', last_line?, error?} }
   // HF browser + active download queue. The browser is a flat list of
@@ -467,6 +471,13 @@ const api = {
   status:        () => json(apiCall('/api/status')),
   loras:         () => json(apiCall('/api/loras')),
   assets:        () => json(apiCall('/api/assets', { timeoutMs: 8000 })),
+  trainers:      () => json(apiCall('/api/trainers')),
+  downloadTrainerDataset: (b) => json(apiCall('/api/trainers/datasets/download', jsonBody(b))),
+  validateTrainerDataset: (b) => json(apiCall('/api/trainers/validate', jsonBody(b))),
+  trainJobs:     () => json(apiCall('/api/train-jobs')),
+  startTrainJob: (b) => json(apiCall('/api/train-jobs', jsonBody(b))),
+  trainJob:      (id) => json(apiCall(`/api/train-jobs/${encodeURIComponent(id)}`)),
+  cancelTrainJob:(id) => json(apiCall(`/api/train-jobs/${encodeURIComponent(id)}`, { method: 'DELETE' })),
   // Lifecycle
   launch:        (b) => json(apiCall('/api/launch', jsonBody(b))),
   stop:          (id) => json(apiCall(`/api/stop/${id}`, { method: 'POST' })),
@@ -485,6 +496,7 @@ const api = {
   // Mutations
   deleteModel:   (id)   => json(apiCall(`/api/models/${id}`, { method: 'DELETE' })),
   deleteLora:    (fn)   => json(apiCall(`/api/loras/${encodeURIComponent(fn)}`, { method: 'DELETE' })),
+  uploadLoraHF:  (b)    => json(apiCall('/api/loras/upload-hf', jsonBody(b))),
   patchLora:     (fn, body) => json(apiCall(`/api/loras/${encodeURIComponent(fn)}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
@@ -593,7 +605,7 @@ async function bootApp() {
   }
   await ensureServiceWorker();   // register SW so <img> requests get decrypted
   await primeBrowserKey();       // hand the IDB-cached CryptoKey to the SW
-  await Promise.all([loadModels(), loadLoras(), loadAssets(), loadComponents()]);
+  await Promise.all([loadModels(), loadLoras(), loadAssets(), loadComponents(), loadTrainers()]);
   const initialView = window.location.hash.replace('#', '');
   const canRestoreView = initialView
     && initialView !== 'workspace'
@@ -980,6 +992,9 @@ function bindShell() {
   $('#hfDownloadBtn')?.addEventListener('click', startHFDownload);
   $('#hfBrowseBtn')?.addEventListener('click', () => openHFBrowser());
   $('#hfRepo')?.addEventListener('keydown', (e) => { if (e.key === 'Enter') openHFBrowser(); });
+  $('#trainerDatasetDownloadBtn')?.addEventListener('click', downloadTrainerDataset);
+  $('#trainerValidateBtn')?.addEventListener('click', validateTrainerDataset);
+  $('#trainerStartBtn')?.addEventListener('click', startTrainerJob);
   // HF Browser modal wiring. Each handler is null-safe so the modal works
   // even before any tab navigation has touched the markup.
   $('#hfBrowserClose')?.addEventListener('click', closeHFBrowser);
@@ -1005,7 +1020,7 @@ function bindShell() {
   });
   $('#hfBrowserDownload')?.addEventListener('click', submitHFBrowserDownload);
   $('#dlQueueClear')?.addEventListener('click', clearCompletedDownloads);
-  ['#settingsHFToken', '#wsHFToken', '#hfTokenDl'].forEach(sel => {
+  ['#settingsHFToken', '#wsHFToken', '#hfTokenDl', '#trainerHFToken'].forEach(sel => {
     $(sel)?.addEventListener('change', e => saveHFToken(e.target.value));
   });
 
@@ -1128,7 +1143,7 @@ function currentHFToken(selector) {
 
 function syncHFTokenInputs() {
   const token = state.settings.hf_token || '';
-  ['#settingsHFToken', '#drawerHFToken', '#wsHFToken', '#hfTokenDl'].forEach(sel => {
+  ['#settingsHFToken', '#drawerHFToken', '#wsHFToken', '#hfTokenDl', '#trainerHFToken'].forEach(sel => {
     const el = $(sel);
     if (el && el.value !== token) el.value = token;
   });
@@ -1153,6 +1168,10 @@ function switchView(name, push = true) {
   if (name === 'loras')   loadLoras();
   if (name === 'assets')  loadAssets();
   if (name === 'running') renderRunning();
+  if (name === 'trainers') {
+    loadTrainers();
+    pokeTrainerPoll();
+  }
   if (name === 'settings') renderModerationCard();
   if (name === 'downloads') {
     // Make the queue panel visible (or render the empty state) and wake the
@@ -4951,6 +4970,282 @@ function streamLogs(id, el) {
   es.onerror = () => es.close();
 }
 
+// ── Trainers ────────────────────────────────────────────────────────────
+async function loadTrainers() {
+  try {
+    const data = state.preview ? mockTrainers() : await api.trainers();
+    state.trainers = data.trainers || [];
+    state.trainJobs = data.jobs || state.trainJobs || [];
+  } catch {
+    state.trainers = [];
+    state.trainJobs = [];
+  }
+  renderTrainers();
+}
+
+function activeTrainer() {
+  return state.trainers.find(t => t.id === 'qwen-character-lora') || state.trainers[0] || null;
+}
+
+function trainerPayload() {
+  return {
+    trainer_id: 'qwen-character-lora',
+    dataset_path: $('#trainerDatasetPath')?.value.trim() || '',
+    output_name: $('#trainerOutputName')?.value.trim() || 'kerry_qwen_lora',
+    trigger_phrase: $('#trainerTriggerPhrase')?.value.trim() || 'A woman named Kerry',
+    base_model: $('#trainerBaseModel')?.value || 'Qwen/Qwen-Image',
+    steps: Number($('#trainerSteps')?.value || 2500),
+    rank: Number($('#trainerRank')?.value || 64),
+    learning_rate: Number($('#trainerLearningRate')?.value || 0.0002),
+    resolution: Number($('#trainerResolution')?.value || 1024),
+    batch_size: Number($('#trainerBatchSize')?.value || 1),
+    repeats: Number($('#trainerRepeats')?.value || 1),
+    hf_token: currentHFToken('#trainerHFToken') || null,
+  };
+}
+
+async function downloadTrainerDataset() {
+  const repo = $('#trainerDatasetRepo')?.value.trim() || '';
+  const target = $('#trainerDatasetTarget')?.value.trim() || repo.split('/').pop() || 'dataset';
+  const repoType = $('#trainerDatasetRepoType')?.value || 'dataset';
+  const btn = $('#trainerDatasetDownloadBtn');
+  if (!repo) return toast('Enter a Hugging Face dataset repo first.', 'error');
+  if (btn) {
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner"></span><span>Pulling…</span>';
+  }
+  try {
+    let res;
+    if (state.preview) {
+      await delay(450);
+      res = {
+        dataset_path: `datasets/${target}`,
+        scan: { valid: true, image_count: 80, caption_count: 80, pair_count: 80 },
+      };
+    } else {
+      res = await api.downloadTrainerDataset({
+        hf_repo: repo,
+        repo_type: repoType,
+        target_name: target,
+        hf_token: currentHFToken('#trainerHFToken') || null,
+      });
+    }
+    const pathInput = $('#trainerDatasetPath');
+    if (pathInput) pathInput.value = res.dataset_path || `datasets/${target}`;
+    state.trainValidation = res.scan || null;
+    renderTrainerDatasetSummary(state.trainValidation);
+    toast(state.trainValidation?.valid ? 'Dataset pulled and ready' : 'Dataset pulled; check captions', state.trainValidation?.valid ? 'success' : 'info');
+  } catch (e) {
+    toast(e.message || 'Dataset pull failed', 'error');
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.innerHTML = '<svg><use href="#i-down"/></svg>Pull dataset';
+    }
+  }
+}
+
+function renderTrainers() {
+  const trainer = activeTrainer();
+  const count = (state.trainJobs || []).filter(j => ['queued', 'running'].includes(j.status)).length;
+  const nav = $('#trainerNavCount');
+  if (nav) nav.textContent = count || '';
+  const configured = !!trainer?.configured || state.preview;
+  const sub = $('#trainerConfigState');
+  const tag = $('#trainerReadyTag');
+  if (sub) {
+    sub.textContent = configured
+      ? 'Trainer command configured'
+      : `Set ${trainer?.command_env || 'IGGLEPIXEL_QWEN_LORA_TRAIN_CMD'} on the pod`;
+  }
+  if (tag) {
+    tag.textContent = configured ? 'Ready' : 'Needs command';
+    tag.classList.toggle('solid', configured);
+  }
+  renderTrainerDatasetSummary(state.trainValidation);
+  renderTrainerJobs();
+}
+
+function renderTrainerDatasetSummary(summary) {
+  const root = $('#trainerDatasetSummary');
+  if (!root) return;
+  if (!summary) {
+    root.innerHTML = `<div class="empty" style="padding:18px">No validation yet.</div>`;
+    return;
+  }
+  const metric = (label, value) => `
+    <div class="trainer-metric">
+      <div class="label">${esc(label)}</div>
+      <div class="value">${esc(value)}</div>
+    </div>`;
+  const warnings = [];
+  if (summary.error) warnings.push(summary.error);
+  if ((summary.missing_captions || []).length) warnings.push(`Missing captions: ${summary.missing_captions.slice(0, 4).join(', ')}`);
+  if ((summary.orphan_captions || []).length) warnings.push(`Orphan captions: ${summary.orphan_captions.slice(0, 4).join(', ')}`);
+  if ((summary.empty_captions || []).length) warnings.push(`Empty captions: ${summary.empty_captions.slice(0, 4).join(', ')}`);
+  root.innerHTML = `
+    <div class="trainer-summary-grid">
+      ${metric('Images', summary.image_count ?? 0)}
+      ${metric('Captions', summary.caption_count ?? 0)}
+      ${metric('Pairs', summary.pair_count ?? 0)}
+    </div>
+    ${summary.valid ? `<div class="trainer-ok">Dataset is ready.</div>` : `<div class="trainer-warnings">${esc(warnings.join('\n') || 'Dataset is not ready.')}</div>`}
+  `;
+}
+
+async function validateTrainerDataset() {
+  const payload = trainerPayload();
+  const btn = $('#trainerValidateBtn');
+  if (btn) {
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner"></span><span>Validating…</span>';
+  }
+  try {
+    let summary;
+    if (state.preview) {
+      await delay(300);
+      summary = { valid: true, image_count: 80, caption_count: 80, pair_count: 80 };
+    } else {
+      summary = await api.validateTrainerDataset({ dataset_path: payload.dataset_path });
+    }
+    state.trainValidation = summary;
+    renderTrainerDatasetSummary(summary);
+    toast(summary.valid ? 'Dataset ready' : 'Dataset needs attention', summary.valid ? 'success' : 'error');
+  } catch (e) {
+    toast(e.message || 'Dataset validation failed', 'error');
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.innerHTML = '<svg><use href="#i-check"/></svg>Validate dataset';
+    }
+  }
+}
+
+async function startTrainerJob() {
+  const payload = trainerPayload();
+  const btn = $('#trainerStartBtn');
+  if (btn) {
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner"></span><span>Starting…</span>';
+  }
+  try {
+    if (state.preview) {
+      const job = {
+        id: 'preview-train-' + Date.now(),
+        status: 'running',
+        output_name: payload.output_name,
+        base_model: payload.base_model,
+        progress: 12,
+        log_tail: ['Preview training job started'],
+        created_at: Date.now() / 1000,
+      };
+      state.trainJobs = [job, ...state.trainJobs];
+      renderTrainerJobs();
+      pokeTrainerPoll();
+      toast('Training queued', 'success');
+      return;
+    }
+    const res = await api.startTrainJob(payload);
+    state.trainJobs = [res.job, ...state.trainJobs.filter(j => j.id !== res.job.id)];
+    renderTrainerJobs();
+    pokeTrainerPoll();
+    toast('Training queued', 'success');
+  } catch (e) {
+    toast(e.message || 'Training failed to start', 'error');
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.innerHTML = '<svg><use href="#i-bolt"/></svg>Start training';
+    }
+  }
+}
+
+function renderTrainerJobs() {
+  const root = $('#trainerJobList');
+  if (!root) return;
+  const jobs = state.trainJobs || [];
+  if (!jobs.length) {
+    root.innerHTML = `<div class="empty" style="padding:18px">No training jobs yet.</div>`;
+    return;
+  }
+  root.innerHTML = jobs.map(j => {
+    const progress = Math.max(0, Math.min(100, Number(j.progress || 0)));
+    const tail = (j.log_tail || []).slice(-8).join('\n');
+    const action = ['queued', 'running'].includes(j.status)
+      ? `<button class="btn sm danger" data-train-cancel="${esc(j.id)}">Cancel</button>`
+      : `<button class="btn sm" data-train-dismiss="${esc(j.id)}">Dismiss</button>`;
+    return `<div class="trainer-job">
+      <div class="trainer-job-head">
+        <div class="trainer-job-name" title="${esc(j.output_name || j.id)}">${esc(j.output_name || j.id)}</div>
+        <div class="trainer-job-status">${esc(j.status || 'unknown')}</div>
+      </div>
+      <div class="trainer-progress" style="--p:${progress}%"><span></span></div>
+      ${j.error ? `<div class="trainer-warnings">${esc(j.error)}</div>` : ''}
+      ${j.lora_filename ? `<div class="trainer-ok">Imported ${esc(j.lora_filename)}</div>` : ''}
+      ${tail ? `<div class="trainer-log">${esc(tail)}</div>` : ''}
+      <div class="trainer-actions">${action}</div>
+    </div>`;
+  }).join('');
+  root.querySelectorAll('[data-train-cancel],[data-train-dismiss]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const id = btn.dataset.trainCancel || btn.dataset.trainDismiss;
+      if (!id) return;
+      if (state.preview) {
+        state.trainJobs = state.trainJobs.filter(j => j.id !== id);
+        renderTrainerJobs();
+        return;
+      }
+      try {
+        await api.cancelTrainJob(id);
+        await refreshTrainerJobs();
+      } catch (e) {
+        toast(e.message || 'Could not update job', 'error');
+      }
+    });
+  });
+}
+
+async function refreshTrainerJobs() {
+  if (state.preview) {
+    state.trainJobs = (state.trainJobs || []).map(j => {
+      if (j.status !== 'running') return j;
+      const progress = Math.min(100, Number(j.progress || 0) + 18);
+      return {
+        ...j,
+        progress,
+        status: progress >= 100 ? 'done' : 'running',
+        lora_filename: progress >= 100 ? `${j.output_name}.safetensors` : j.lora_filename,
+        log_tail: [...(j.log_tail || []), progress >= 100 ? 'Preview LoRA imported' : `step ${Math.round(progress)}/100`],
+      };
+    });
+    renderTrainerJobs();
+    return;
+  }
+  try {
+    const data = await api.trainJobs();
+    const previousDone = new Set((state.trainJobs || []).filter(j => j.status === 'done').map(j => j.id));
+    state.trainJobs = data.jobs || [];
+    renderTrainerJobs();
+    if (state.trainJobs.some(j => j.status === 'done' && !previousDone.has(j.id))) {
+      await loadLoras();
+    }
+  } catch {}
+}
+
+function pokeTrainerPoll() {
+  if (state.trainPoll) clearTimeout(state.trainPoll);
+  const tick = async () => {
+    await refreshTrainerJobs();
+    const active = (state.trainJobs || []).some(j => ['queued', 'running'].includes(j.status));
+    if (active || state.view === 'trainers') {
+      state.trainPoll = setTimeout(tick, active ? 2500 : 6000);
+    } else {
+      state.trainPoll = null;
+    }
+  };
+  tick();
+}
+
 // ── LoRAs ────────────────────────────────────────────────────────────────
 async function loadLoras() {
   try {
@@ -5054,9 +5349,14 @@ function renderLoraPanel() {
         ${opt('high', 'high')}
         ${opt('low',  'low')}
       </select>
+      <button class="icon-btn" data-hf-upload="${fn}" title="Save to Hugging Face"><svg style="width:13px;height:13px"><use href="#i-upload"/></svg></button>
       <button class="del" data-del="${fn}" title="Delete"><svg style="width:13px;height:13px"><use href="#i-trash"/></svg></button>
     </div>`;
   }).join('');
+  list.querySelectorAll('[data-hf-upload]').forEach(b => b.addEventListener('click', () => {
+    const lora = state.loras.find(x => loraId(x) === b.dataset.hfUpload);
+    if (lora) openLoraHFUpload(lora);
+  }));
   list.querySelectorAll('[data-del]').forEach(b => b.addEventListener('click', async () => {
     if (!await confirmModal('Delete LoRA', `Delete ${b.dataset.del}?`, 'Delete', true)) return;
     await api.deleteLora(b.dataset.del);
@@ -5079,6 +5379,64 @@ function renderLoraPanel() {
       toast(`Failed to update target: ${e.message || 'unknown'}`, 'error');
     }
   }));
+}
+
+function openLoraHFUpload(lora) {
+  const id = loraId(lora);
+  const base = String(lora.filename || id || 'lora')
+    .replace(/\.safetensors$/i, '')
+    .replace(/[^a-z0-9._-]+/gi, '-')
+    .replace(/^-+|-+$/g, '')
+    .toLowerCase();
+  $('#modalTitle').textContent = 'Save LoRA to Hugging Face';
+  $('#modalMeta').textContent = lora.rel_path || lora.filename || id;
+  $('#modalBody').innerHTML = `
+    <div class="trainer-form compact">
+      <label class="field wide">
+        <span class="field-label">Model repo</span>
+        <input class="text-input" id="hfLoraRepo" placeholder="username/${esc(base || 'my-lora')}" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false">
+      </label>
+      <label class="field wide">
+        <span class="field-label">HF write token</span>
+        <input class="text-input mask-text" id="hfLoraToken" type="text" value="${esc(state.settings.hf_token || '')}" placeholder="hf_…" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false" data-1p-ignore="true" data-lpignore="true" data-bwignore="true" data-form-type="other">
+      </label>
+      <label class="field wide inline-check">
+        <input type="checkbox" id="hfLoraPrivate" checked>
+        <span>Private repo</span>
+      </label>
+    </div>`;
+  $('#modalFoot').innerHTML = `
+    <button class="btn ghost" id="modalCancel">Cancel</button>
+    <button class="btn primary" id="modalUpload"><svg><use href="#i-upload"/></svg>Save to HF</button>`;
+  $('#modalCancel').onclick = closeModal;
+  $('#modalUpload').onclick = async () => {
+    const repo = $('#hfLoraRepo')?.value.trim() || '';
+    if (!repo.includes('/')) return toast('Use a repo id like username/kerry-qwen-lora', 'error');
+    const btn = $('#modalUpload');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner"></span><span>Uploading…</span>';
+    try {
+      if (state.preview) {
+        await delay(500);
+        closeModal();
+        toast(`Saved to ${repo}`, 'success');
+        return;
+      }
+      const res = await api.uploadLoraHF({
+        filename: id,
+        hf_repo: repo,
+        private: !!$('#hfLoraPrivate')?.checked,
+        hf_token: currentHFToken('#hfLoraToken') || null,
+      });
+      closeModal();
+      toast(`Saved to ${res.repo}`, 'success');
+    } catch (e) {
+      toast(e.message || 'HF upload failed', 'error');
+      btn.disabled = false;
+      btn.innerHTML = '<svg><use href="#i-upload"/></svg>Save to HF';
+    }
+  };
+  openModal();
 }
 
 // ── CivitAI ──────────────────────────────────────────────────────────────
@@ -5956,6 +6314,26 @@ function mockModels() {
       ],
     },
   ];
+}
+
+function mockTrainers() {
+  return {
+    trainers: [
+      {
+        id: 'qwen-character-lora',
+        name: 'Qwen Character LoRA',
+        configured: true,
+        command_env: 'IGGLEPIXEL_QWEN_LORA_TRAIN_CMD',
+        base_models: [
+          { id: 'Qwen/Qwen-Image', label: 'Qwen-Image' },
+          { id: 'Qwen/Qwen-Image-2512', label: 'Qwen-Image-2512' },
+          { id: 'Qwen/Qwen-Image-Edit', label: 'Qwen-Image-Edit' },
+          { id: 'Qwen/Qwen-Image-Edit-2511', label: 'Qwen-Image-Edit 2511' },
+        ],
+      },
+    ],
+    jobs: state.trainJobs || [],
+  };
 }
 
 init().catch((err) => {

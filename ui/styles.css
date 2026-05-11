@@ -991,6 +991,8 @@ body::before {
 }
 .lora-row .name { font-family: var(--font-mono); font-size: 11px; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .lora-row .size { font-family: var(--font-mono); font-size: 10px; color: var(--t-3); }
+.lora-row .icon-btn { width: 22px; height: 22px; display: grid; place-items: center; color: var(--t-3); border-radius: var(--r-sm); }
+.lora-row .icon-btn:hover { color: var(--t-1); background: var(--hi); }
 .lora-row .del { width: 22px; height: 22px; display: grid; place-items: center; color: var(--t-3); border-radius: var(--r-sm); }
 .lora-row .del:hover { color: var(--bad); background: var(--hi); }
 
@@ -1176,7 +1178,12 @@ body::before {
   gap: 14px;
   align-items: start;
 }
-@media (max-width: 1100px) { .ws-grid { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 1100px) {
+  .ws-grid,
+  .trainer-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
 .ws-grid > * { min-width: 0; }
 
 .ws-section {
@@ -1205,6 +1212,161 @@ body::before {
   color: var(--t-4);
   text-transform: none;
   letter-spacing: 0;
+}
+
+/* ── Trainers ─────────────────────────────────────────────────────────── */
+.trainer-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 360px;
+  gap: 14px;
+  align-items: start;
+}
+.trainer-layout > * { min-width: 0; }
+.trainer-card {
+  background: var(--glass-1);
+  border: 1px solid var(--line-1);
+  border-radius: var(--r-lg);
+  padding: 14px;
+  min-width: 0;
+}
+.trainer-card-head,
+.trainer-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.trainer-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--t-1);
+}
+.trainer-sub {
+  margin-top: 3px;
+  font-size: 11.5px;
+  color: var(--t-3);
+}
+.trainer-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 14px;
+}
+.trainer-import {
+  margin-top: 14px;
+  border: 1px solid var(--line-1);
+  border-radius: var(--r-sm);
+  padding: 12px;
+  background: var(--glass-1);
+}
+.trainer-form.compact {
+  margin-top: 10px;
+}
+.trainer-form .wide { grid-column: 1 / -1; }
+.inline-check {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  color: var(--t-2);
+  font-size: 12px;
+}
+.trainer-actions {
+  justify-content: flex-end;
+  margin-top: 14px;
+}
+.trainer-side {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.trainer-summary,
+.trainer-job-list {
+  margin-top: 10px;
+}
+.trainer-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+.trainer-metric {
+  border: 1px solid var(--line-1);
+  border-radius: var(--r-sm);
+  background: var(--glass-1);
+  padding: 8px;
+}
+.trainer-metric .label {
+  color: var(--t-3);
+  font-size: 10px;
+  font-weight: 600;
+}
+.trainer-metric .value {
+  margin-top: 3px;
+  color: var(--t-1);
+  font-family: var(--font-mono);
+  font-size: 13px;
+}
+.trainer-warnings {
+  margin-top: 9px;
+  color: var(--warn);
+  font-size: 11.5px;
+  line-height: 1.45;
+}
+.trainer-ok {
+  margin-top: 9px;
+  color: var(--ok);
+  font-size: 11.5px;
+}
+.trainer-job {
+  border: 1px solid var(--line-1);
+  border-radius: var(--r-sm);
+  background: var(--glass-1);
+  padding: 10px;
+  margin-top: 8px;
+}
+.trainer-job:first-child { margin-top: 0; }
+.trainer-job-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.trainer-job-name {
+  font-size: 12.5px;
+  font-weight: 600;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.trainer-job-status {
+  color: var(--t-3);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+}
+.trainer-progress {
+  height: 4px;
+  border-radius: 999px;
+  background: var(--glass-3);
+  overflow: hidden;
+  margin-top: 8px;
+}
+.trainer-progress span {
+  display: block;
+  height: 100%;
+  width: var(--p, 0%);
+  background: var(--t-1);
+}
+.trainer-log {
+  margin-top: 8px;
+  color: var(--t-3);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  line-height: 1.45;
+  max-height: 96px;
+  overflow: auto;
+  white-space: pre-wrap;
 }
 .prompt-enhance-btn {
   font-size: 10.5px;
@@ -1936,6 +2098,11 @@ body::before {
   }
   .prompt-enhance-btn {
     margin-left: auto;
+  }
+  .trainer-layout,
+  .trainer-form,
+  .trainer-summary-grid {
+    grid-template-columns: minmax(0, 1fr);
   }
   .pb-section-grid {
     grid-template-columns: minmax(0, 1fr);
