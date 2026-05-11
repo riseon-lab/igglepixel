@@ -4,6 +4,7 @@ import hmac
 import hashlib
 import json
 import os
+import re
 import secrets
 import shlex
 import shutil
@@ -2528,10 +2529,76 @@ def _set_train_job_error(job: dict, message: str) -> None:
     job["finished_at"] = time.time()
 
 
+def _update_train_job_from_log(job: dict, req: TrainJobRequest, line: str) -> None:
+    lower = line.lower()
+
+    phase_markers = [
+        ("installing ai toolkit", "Installing trainer"),
+        ("cloning ai toolkit", "Installing trainer"),
+        ("loading checkpoint shards", "Loading base model"),
+        ("quantizing transformer", "Quantizing transformer"),
+        ("grabbing lora from the hub", "Loading quant adapter"),
+        ("create lora network", "Creating LoRA network"),
+        ("enable lora", "Creating LoRA network"),
+        ("cache latents", "Caching latents"),
+        ("caching latents", "Caching latents"),
+        ("cache text", "Caching captions"),
+        ("caching text", "Caching captions"),
+        ("starting ai toolkit training", "Starting training"),
+        ("starting trainer command", "Starting trainer"),
+    ]
+    for marker, phase in phase_markers:
+        if marker in lower:
+            job["phase"] = phase
+            break
+
+    setup_progress = {
+        "Installing trainer": 5,
+        "Starting trainer": 8,
+        "Loading base model": 15,
+        "Quantizing transformer": 22,
+        "Loading quant adapter": 26,
+        "Creating LoRA network": 30,
+        "Caching latents": 38,
+        "Caching captions": 45,
+        "Starting training": 50,
+    }
+    if job.get("phase") in setup_progress:
+        job["progress"] = max(float(job.get("progress", 0)), setup_progress[job["phase"]])
+
+    rank_match = re.search(r"base dim \(rank\):\s*(\d+),\s*alpha:\s*(\d+)", line, re.I)
+    if rank_match:
+        job["observed_rank"] = int(rank_match.group(1))
+        job["observed_alpha"] = int(rank_match.group(2))
+        if job["observed_rank"] != req.rank:
+            job["rank_warning"] = f"Trainer reported rank {job['observed_rank']} while UI requested rank {req.rank}"
+
+    percent_match = re.search(r"(\d{1,3})%\|", line)
+    if percent_match and "Loading base model" == job.get("phase"):
+        job["phase_progress"] = min(100, int(percent_match.group(1)))
+
+    for current, total in re.findall(r"(?<![\d.])(\d+)\s*/\s*(\d+)(?![\d.])", line):
+        cur = int(current)
+        tot = int(total)
+        if tot <= 0:
+            continue
+        if tot == req.steps or tot >= max(100, int(req.steps * 0.8)):
+            job["phase"] = "Training"
+            job["current_step"] = cur
+            job["total_steps"] = tot
+            job["phase_progress"] = min(100, round((cur / tot) * 100, 1))
+            job["progress"] = min(98, round(50 + 48 * (cur / tot), 1))
+            return
+        if "loading checkpoint shards" in lower:
+            job["phase"] = "Loading base model"
+            job["phase_progress"] = min(100, round((cur / tot) * 100, 1))
+
+
 def _run_train_job(job_id: str) -> None:
     job = train_jobs[job_id]
     req: TrainJobRequest = job["_request"]
     job["status"] = "running"
+    job["phase"] = "Validating dataset"
     job["started_at"] = time.time()
     job["log_tail"].append("Validating dataset")
 
@@ -2570,6 +2637,10 @@ def _run_train_job(job_id: str) -> None:
     job["manifest_path"] = str(manifest_path)
     job["output_dir"] = str(output_dir)
     job["log_tail"].append("Starting trainer command")
+    job["log_tail"].append(
+        f"Requested settings: rank {req.rank}, steps {req.steps}, lr {req.learning_rate}, "
+        f"resolution {req.resolution}, batch {req.batch_size}"
+    )
 
     env = os.environ.copy()
     if req.hf_token:
@@ -2611,16 +2682,7 @@ def _run_train_job(job_id: str) -> None:
                 continue
             job["log_tail"].append(line)
             job["log_tail"] = job["log_tail"][-120:]
-            # Best effort progress: many trainers print "step 123/2500".
-            lower = line.lower()
-            if "step" in lower and "/" in lower:
-                for token in lower.replace(",", " ").split():
-                    if "/" not in token:
-                        continue
-                    a, b = token.split("/", 1)
-                    if a.isdigit() and b.isdigit() and int(b) > 0:
-                        job["progress"] = min(100, round((int(a) / int(b)) * 100, 1))
-                        break
+            _update_train_job_from_log(job, req, line)
             if job.get("_cancel"):
                 proc.terminate()
                 job["status"] = "cancelled"
@@ -2666,6 +2728,7 @@ def _run_train_job(job_id: str) -> None:
         encoding="utf-8",
     )
     job["status"] = "done"
+    job["phase"] = "Done"
     job["progress"] = 100
     job["finished_at"] = time.time()
     job["lora_path"] = str(dest)

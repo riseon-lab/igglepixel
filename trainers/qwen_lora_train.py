@@ -158,6 +158,11 @@ def write_config(toolkit_dir: Path, dataset_dir: Path, output_dir: Path) -> Path
     grad_accum = int(float(os.environ.get("TRAIN_GRAD_ACCUM", "1")))
     save_every = max(250, min(1000, steps // 4 or 250))
     sample_prompt = f"{trigger}, portrait photo, natural skin texture, studio lighting" if trigger else "portrait photo, studio lighting"
+    log(
+        "Igglepixel training config: "
+        f"base_model={base_model}, trigger={trigger or '(none)'}, "
+        f"steps={steps}, rank={rank}, lr={lr}, resolution={resolution}, batch={batch_size}"
+    )
 
     output_dir.mkdir(parents=True, exist_ok=True)
     config_dir = output_dir / "configs"

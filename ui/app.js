@@ -5133,10 +5133,17 @@ async function startTrainerJob() {
       const job = {
         id: 'preview-train-' + Date.now(),
         status: 'running',
+        phase: 'Training',
         output_name: payload.output_name,
         base_model: payload.base_model,
+        steps: payload.steps,
+        rank: payload.rank,
+        learning_rate: payload.learning_rate,
+        resolution: payload.resolution,
+        current_step: 360,
+        total_steps: payload.steps,
         progress: 12,
-        log_tail: ['Preview training job started'],
+        log_tail: ['Preview training job started', `Requested settings: rank ${payload.rank}, steps ${payload.steps}, lr ${payload.learning_rate}, resolution ${payload.resolution}`],
         created_at: Date.now() / 1000,
       };
       state.trainJobs = [job, ...state.trainJobs];
@@ -5170,7 +5177,24 @@ function renderTrainerJobs() {
   }
   root.innerHTML = jobs.map(j => {
     const progress = Math.max(0, Math.min(100, Number(j.progress || 0)));
-    const tail = (j.log_tail || []).slice(-8).join('\n');
+    const tail = (j.log_tail || []).slice(-28).join('\n');
+    const phase = j.phase || j.status || 'unknown';
+    const stepText = j.current_step && j.total_steps
+      ? `${j.current_step}/${j.total_steps} steps`
+      : (j.steps ? `${j.steps} steps` : '');
+    const modelLabel = j.base_model ? String(j.base_model).replace('Qwen/', '') : '';
+    const detail = [
+      phase,
+      stepText,
+      j.rank ? `rank ${j.rank}` : '',
+      j.observed_rank && j.observed_rank !== j.rank ? `reported rank ${j.observed_rank}` : '',
+      j.learning_rate ? `lr ${j.learning_rate}` : '',
+      j.resolution ? `${j.resolution}px` : '',
+      modelLabel,
+    ].filter(Boolean).join(' · ');
+    const progressLabel = j.current_step && j.total_steps
+      ? `${progress.toFixed(progress % 1 ? 1 : 0)}% · ${j.current_step}/${j.total_steps}`
+      : `${progress.toFixed(progress % 1 ? 1 : 0)}%`;
     const action = ['queued', 'running'].includes(j.status)
       ? `<button class="btn sm danger" data-train-cancel="${esc(j.id)}">Cancel</button>`
       : `<button class="btn sm" data-train-dismiss="${esc(j.id)}">Dismiss</button>`;
@@ -5178,6 +5202,12 @@ function renderTrainerJobs() {
       <div class="trainer-job-head">
         <div class="trainer-job-name" title="${esc(j.output_name || j.id)}">${esc(j.output_name || j.id)}</div>
         <div class="trainer-job-status">${esc(j.status || 'unknown')}</div>
+      </div>
+      <div class="trainer-job-meta">${esc(detail)}</div>
+      ${j.rank_warning ? `<div class="trainer-warnings">${esc(j.rank_warning)}</div>` : ''}
+      <div class="trainer-progress-row">
+        <span>${esc(phase)}</span>
+        <span>${esc(progressLabel)}</span>
       </div>
       <div class="trainer-progress" style="--p:${progress}%"><span></span></div>
       ${j.error ? `<div class="trainer-warnings">${esc(j.error)}</div>` : ''}
@@ -5210,9 +5240,14 @@ async function refreshTrainerJobs() {
     state.trainJobs = (state.trainJobs || []).map(j => {
       if (j.status !== 'running') return j;
       const progress = Math.min(100, Number(j.progress || 0) + 18);
+      const total = Number(j.total_steps || j.steps || 3000);
+      const current = Math.min(total, Math.round((progress / 100) * total));
       return {
         ...j,
         progress,
+        phase: progress >= 100 ? 'Done' : 'Training',
+        current_step: current,
+        total_steps: total,
         status: progress >= 100 ? 'done' : 'running',
         lora_filename: progress >= 100 ? `${j.output_name}.safetensors` : j.lora_filename,
         log_tail: [...(j.log_tail || []), progress >= 100 ? 'Preview LoRA imported' : `step ${Math.round(progress)}/100`],
