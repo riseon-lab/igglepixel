@@ -89,7 +89,36 @@ def ensure_venv(toolkit_dir: Path) -> Path:
         stamp.write_text(str(time.time()), encoding="utf-8")
     else:
         log("AI Toolkit requirements already installed")
+    ensure_torchaudio(py)
     return py
+
+
+def py_import_ok(py: Path, module: str) -> bool:
+    probe = subprocess.run(
+        [str(py), "-c", f"import {module}"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    return probe.returncode == 0
+
+
+def torch_build(py: Path) -> tuple[str, str]:
+    code = "import torch; print(torch.__version__)"
+    proc = subprocess.run([str(py), "-c", code], capture_output=True, text=True, check=True)
+    version = proc.stdout.strip()
+    base, _, cuda = version.partition("+")
+    return base, cuda
+
+
+def ensure_torchaudio(py: Path) -> None:
+    if py_import_ok(py, "torchaudio"):
+        return
+    log("Installing torchaudio to satisfy AI Toolkit startup imports")
+    torch_version, cuda_suffix = torch_build(py)
+    cmd = [str(py), "-m", "pip", "install", f"torchaudio=={torch_version}"]
+    if cuda_suffix.startswith("cu"):
+        cmd.extend(["--index-url", f"https://download.pytorch.org/whl/{cuda_suffix}"])
+    run(cmd)
 
 
 def model_arch(base_model: str) -> str:
