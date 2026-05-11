@@ -637,7 +637,7 @@
       "param_groups": ["prompt", "generation", "dimensions", "reference"],
       "param_keys":   ["prompt", "seed", "steps", "cfg", "width", "height", "ref_image", "ref_strength"],
       "param_overrides": {
-        "steps":       { "default": 9,   "min": 1, "max": 16, "step": 1 },
+        "steps":       { "default": 9,   "min": 1, "max": 50, "step": 1 },
         "cfg":         { "default": 0.0, "min": 0, "max": 5,  "step": 0.1, "label": "Guidance" },
         "width":       { "default": 1024, "step": 16, "min": 512, "max": 2048 },
         "height":      { "default": 1024, "step": 16, "min": 512, "max": 2048 },

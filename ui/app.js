@@ -194,25 +194,115 @@ const DEFAULT_GROUPS_BY_CATEGORY = {
   audio: ['audio', 'server'],
 };
 
-const PROMPT_BUILDER_TEXT_FIELDS = [
-  { key: 'idea',       label: 'Core idea',    placeholder: 'person, product, place, creature...' },
-  { key: 'hairStyle',  label: 'Hair style',   placeholder: 'long wavy hair, short bob...' },
-  { key: 'hairColor',  label: 'Hair colour',  placeholder: 'black, auburn, platinum blonde...' },
-  { key: 'bodyType',   label: 'Body type',    placeholder: 'athletic, slim, broad build...' },
-  { key: 'outfit',     label: 'Outfit',       placeholder: 'oversized coat, formal suit...' },
-  { key: 'scene',      label: 'Scene',        placeholder: 'neon street, studio backdrop...' },
-  { key: 'props',      label: 'Props',        placeholder: 'umbrella, headphones, camera...' },
-  { key: 'action',     label: 'Action',       placeholder: 'walking, holding a drink...' },
-  { key: 'style',      label: 'Style / light',placeholder: 'natural light, cinematic, editorial...' },
+const COLOUR_OPTIONS = [
+  'black', 'white', 'ivory', 'cream', 'charcoal', 'silver', 'grey', 'navy', 'cobalt blue',
+  'sky blue', 'emerald green', 'forest green', 'olive', 'sage', 'red', 'burgundy', 'rose',
+  'pink', 'lavender', 'purple', 'mustard yellow', 'gold', 'copper', 'orange', 'rust',
+  'tan', 'camel', 'brown', 'transparent', 'iridescent', 'neon', 'pastel', 'monochrome'
 ];
 
-const PROMPT_BUILDER_CHIP_GROUPS = [
-  { key: 'pose', label: 'Pose', options: ['standing', 'sitting', 'walking', 'kneeling', 'leaning', 'lying down'] },
-  { key: 'distance', label: 'Subject distance', options: ['close-up', 'half body', 'full body', 'wide shot'] },
-  { key: 'camera', label: 'Camera position', options: ['eye-level', 'low angle', 'high angle', 'overhead', 'front view', '3/4 view', 'side profile', 'back view'] },
-  { key: 'head', label: 'Head direction', options: ['looking at camera', 'looking left', 'looking right', 'looking up', 'looking down'] },
-  { key: 'bodyAxis', label: 'Body facing', options: ['facing camera', 'turned left', 'turned right', 'back-facing'] },
-  { key: 'orientation', label: 'Orientation', options: ['upright subject', 'natural gravity', 'centred subject'] },
+const MATERIAL_OPTIONS = [
+  'cotton', 'linen', 'silk', 'satin', 'velvet', 'chiffon', 'lace', 'wool', 'cashmere',
+  'denim', 'leather', 'suede', 'latex', 'vinyl', 'mesh', 'organza', 'tulle', 'knit',
+  'ribbed fabric', 'technical nylon', 'waterproof fabric', 'metallic fabric', 'sequins',
+  'embroidered fabric', 'sheer fabric', 'matte fabric', 'glossy fabric', 'distressed fabric'
+];
+
+const PROMPT_BUILDER_SECTIONS = [
+  {
+    id: 'subject',
+    title: 'Subject',
+    fields: [
+      { key: 'idea', label: 'Core idea', type: 'textarea', wide: true, placeholder: 'person, product, place, creature, character, object...' },
+      { key: 'subjectCount', label: 'Subjects', type: 'select', options: ['single subject', 'two subjects', 'small group', 'crowd', 'subject with pet', 'subject with vehicle'] },
+      { key: 'presentation', label: 'Presentation', type: 'select', options: ['feminine presentation', 'masculine presentation', 'androgynous presentation', 'gender-neutral styling', 'fashion model look', 'everyday person look', 'fantasy character look'] },
+      { key: 'age', label: 'Age', type: 'select', options: ['adult 18-24', 'adult 25-34', 'adult 35-44', 'adult 45-54', 'adult 55-64', 'senior adult', 'elderly adult', 'ageless fantasy character'] },
+      { key: 'bodyType', label: 'Body type', type: 'select', options: ['slim build', 'lean build', 'athletic build', 'toned build', 'muscular build', 'soft build', 'curvy build', 'plus-size build', 'broad-shouldered build', 'petite build', 'tall build', 'average build'] },
+      { key: 'posture', label: 'Posture', type: 'select', options: ['relaxed posture', 'confident posture', 'upright posture', 'casual slouch', 'elegant posture', 'dynamic posture', 'balanced stance', 'contrapposto stance'] },
+      { key: 'subjectDetail', label: 'Extra subject detail', type: 'text', wide: true, placeholder: 'distinctive silhouette, era, occupation, character notes...' },
+    ],
+  },
+  {
+    id: 'face-hair',
+    title: 'Face, Hair, Details',
+    fields: [
+      { key: 'expression', label: 'Expression', type: 'select', options: ['neutral expression', 'soft smile', 'wide smile', 'serious expression', 'confident expression', 'pensive expression', 'curious expression', 'surprised expression', 'dreamy expression', 'intense gaze', 'laughing', 'subtle smirk', 'calm expression', 'melancholic expression'] },
+      { key: 'head', label: 'Head direction', type: 'select', options: ['looking at camera', 'looking left', 'looking right', 'looking up', 'looking down', 'looking over shoulder', 'eyes closed', 'gaze off-frame', 'chin lifted', 'chin lowered'] },
+      { key: 'hairColor', label: 'Hair colour', type: 'select', options: ['black hair', 'dark brown hair', 'brown hair', 'chestnut hair', 'auburn hair', 'red hair', 'ginger hair', 'copper hair', 'blonde hair', 'platinum blonde hair', 'silver hair', 'grey hair', 'white hair', 'pastel pink hair', 'blue hair', 'green hair', 'purple hair', 'two-tone hair', 'balayage hair', 'shaved head', 'bald head'] },
+      { key: 'hairStyle', label: 'Hair style', type: 'select', options: ['long straight hair', 'long wavy hair', 'long curly hair', 'short bob', 'pixie cut', 'buzz cut', 'undercut', 'slicked-back hair', 'messy hair', 'braided hair', 'box braids', 'cornrows', 'high ponytail', 'low ponytail', 'bun', 'space buns', 'afro', 'locs', 'wet-look hair', 'windblown hair', 'fringe bangs', 'curtain bangs'] },
+      { key: 'makeup', label: 'Make-up', type: 'select', options: ['no visible make-up', 'natural make-up', 'soft glam make-up', 'editorial make-up', 'smoky eye make-up', 'winged eyeliner', 'glossy lips', 'matte lips', 'bold red lip', 'metallic eye shadow', 'glitter make-up', 'goth make-up', 'avant-garde face paint', 'dewy skin finish'] },
+      { key: 'piercings', label: 'Piercings', type: 'select', options: ['no piercings visible', 'ear piercings', 'multiple ear piercings', 'nose ring', 'septum piercing', 'lip piercing', 'eyebrow piercing', 'industrial piercing', 'facial piercing set', 'minimal jewellery piercings'] },
+      { key: 'tattoos', label: 'Tattoos / marks', type: 'select', options: ['no visible tattoos', 'small tattoos', 'sleeve tattoo', 'neck tattoo', 'hand tattoos', 'delicate line tattoos', 'geometric tattoos', 'floral tattoos', 'freckles', 'beauty mark', 'scars', 'birthmark'] },
+      { key: 'faceDetail', label: 'Extra face detail', type: 'text', wide: true, placeholder: 'eye colour, freckles, facial hair, skin finish, jewellery detail...' },
+    ],
+  },
+  {
+    id: 'wardrobe',
+    title: 'Wardrobe',
+    fields: [
+      { key: 'outfit', label: 'Full outfit', type: 'select', options: ['tailored suit', 'evening gown', 'cocktail dress', 'streetwear outfit', 'casual outfit', 'athleisure outfit', 'workwear outfit', 'bohemian outfit', 'punk outfit', 'goth outfit', 'cyberpunk outfit', 'sci-fi armour', 'fantasy robe', 'formal uniform', 'raincoat outfit', 'winter outfit', 'summer outfit', 'swimwear outfit', 'festival outfit'] },
+      { key: 'fullColor', label: 'Full colour', type: 'select', options: COLOUR_OPTIONS },
+      { key: 'fullMaterial', label: 'Full material', type: 'select', options: MATERIAL_OPTIONS },
+      { key: 'topGarment', label: 'Top', type: 'select', options: ['t-shirt', 'tank top', 'crop top', 'button-up shirt', 'blouse', 'hoodie', 'sweater', 'cardigan', 'blazer', 'bomber jacket', 'leather jacket', 'denim jacket', 'trench coat', 'corset top', 'turtleneck', 'kimono jacket', 'sports jersey', 'utility vest'] },
+      { key: 'topColor', label: 'Top colour', type: 'select', options: COLOUR_OPTIONS },
+      { key: 'topMaterial', label: 'Top material', type: 'select', options: MATERIAL_OPTIONS },
+      { key: 'bottomGarment', label: 'Bottom', type: 'select', options: ['jeans', 'wide-leg trousers', 'tailored trousers', 'cargo pants', 'shorts', 'mini skirt', 'midi skirt', 'maxi skirt', 'pleated skirt', 'pencil skirt', 'leggings', 'joggers', 'leather pants', 'utility skirt', 'flowing fabric pants'] },
+      { key: 'bottomColor', label: 'Bottom colour', type: 'select', options: COLOUR_OPTIONS },
+      { key: 'bottomMaterial', label: 'Bottom material', type: 'select', options: MATERIAL_OPTIONS },
+      { key: 'accessories', label: 'Accessories', type: 'select', options: ['no accessories', 'minimal jewellery', 'statement earrings', 'layered necklaces', 'rings', 'bracelets', 'watch', 'belt', 'gloves', 'scarf', 'hat', 'beanie', 'baseball cap', 'sunglasses', 'eyeglasses', 'handbag', 'backpack', 'crossbody bag', 'umbrella', 'headphones'] },
+      { key: 'shoes', label: 'Shoes', type: 'select', options: ['barefoot', 'white sneakers', 'black boots', 'ankle boots', 'knee-high boots', 'combat boots', 'loafers', 'dress shoes', 'heels', 'platform heels', 'sandals', 'running shoes', 'hiking boots', 'futuristic shoes', 'delicate flats'] },
+      { key: 'shoeColor', label: 'Shoe colour', type: 'select', options: COLOUR_OPTIONS },
+      { key: 'clothingDetail', label: 'Extra clothing detail', type: 'text', wide: true, placeholder: 'fit, layering, patterns, logos to avoid, wear level, styling notes...' },
+    ],
+  },
+  {
+    id: 'scene',
+    title: 'Scene',
+    fields: [
+      { key: 'scene', label: 'Scene', type: 'select', options: ['studio backdrop', 'minimal interior', 'luxury apartment', 'bedroom', 'kitchen', 'office', 'workshop', 'gallery', 'museum', 'library', 'cafe', 'restaurant', 'hotel lobby', 'rooftop', 'city street', 'neon alley', 'subway station', 'train platform', 'parking garage', 'forest', 'beach', 'desert', 'mountain path', 'rainy street', 'snowy landscape', 'futuristic city', 'medieval village', 'spaceship interior', 'fantasy castle', 'concert stage'] },
+      { key: 'timeOfDay', label: 'Time', type: 'select', options: ['early morning', 'golden hour', 'midday', 'late afternoon', 'sunset', 'blue hour', 'night', 'midnight', 'overcast day'] },
+      { key: 'weather', label: 'Weather', type: 'select', options: ['clear weather', 'light rain', 'heavy rain', 'mist', 'fog', 'snow', 'wind', 'storm clouds', 'humid haze', 'dust in the air'] },
+      { key: 'background', label: 'Background', type: 'select', options: ['clean background', 'soft blurred background', 'busy detailed background', 'architectural background', 'natural landscape background', 'industrial background', 'luxury background', 'cluttered lived-in background', 'symmetrical background', 'deep background layers'] },
+      { key: 'props', label: 'Props', type: 'select', options: ['no props', 'flowers', 'book', 'phone', 'camera', 'laptop', 'microphone', 'musical instrument', 'coffee cup', 'drink glass', 'sword', 'tool kit', 'sports equipment', 'shopping bags', 'vehicle', 'chair', 'mirror', 'neon sign', 'smoke machine', 'floating objects'] },
+      { key: 'sceneDetail', label: 'Extra scene detail', type: 'text', wide: true, placeholder: 'set dressing, background objects, era, location specifics...' },
+    ],
+  },
+  {
+    id: 'pose-action',
+    title: 'Pose & Action',
+    fields: [
+      { key: 'pose', label: 'Pose', type: 'select', options: ['standing', 'sitting', 'walking', 'running', 'kneeling', 'crouching', 'leaning', 'lying down', 'jumping', 'dancing', 'turning around', 'over-the-shoulder pose', 'crossed arms', 'hands in pockets', 'one hand on hip', 'arms raised', 'reaching forward', 'resting on chair', 'mid-stride', 'balanced action pose'] },
+      { key: 'bodyAxis', label: 'Body facing', type: 'select', options: ['facing camera', '3/4 view', 'side profile', 'back-facing', 'turned left', 'turned right', 'twisted torso', 'diagonal body line', 'centred subject', 'off-centre subject'] },
+      { key: 'handPose', label: 'Hands', type: 'select', options: ['relaxed hands', 'hands visible', 'hands clasped', 'holding object', 'touching face', 'adjusting hair', 'adjusting jacket', 'pointing', 'reaching', 'waving', 'one hand raised', 'hands behind back', 'hands in pockets'] },
+      { key: 'action', label: 'Action', type: 'select', options: ['standing still', 'walking toward camera', 'walking away', 'turning to camera', 'talking', 'laughing', 'reading', 'writing', 'typing', 'taking a photo', 'holding a drink', 'playing music', 'dancing', 'stretching', 'looking through a window', 'opening a door', 'climbing stairs', 'riding a bike', 'driving', 'casting a spell', 'fighting stance', 'floating', 'running through rain'] },
+      { key: 'motion', label: 'Motion feel', type: 'select', options: ['frozen moment', 'subtle movement', 'natural motion blur', 'dynamic motion', 'wind in clothing', 'hair moving in wind', 'fabric flowing', 'splashing water', 'floating particles', 'cinematic stillness'] },
+      { key: 'actionDetail', label: 'Extra action detail', type: 'text', wide: true, placeholder: 'gesture, interaction, object being used, exact body language...' },
+    ],
+  },
+  {
+    id: 'camera',
+    title: 'Camera',
+    fields: [
+      { key: 'distance', label: 'Subject distance', type: 'select', options: ['extreme close-up', 'close-up', 'headshot', 'bust shot', 'waist-up shot', 'half body', 'three-quarter body', 'full body', 'wide shot', 'extreme wide shot'] },
+      { key: 'camera', label: 'Camera angle', type: 'select', options: ['eye-level angle', 'low angle', 'high angle', 'overhead angle', 'worm-eye view', 'Dutch angle', 'front view', '3/4 camera view', 'side profile view', 'back view', 'over-the-shoulder view', 'point-of-view shot'] },
+      { key: 'lens', label: 'Lens', type: 'select', options: ['24mm wide-angle lens', '35mm documentary lens', '50mm natural lens', '85mm portrait lens', '100mm macro lens', '135mm telephoto lens', 'anamorphic lens', 'fisheye lens', 'tilt-shift lens', 'macro close-up lens'] },
+      { key: 'framing', label: 'Framing', type: 'select', options: ['centred composition', 'rule of thirds', 'symmetrical framing', 'negative space', 'tight crop', 'loose crop', 'environmental portrait framing', 'foreground frame', 'layered foreground', 'leading lines', 'diagonal composition'] },
+      { key: 'depthOfField', label: 'Depth of field', type: 'select', options: ['deep focus', 'shallow depth of field', 'creamy bokeh', 'background separation', 'foreground blur', 'rack focus feel', 'macro depth of field'] },
+      { key: 'cameraMove', label: 'Video camera move', type: 'select', categories: ['video'], options: ['static camera', 'slow push-in', 'slow pull-back', 'tracking shot', 'orbit shot', 'handheld camera', 'crane up', 'pan left', 'pan right', 'tilt up', 'tilt down', 'locked-off tripod shot'] },
+    ],
+  },
+  {
+    id: 'lighting-style',
+    title: 'Lighting & Style',
+    fields: [
+      { key: 'lighting', label: 'Lighting', type: 'select', options: ['soft natural light', 'hard sunlight', 'golden hour light', 'blue hour light', 'studio softbox lighting', 'ring light', 'window light', 'neon lighting', 'practical lamp light', 'candlelight', 'moonlight', 'backlit silhouette', 'rim lighting', 'volumetric light beams', 'flash photography lighting'] },
+      { key: 'exposure', label: 'Exposure', type: 'select', options: ['balanced exposure', 'underexposed shadows', 'overexposed highlights', 'high-key exposure', 'low-key exposure', 'silhouette exposure', 'HDR tonal range', 'film-like contrast'] },
+      { key: 'colourGrade', label: 'Colour grade', type: 'select', options: ['natural colour grade', 'cinematic teal and amber', 'warm colour grade', 'cool colour grade', 'muted colours', 'high saturation', 'pastel palette', 'monochrome black and white', 'sepia tone', 'bleach bypass', 'Aerochrome false-colour infrared', 'neon cyberpunk palette', 'earth-tone palette'] },
+      { key: 'style', label: 'Style', type: 'select', options: ['photorealistic', 'editorial fashion photography', 'cinematic film still', 'documentary photography', 'street photography', 'luxury campaign', 'beauty campaign', 'commercial product style', 'fine art portrait', 'dark fantasy', 'high fantasy', 'sci-fi concept art', 'anime style', 'graphic novel style', 'oil painting', 'watercolour illustration', '3D render', 'clay render'] },
+      { key: 'finish', label: 'Finish', type: 'select', options: ['ultra-detailed', 'clean realistic detail', 'soft film grain', 'sharp crisp detail', 'dreamy soft focus', 'gritty texture', 'polished commercial finish', 'matte finish', 'glossy finish', 'subtle haze', 'high contrast detail'] },
+      { key: 'styleDetail', label: 'Extra style detail', type: 'text', wide: true, placeholder: 'artist-free aesthetic notes, texture, mood, production design...' },
+    ],
+  },
 ];
 
 const DEFAULT_NEGATIVE_PROMPT =
@@ -3895,43 +3985,57 @@ function renderPromptBuilder(m) {
     return;
   }
   const values = promptBuilderForModel(m);
-  const textFields = PROMPT_BUILDER_TEXT_FIELDS.map(f => `
-    <label class="pb-field">
-      <span>${esc(f.label)}</span>
-      <input class="text-input" data-pb-text="${esc(f.key)}" value="${esc(values[f.key] || '')}" placeholder="${esc(f.placeholder)}">
-    </label>
-  `).join('');
-  const chipGroups = PROMPT_BUILDER_CHIP_GROUPS.map(g => `
-    <div class="pb-chip-group">
-      <div class="pb-chip-label">${esc(g.label)}</div>
-      <div class="pb-chips">
-        ${g.options.map(opt => {
-          const active = values[g.key] === opt;
-          return `<button type="button" class="pb-chip ${active ? 'active' : ''}" data-pb-chip="${esc(g.key)}" data-pb-value="${esc(opt)}">${esc(opt)}</button>`;
-        }).join('')}
+  const sections = PROMPT_BUILDER_SECTIONS.map(section => {
+    const fields = section.fields.filter(f => !f.categories || f.categories.includes(m.category));
+    if (!fields.length) return '';
+    return `
+    <section class="pb-section">
+      <div class="pb-section-title">${esc(section.title)}</div>
+      <div class="pb-section-grid">
+        ${fields.map(f => renderPromptBuilderControl(f, values)).join('')}
       </div>
-    </div>
-  `).join('');
+    </section>
+  `;
+  }).join('');
   root.innerHTML = `
-    <div class="pb-grid">${textFields}</div>
-    <div class="pb-control-grid">${chipGroups}</div>
+    <div class="pb-stack">${sections}</div>
     <div class="pb-preview">
       <div class="pb-preview-label">Compiled prompt</div>
       <div class="pb-preview-text" id="wsPromptBuilderPreview">${esc(compilePromptBuilder(m) || 'Fill in a few fields to build the generation prompt.')}</div>
     </div>
   `;
-  $$('[data-pb-text]', root).forEach(input => input.addEventListener('input', () => {
-    values[input.dataset.pbText] = input.value;
+  $$('[data-pb-key]', root).forEach(input => input.addEventListener(input.tagName === 'SELECT' ? 'change' : 'input', () => {
+    values[input.dataset.pbKey] = input.value;
     savePromptBuilderState();
     updatePromptBuilderPreview(m);
   }));
-  $$('[data-pb-chip]', root).forEach(btn => btn.addEventListener('click', () => {
-    const key = btn.dataset.pbChip;
-    const value = btn.dataset.pbValue;
-    values[key] = values[key] === value ? '' : value;
-    savePromptBuilderState();
-    renderPromptBuilder(m);
-  }));
+}
+
+function renderPromptBuilderControl(f, values) {
+  const value = String(values[f.key] || '');
+  const cls = `pb-field ${f.wide ? 'wide' : ''}`;
+  if (f.type === 'textarea') {
+    return `<label class="${cls}">
+      <span>${esc(f.label)}</span>
+      <textarea class="textarea" data-pb-key="${esc(f.key)}" placeholder="${esc(f.placeholder || '')}">${esc(value)}</textarea>
+    </label>`;
+  }
+  if (f.type === 'select') {
+    const options = Array.isArray(f.options) ? f.options : [];
+    const hasStoredCustom = value && !options.includes(value);
+    return `<label class="${cls}">
+      <span>${esc(f.label)}</span>
+      <select class="select" data-pb-key="${esc(f.key)}">
+        <option value="">Any / unset</option>
+        ${hasStoredCustom ? `<option value="${esc(value)}" selected>${esc(value)}</option>` : ''}
+        ${options.map(opt => `<option value="${esc(opt)}" ${opt === value ? 'selected' : ''}>${esc(opt)}</option>`).join('')}
+      </select>
+    </label>`;
+  }
+  return `<label class="${cls}">
+    <span>${esc(f.label)}</span>
+    <input class="text-input" data-pb-key="${esc(f.key)}" value="${esc(value)}" placeholder="${esc(f.placeholder || '')}">
+  </label>`;
 }
 
 function updatePromptBuilderPreview(m) {
@@ -3942,16 +4046,85 @@ function updatePromptBuilderPreview(m) {
 
 function compilePromptBuilder(m = state.selected) {
   const values = promptBuilderForModel(m);
-  const parts = [];
-  for (const f of PROMPT_BUILDER_TEXT_FIELDS) {
-    const value = String(values[f.key] || '').trim();
-    if (value) parts.push(value);
-  }
-  for (const g of PROMPT_BUILDER_CHIP_GROUPS) {
-    const value = String(values[g.key] || '').trim();
-    if (value) parts.push(value);
-  }
-  return parts.join(', ');
+  const clean = (key) => String(values[key] || '').replace(/\s+/g, ' ').trim();
+  const add = (parts, label, key) => {
+    const value = clean(key);
+    if (value) parts.push(`${label}: ${value}`);
+  };
+  const addCombined = (parts, label, keys) => {
+    const value = keys.map(clean).filter(Boolean).join(' ');
+    if (value) parts.push(`${label}: ${value}`);
+  };
+  const sectionText = (label, parts) => parts.length ? `${label}: ${parts.join('; ')}` : '';
+
+  const subject = [];
+  add(subject, 'core idea', 'idea');
+  add(subject, 'subjects', 'subjectCount');
+  add(subject, 'presentation', 'presentation');
+  add(subject, 'age', 'age');
+  add(subject, 'body type', 'bodyType');
+  add(subject, 'posture', 'posture');
+  add(subject, 'extra detail', 'subjectDetail');
+
+  const faceHair = [];
+  add(faceHair, 'expression', 'expression');
+  add(faceHair, 'head direction', 'head');
+  add(faceHair, 'hair colour', 'hairColor');
+  add(faceHair, 'hair style', 'hairStyle');
+  add(faceHair, 'make-up', 'makeup');
+  add(faceHair, 'piercings', 'piercings');
+  add(faceHair, 'tattoos or marks', 'tattoos');
+  add(faceHair, 'extra face detail', 'faceDetail');
+
+  const wardrobe = [];
+  addCombined(wardrobe, 'full outfit', ['fullColor', 'fullMaterial', 'outfit']);
+  addCombined(wardrobe, 'top', ['topColor', 'topMaterial', 'topGarment']);
+  addCombined(wardrobe, 'bottom', ['bottomColor', 'bottomMaterial', 'bottomGarment']);
+  addCombined(wardrobe, 'shoes', ['shoeColor', 'shoes']);
+  add(wardrobe, 'accessories', 'accessories');
+  add(wardrobe, 'extra clothing detail', 'clothingDetail');
+
+  const scene = [];
+  add(scene, 'location', 'scene');
+  add(scene, 'time', 'timeOfDay');
+  add(scene, 'weather', 'weather');
+  add(scene, 'background', 'background');
+  add(scene, 'props', 'props');
+  add(scene, 'extra scene detail', 'sceneDetail');
+
+  const poseAction = [];
+  add(poseAction, 'pose', 'pose');
+  add(poseAction, 'body facing', 'bodyAxis');
+  add(poseAction, 'hands', 'handPose');
+  add(poseAction, 'action', 'action');
+  add(poseAction, 'motion feel', 'motion');
+  add(poseAction, 'extra action detail', 'actionDetail');
+
+  const camera = [];
+  add(camera, 'subject distance', 'distance');
+  add(camera, 'camera angle', 'camera');
+  add(camera, 'lens', 'lens');
+  add(camera, 'framing', 'framing');
+  add(camera, 'depth of field', 'depthOfField');
+  if (m?.category === 'video') add(camera, 'camera move', 'cameraMove');
+
+  const lightingStyle = [];
+  add(lightingStyle, 'lighting', 'lighting');
+  add(lightingStyle, 'exposure', 'exposure');
+  add(lightingStyle, 'colour grade', 'colourGrade');
+  add(lightingStyle, 'style', 'style');
+  add(lightingStyle, 'finish', 'finish');
+  add(lightingStyle, 'extra style detail', 'styleDetail');
+
+  return [
+    sectionText('Subject', subject),
+    sectionText('Face and hair', faceHair),
+    sectionText('Wardrobe', wardrobe),
+    sectionText('Scene', scene),
+    sectionText('Pose and action', poseAction),
+    sectionText('Camera', camera),
+    sectionText('Lighting and style', lightingStyle),
+  ].filter(Boolean).join('. ');
 }
 
 function currentWorkspacePrompt() {
