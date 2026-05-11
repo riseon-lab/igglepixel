@@ -231,6 +231,7 @@ config:
 """
     config_path.write_text(config, encoding="utf-8")
     log(f"Wrote AI Toolkit config: {config_path}")
+    log(f"AI Toolkit network rank written: linear={rank}, linear_alpha={rank}")
     return config_path
 
 

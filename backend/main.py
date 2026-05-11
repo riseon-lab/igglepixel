@@ -2428,6 +2428,8 @@ def _scan_training_dataset(dataset_dir: Path) -> dict:
 
 
 def _trainer_command() -> str:
+    if QWEN_TRAINER_SCRIPT.exists() and not _truthy_env("IGGLEPIXEL_USE_CUSTOM_QWEN_LORA_TRAIN_CMD"):
+        return f"{shlex.quote(sys.executable)} {shlex.quote(str(QWEN_TRAINER_SCRIPT))}"
     command = os.environ.get(QWEN_TRAINER_COMMAND_ENV, "").strip()
     if command:
         return command
