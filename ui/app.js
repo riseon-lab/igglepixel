@@ -4758,6 +4758,8 @@ function _renderLightbox() {
     ? `${_lightboxIdx + 1} / ${_lightboxList.length} · ${asset.name || asset.path || ''}`
     : (asset.name || asset.path || '');
   const stage = $('#lightboxStage');
+  stage.classList.remove('portrait-media', 'landscape-media');
+  stage.style.removeProperty('--asset-ratio');
   const u = esc(asset.url);
   const navArrows = (_lightboxList && _lightboxList.length > 1) ? `
     <button class="lightbox-nav prev" id="lightboxPrev" aria-label="Previous">‹</button>
@@ -4772,7 +4774,24 @@ function _renderLightbox() {
            <audio src="${u}" controls autoplay preload="metadata"></audio>
          </div>`
       : `<img src="${u}" alt="${esc(asset.name || '')}">`) + navArrows;
-  $('#lightboxFoot').textContent = asset.path || '';
+  const foot = $('#lightboxFoot');
+  foot.textContent = asset.path || '';
+  foot.title = asset.path || '';
+  const media = stage.querySelector('img, video');
+  if (media) {
+    const applyRatio = () => {
+      const w = media.videoWidth || media.naturalWidth;
+      const h = media.videoHeight || media.naturalHeight;
+      if (!w || !h) return;
+      stage.style.setProperty('--asset-ratio', `${w} / ${h}`);
+      stage.classList.toggle('portrait-media', h > w * 1.15);
+      stage.classList.toggle('landscape-media', w > h * 1.35);
+      foot.textContent = asset.path ? `${asset.path} · ${w}×${h}` : `${w}×${h}`;
+      foot.title = foot.textContent;
+    };
+    applyRatio();
+    media.addEventListener(media.tagName === 'VIDEO' ? 'loadedmetadata' : 'load', applyRatio, { once: true });
+  }
   $('#lightboxDownload').onclick = () => {
     downloadAsset(asset);
   };
