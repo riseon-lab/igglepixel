@@ -2300,8 +2300,8 @@ TRAINER_ID_QWEN_CHARACTER = "qwen-character-lora"
 QWEN_TRAINER_COMMAND_ENV = "IGGLEPIXEL_QWEN_LORA_TRAIN_CMD"
 QWEN_TRAINER_SCRIPT = BASE_DIR / "trainers" / "qwen_lora_train.py"
 QWEN_TRAINER_BASE_MODELS = (
-    "Qwen/Qwen-Image",
     "Qwen/Qwen-Image-2512",
+    "Qwen/Qwen-Image",
     "Qwen/Qwen-Image-Edit",
     "Qwen/Qwen-Image-Edit-2511",
 )
@@ -2325,7 +2325,7 @@ class TrainJobRequest(BaseModel):
     dataset_path: str
     output_name: str = "kerry_qwen_lora"
     trigger_phrase: str = "A woman named Kerry"
-    base_model: str = "Qwen/Qwen-Image"
+    base_model: str = "Qwen/Qwen-Image-2512"
     steps: int = 3000
     rank: int = 64
     learning_rate: float = 0.0002
@@ -2533,6 +2533,8 @@ def _set_train_job_error(job: dict, message: str) -> None:
 
 def _update_train_job_from_log(job: dict, req: TrainJobRequest, line: str) -> None:
     lower = line.lower()
+    if "grabbing lora from the hub" in lower:
+        job["_next_rank_is_quant_adapter"] = True
 
     phase_markers = [
         ("installing ai toolkit", "Installing trainer"),
@@ -2570,10 +2572,18 @@ def _update_train_job_from_log(job: dict, req: TrainJobRequest, line: str) -> No
 
     rank_match = re.search(r"base dim \(rank\):\s*(\d+),\s*alpha:\s*(\d+)", line, re.I)
     if rank_match:
-        job["observed_rank"] = int(rank_match.group(1))
-        job["observed_alpha"] = int(rank_match.group(2))
+        rank = int(rank_match.group(1))
+        alpha = int(rank_match.group(2))
+        if job.pop("_next_rank_is_quant_adapter", False):
+            job["quant_adapter_rank"] = rank
+            job["quant_adapter_alpha"] = alpha
+            return
+        job["observed_rank"] = rank
+        job["observed_alpha"] = alpha
         if job["observed_rank"] != req.rank:
             job["rank_warning"] = f"Trainer reported rank {job['observed_rank']} while UI requested rank {req.rank}"
+        else:
+            job.pop("rank_warning", None)
 
     percent_match = re.search(r"(\d{1,3})%\|", line)
     if percent_match and "Loading base model" == job.get("phase"):

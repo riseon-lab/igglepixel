@@ -4993,7 +4993,7 @@ function trainerPayload() {
     dataset_path: $('#trainerDatasetPath')?.value.trim() || '',
     output_name: $('#trainerOutputName')?.value.trim() || 'kerry_qwen_lora',
     trigger_phrase: $('#trainerTriggerPhrase')?.value.trim() || 'A woman named Kerry',
-    base_model: $('#trainerBaseModel')?.value || 'Qwen/Qwen-Image',
+    base_model: $('#trainerBaseModel')?.value || 'Qwen/Qwen-Image-2512',
     steps: Number($('#trainerSteps')?.value || 3000),
     rank: Number($('#trainerRank')?.value || 64),
     learning_rate: Number($('#trainerLearningRate')?.value || 0.0002),

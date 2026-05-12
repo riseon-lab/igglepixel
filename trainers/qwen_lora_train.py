@@ -130,13 +130,17 @@ def model_arch(base_model: str) -> str:
 def model_quant_block(base_model: str) -> str:
     if not py_bool(os.environ.get("TRAIN_QUANTIZE"), True):
         return "      quantize: false\n      quantize_te: false\n"
-    if "Edit" in base_model:
-        qtype = os.environ.get("TRAIN_QTYPE", "uint3|qwen_image_edit_torchao_uint3.safetensors")
+    if "Image-2512" in base_model:
+        default_qtype = "uint3|ostris/accuracy_recovery_adapters/qwen_image_2512_torchao_uint3.safetensors"
+    elif "Edit-2511" in base_model:
+        default_qtype = "uint3|ostris/accuracy_recovery_adapters/qwen_image_edit_2511_torchao_uint3.safetensors"
+    elif "Edit-2509" in base_model:
+        default_qtype = "uint3|ostris/accuracy_recovery_adapters/qwen_image_edit_2509_torchao_uint3.safetensors"
+    elif "Edit" in base_model:
+        default_qtype = "uint3|ostris/accuracy_recovery_adapters/qwen_image_edit_torchao_uint3.safetensors"
     else:
-        qtype = os.environ.get(
-            "TRAIN_QTYPE",
-            "uint3|ostris/accuracy_recovery_adapters/qwen_image_torchao_uint3.safetensors",
-        )
+        default_qtype = "uint3|ostris/accuracy_recovery_adapters/qwen_image_torchao_uint3.safetensors"
+    qtype = os.environ.get("TRAIN_QTYPE", default_qtype)
     return (
         "      quantize: true\n"
         f'      qtype: "{qtype}"\n'
@@ -148,7 +152,7 @@ def model_quant_block(base_model: str) -> str:
 
 def write_config(toolkit_dir: Path, dataset_dir: Path, output_dir: Path) -> Path:
     output_name = safe_name(os.environ.get("OUTPUT_NAME", "qwen_lora"))
-    base_model = os.environ.get("BASE_MODEL", "Qwen/Qwen-Image")
+    base_model = os.environ.get("BASE_MODEL", "Qwen/Qwen-Image-2512")
     trigger = os.environ.get("TRIGGER_PHRASE", "").strip()
     steps = int(float(os.environ.get("TRAIN_STEPS", "3000")))
     rank = int(float(os.environ.get("TRAIN_RANK", "64")))
