@@ -2700,11 +2700,21 @@ def _run_train_job(job_id: str) -> None:
     finally:
         job.pop("_process", None)
 
-    outputs = sorted(output_dir.rglob("*.safetensors"), key=lambda p: p.stat().st_mtime, reverse=True)
-    if not outputs:
-        _set_train_job_error(job, "Training finished but no .safetensors file was found in the output folder")
-        return
-    src = outputs[0]
+    expected_output = output_dir / f"{job['output_name']}.safetensors"
+    if expected_output.exists():
+        src = expected_output
+    else:
+        outputs = sorted(output_dir.rglob("*.safetensors"), key=lambda p: p.stat().st_mtime, reverse=True)
+        filtered = [
+            p for p in outputs
+            if "accuracy_recovery" not in p.name.lower()
+            and "torchao_uint" not in p.name.lower()
+            and "qwen_image_torchao" not in p.name.lower()
+        ]
+        if not filtered:
+            _set_train_job_error(job, "Training finished but no exported LoRA file was found in the output folder")
+            return
+        src = filtered[0]
     dest = LORAS_DIR / f"{job['output_name']}.safetensors"
     i = 1
     while dest.exists():
