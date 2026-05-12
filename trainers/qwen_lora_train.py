@@ -160,12 +160,15 @@ def write_config(toolkit_dir: Path, dataset_dir: Path, output_dir: Path) -> Path
     resolution = int(float(os.environ.get("TRAIN_RESOLUTION", "1024")))
     batch_size = int(float(os.environ.get("TRAIN_BATCH_SIZE", "1")))
     grad_accum = int(float(os.environ.get("TRAIN_GRAD_ACCUM", "1")))
-    save_every = max(250, min(1000, steps // 4 or 250))
+    save_every = int(float(os.environ.get("TRAIN_SAVE_EVERY", "0") or "0"))
+    if save_every <= 0:
+        save_every = max(250, min(1000, steps // 4 or 250))
     sample_prompt = f"{trigger}, portrait photo, natural skin texture, studio lighting" if trigger else "portrait photo, studio lighting"
     log(
         "Igglepixel training config: "
         f"base_model={base_model}, trigger={trigger or '(none)'}, "
-        f"steps={steps}, rank={rank}, lr={lr}, resolution={resolution}, batch={batch_size}"
+        f"steps={steps}, save_every={save_every}, rank={rank}, lr={lr}, "
+        f"resolution={resolution}, batch={batch_size}"
     )
 
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -283,9 +286,27 @@ def run_training(py: Path, toolkit_dir: Path, config_path: Path) -> None:
         raise SystemExit(rc)
 
 
+def is_aux_safetensor(path: Path) -> bool:
+    lower = path.as_posix().lower()
+    return any(
+        marker in lower
+        for marker in (
+            "accuracy_recovery",
+            "torchao_uint",
+            "qwen_image_torchao",
+            "qwen_image_2512_torchao",
+            "qwen_image_edit_torchao",
+        )
+    )
+
+
 def copy_output(output_dir: Path) -> None:
     output_path = Path(os.environ.get("OUTPUT_PATH", output_dir / f"{safe_name(os.environ.get('OUTPUT_NAME', 'qwen_lora'))}.safetensors"))
-    candidates = sorted(output_dir.rglob("*.safetensors"), key=lambda p: p.stat().st_mtime, reverse=True)
+    candidates = sorted(
+        (p for p in output_dir.rglob("*.safetensors") if not is_aux_safetensor(p)),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
     if not candidates:
         raise SystemExit(f"Training finished but no .safetensors was found under {output_dir}")
     src = candidates[0]

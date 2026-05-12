@@ -5140,6 +5140,7 @@ async function startTrainerJob() {
         rank: payload.rank,
         learning_rate: payload.learning_rate,
         resolution: payload.resolution,
+        save_every: Math.max(250, Math.min(1000, Math.floor(payload.steps / 4) || 250)),
         current_step: 360,
         total_steps: payload.steps,
         progress: 12,
@@ -5183,6 +5184,14 @@ function renderTrainerJobs() {
       ? `${j.current_step}/${j.total_steps} steps`
       : (j.steps ? `${j.steps} steps` : '');
     const modelLabel = j.base_model ? String(j.base_model).replace('Qwen/', '') : '';
+    const imported = Array.isArray(j.lora_filenames) && j.lora_filenames.length
+      ? j.lora_filenames
+      : (j.lora_filename ? [j.lora_filename] : []);
+    const importedText = imported.length
+      ? imported.length === 1
+        ? `Imported ${imported[0]}`
+        : `Imported ${imported.length} checkpoints: ${imported.join(', ')}`
+      : '';
     const detail = [
       phase,
       stepText,
@@ -5190,6 +5199,7 @@ function renderTrainerJobs() {
       j.observed_rank && j.observed_rank !== j.rank ? `reported rank ${j.observed_rank}` : '',
       j.learning_rate ? `lr ${j.learning_rate}` : '',
       j.resolution ? `${j.resolution}px` : '',
+      j.save_every ? `save every ${j.save_every}` : '',
       modelLabel,
     ].filter(Boolean).join(' · ');
     const progressLabel = j.current_step && j.total_steps
@@ -5211,7 +5221,7 @@ function renderTrainerJobs() {
       </div>
       <div class="trainer-progress" style="--p:${progress}%"><span></span></div>
       ${j.error ? `<div class="trainer-warnings">${esc(j.error)}</div>` : ''}
-      ${j.lora_filename ? `<div class="trainer-ok">Imported ${esc(j.lora_filename)}</div>` : ''}
+      ${importedText ? `<div class="trainer-ok">${esc(importedText)}</div>` : ''}
       ${tail ? `<div class="trainer-log">${esc(tail)}</div>` : ''}
       <div class="trainer-actions">${action}</div>
     </div>`;
@@ -5249,7 +5259,10 @@ async function refreshTrainerJobs() {
         current_step: current,
         total_steps: total,
         status: progress >= 100 ? 'done' : 'running',
-        lora_filename: progress >= 100 ? `${j.output_name}.safetensors` : j.lora_filename,
+        lora_filename: progress >= 100 ? `${j.output_name}_step${String(total).padStart(4, '0')}.safetensors` : j.lora_filename,
+        lora_filenames: progress >= 100
+          ? [1, 2, 3, 4].map(n => `${j.output_name}_step${String(Math.round((total / 4) * n)).padStart(4, '0')}.safetensors`)
+          : j.lora_filenames,
         log_tail: [...(j.log_tail || []), progress >= 100 ? 'Preview LoRA imported' : `step ${Math.round(progress)}/100`],
       };
     });

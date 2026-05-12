@@ -2531,6 +2531,125 @@ def _set_train_job_error(job: dict, message: str) -> None:
     job["finished_at"] = time.time()
 
 
+def _trainer_save_every(steps: int) -> int:
+    return max(250, min(1000, steps // 4 or 250))
+
+
+def _is_trainer_aux_safetensor(path: Path) -> bool:
+    lower = path.as_posix().lower()
+    return any(
+        marker in lower
+        for marker in (
+            "accuracy_recovery",
+            "torchao_uint",
+            "qwen_image_torchao",
+            "qwen_image_2512_torchao",
+            "qwen_image_edit_torchao",
+        )
+    )
+
+
+def _extract_trainer_checkpoint_step(path: Path, output_name: str, total_steps: int) -> Optional[int]:
+    stem = path.stem.lower()
+    safe_output = re.escape(output_name.lower())
+    patterns = [
+        r"(?:step|steps|checkpoint|global_step)[-_ ]*0*(\d{1,8})",
+        rf"{safe_output}[_-]0*(\d{{3,8}})$",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, stem)
+        if not match:
+            continue
+        step = int(match.group(1))
+        if 0 < step <= max(total_steps * 2, total_steps + 1000):
+            return step
+    return None
+
+
+def _trainer_output_candidates(output_dir: Path, output_name: str, total_steps: int) -> list[dict]:
+    expected_output = output_dir / f"{output_name}.safetensors"
+    raw = sorted(output_dir.rglob("*.safetensors"), key=lambda p: p.stat().st_mtime)
+    filtered = [p for p in raw if not _is_trainer_aux_safetensor(p)]
+    if not filtered:
+        return []
+
+    rows = []
+    for path in filtered:
+        is_expected = path.resolve() == expected_output.resolve()
+        step = total_steps if is_expected else _extract_trainer_checkpoint_step(path, output_name, total_steps)
+        rows.append({"path": path, "step": step, "is_expected": is_expected, "mtime": path.stat().st_mtime})
+
+    by_step: dict[int, dict] = {}
+    no_step: list[dict] = []
+    for row in rows:
+        step = row["step"]
+        if not step:
+            no_step.append(row)
+            continue
+        existing = by_step.get(step)
+        if existing is None:
+            by_step[step] = row
+            continue
+        # Prefer the trainer's native step file over our copied final alias.
+        if existing["is_expected"] and not row["is_expected"]:
+            by_step[step] = row
+        elif row["mtime"] > existing["mtime"] and existing["is_expected"] == row["is_expected"]:
+            by_step[step] = row
+
+    if by_step:
+        return sorted(by_step.values(), key=lambda r: (r["step"] or total_steps + 1, r["mtime"]))
+    return [max(no_step, key=lambda r: r["mtime"])]
+
+
+def _unique_lora_destination(base_name: str) -> Path:
+    dest = LORAS_DIR / f"{base_name}.safetensors"
+    i = 1
+    while dest.exists():
+        dest = LORAS_DIR / f"{base_name}_{i}.safetensors"
+        i += 1
+    return dest
+
+
+def _import_trainer_outputs(job: dict, req: TrainJobRequest, output_dir: Path) -> list[dict]:
+    output_name = job["output_name"]
+    candidates = _trainer_output_candidates(output_dir, output_name, req.steps)
+    if not candidates:
+        return []
+
+    width = max(4, len(str(req.steps)))
+    multi = len(candidates) > 1
+    imported = []
+    for row in candidates:
+        src: Path = row["path"]
+        step = row.get("step")
+        if multi and step:
+            dest_base = f"{output_name}_step{int(step):0{width}d}"
+        else:
+            dest_base = output_name
+        dest = _unique_lora_destination(_safe_name(dest_base, output_name))
+        shutil.copy2(src, dest)
+        meta_path = dest.with_suffix(dest.suffix + ".meta.json")
+        meta = {
+            "tags": ["trained", "qwen", "character"],
+            "model_id": "",
+            "trainer_id": req.trainer_id,
+            "base_model": req.base_model,
+            "trigger_phrase": req.trigger_phrase,
+            "dataset_path": job["dataset_path"],
+            "steps": req.steps,
+            "checkpoint_step": step,
+            "checkpoint_count": len(candidates),
+            "rank": req.rank,
+            "learning_rate": req.learning_rate,
+            "resolution": req.resolution,
+            "batch_size": req.batch_size,
+            "source_path": str(src),
+        }
+        meta_path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
+        imported.append({"path": str(dest), "filename": dest.name, "step": step})
+    return imported
+
+
 def _update_train_job_from_log(job: dict, req: TrainJobRequest, line: str) -> None:
     lower = line.lower()
     if "grabbing lora from the hub" in lower:
@@ -2631,6 +2750,7 @@ def _run_train_job(job_id: str) -> None:
     output_dir = TRAINING_DIR / job_id
     output_dir.mkdir(parents=True, exist_ok=True)
     manifest_path = output_dir / "manifest.json"
+    save_every = _trainer_save_every(req.steps)
     manifest = {
         "trainer_id": req.trainer_id,
         "dataset_path": job["dataset_path"],
@@ -2643,6 +2763,7 @@ def _run_train_job(job_id: str) -> None:
         "resolution": req.resolution,
         "batch_size": req.batch_size,
         "repeats": req.repeats,
+        "save_every": save_every,
         "dataset": scan,
     }
     manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
@@ -2651,7 +2772,7 @@ def _run_train_job(job_id: str) -> None:
     job["log_tail"].append("Starting trainer command")
     job["log_tail"].append(
         f"Requested settings: rank {req.rank}, steps {req.steps}, lr {req.learning_rate}, "
-        f"resolution {req.resolution}, batch {req.batch_size}"
+        f"resolution {req.resolution}, batch {req.batch_size}, checkpoints every {save_every} steps"
     )
 
     env = os.environ.copy()
@@ -2671,6 +2792,7 @@ def _run_train_job(job_id: str) -> None:
             "TRAIN_RESOLUTION": str(req.resolution),
             "TRAIN_BATCH_SIZE": str(req.batch_size),
             "TRAIN_REPEATS": str(req.repeats),
+            "TRAIN_SAVE_EVERY": str(save_every),
             "TRAIN_MANIFEST": str(manifest_path),
         }
     )
@@ -2710,52 +2832,23 @@ def _run_train_job(job_id: str) -> None:
     finally:
         job.pop("_process", None)
 
-    expected_output = output_dir / f"{job['output_name']}.safetensors"
-    if expected_output.exists():
-        src = expected_output
-    else:
-        outputs = sorted(output_dir.rglob("*.safetensors"), key=lambda p: p.stat().st_mtime, reverse=True)
-        filtered = [
-            p for p in outputs
-            if "accuracy_recovery" not in p.name.lower()
-            and "torchao_uint" not in p.name.lower()
-            and "qwen_image_torchao" not in p.name.lower()
-        ]
-        if not filtered:
-            _set_train_job_error(job, "Training finished but no exported LoRA file was found in the output folder")
-            return
-        src = filtered[0]
-    dest = LORAS_DIR / f"{job['output_name']}.safetensors"
-    i = 1
-    while dest.exists():
-        dest = LORAS_DIR / f"{job['output_name']}_{i}.safetensors"
-        i += 1
-    shutil.copy2(src, dest)
-    meta_path = dest.with_suffix(dest.suffix + ".meta.json")
-    meta_path.write_text(
-        json.dumps(
-            {
-                "tags": ["trained", "qwen", "character"],
-                "model_id": "",
-                "trainer_id": req.trainer_id,
-                "base_model": req.base_model,
-                "trigger_phrase": req.trigger_phrase,
-                "dataset_path": job["dataset_path"],
-                "steps": req.steps,
-                "rank": req.rank,
-                "learning_rate": req.learning_rate,
-            },
-            indent=2,
-        ),
-        encoding="utf-8",
-    )
+    imported = _import_trainer_outputs(job, req, output_dir)
+    if not imported:
+        _set_train_job_error(job, "Training finished but no exported LoRA checkpoint was found in the output folder")
+        return
     job["status"] = "done"
     job["phase"] = "Done"
     job["progress"] = 100
     job["finished_at"] = time.time()
-    job["lora_path"] = str(dest)
-    job["lora_filename"] = dest.name
-    job["log_tail"].append(f"LoRA imported: {dest.name}")
+    job["lora_paths"] = [item["path"] for item in imported]
+    job["lora_filenames"] = [item["filename"] for item in imported]
+    job["lora_checkpoints"] = [{"filename": item["filename"], "step": item.get("step")} for item in imported]
+    job["lora_path"] = imported[-1]["path"]
+    job["lora_filename"] = imported[-1]["filename"]
+    if len(imported) == 1:
+        job["log_tail"].append(f"LoRA imported: {imported[0]['filename']}")
+    else:
+        job["log_tail"].append("LoRA checkpoints imported: " + ", ".join(item["filename"] for item in imported))
 
 
 @app.post("/api/train-jobs")
@@ -2800,6 +2893,7 @@ def create_train_job(req: TrainJobRequest):
         "resolution": req.resolution,
         "batch_size": req.batch_size,
         "repeats": req.repeats,
+        "save_every": _trainer_save_every(req.steps),
         "progress": 0,
         "log_tail": [],
         "_request": req,
