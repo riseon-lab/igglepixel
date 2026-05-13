@@ -7,7 +7,10 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="styles.css?v=20260512-training-viewer">
+  <!-- Pixel/retro fonts for the new trainer wizard (Phase 1). Loaded
+       globally; only screens scoped under .px-theme actually use them. -->
+  <link href="https://fonts.googleapis.com/css2?family=Silkscreen:wght@400;700&family=VT323&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css?v=20260512-px-wizard">
 </head>
 <body>
 
@@ -244,7 +247,7 @@
   <main class="main">
 
     <!-- Models -->
-    <section class="view active" data-view="models">
+    <section class="view active px-theme" data-view="models">
       <div class="page-head">
         <div>
           <div class="page-title">Models</div>
@@ -395,7 +398,7 @@
     </section>
 
     <!-- Running -->
-    <section class="view" data-view="running">
+    <section class="view px-theme" data-view="running">
       <div class="page-head">
         <div>
           <div class="page-title">Running</div>
@@ -408,134 +411,822 @@
     </section>
 
     <!-- Trainers -->
-    <section class="view" data-view="trainers">
-      <div class="page-head">
-        <div>
-          <div class="page-title">Trainers</div>
-          <div class="page-sub">Build local LoRA adapters from curated datasets.</div>
+    <section class="view px-theme scanlines" data-view="trainers">
+      <!-- ── Pixel wizard ────────────────────────────────────────────
+           5-step wizard: Recipe → Dataset → Curate → Configure → Launch.
+           This is the primary trainer flow; legacy form UI has been removed.
+      ─────────────────────────────────────────────────────────────── -->
+      <div class="wizard" id="trainerWizard">
+        <div class="wizard-head">
+          <div>
+            <div class="bracket-label">Workshop / Trainers</div>
+            <h1 class="wizard-title">Train a new <span class="accent">LoRA</span>.</h1>
+              <div class="px-mute trainer-hero-copy">
+              Pick a recipe, point at images, hit go. Iggle handles captions, math, and
+              babysitting. You get a sample grid you can scroll forever.
+            </div>
+          </div>
+          <div style="display:flex;flex-direction:column;align-items:flex-end;gap:8px">
+            <div class="px-chip pink" id="trainerGpuChip">⚙ GPU · checking…</div>
+            <div class="px-stepper" id="trainerStepper">
+              <button class="px-step active" data-step="0">01 RECIPE</button>
+              <span class="px-step-arrow">→</span>
+              <button class="px-step" data-step="1">02 DATASET</button>
+              <span class="px-step-arrow">→</span>
+              <button class="px-step" data-step="2">03 CURATE</button>
+              <span class="px-step-arrow">→</span>
+              <button class="px-step" data-step="3">04 CONFIGURE</button>
+              <span class="px-step-arrow">→</span>
+              <button class="px-step" data-step="4">05 LAUNCH</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- ── Step 1: Recipe ────────────────────────────────────── -->
+        <div class="wizard-step" data-wizard-step="0">
+          <div class="bracket-label" style="margin-bottom:10px">Recipes</div>
+          <div class="recipe-grid">
+            <button class="recipe-card tick-corners selected" data-recipe="character">
+              <div class="recipe-glyph" style="color:var(--px-pink)">CHARACTER</div>
+              <div class="px-chip pink">MOST POPULAR</div>
+              <div class="recipe-name">Character / person</div>
+              <div class="recipe-desc">Train likeness on a single subject. Faces, body, signature outfit.</div>
+              <div class="recipe-meta">
+                <span>3000 steps</span><span class="sep">·</span>
+                <span>rank 64</span><span class="sep">·</span>
+                <span>~55 min</span>
+              </div>
+            </button>
+            <button class="recipe-card tick-corners" data-recipe="style">
+              <div class="recipe-glyph" style="color:var(--px-cyan)">STYLE</div>
+              <div class="px-chip cyan">STYLE</div>
+              <div class="recipe-name">Art style</div>
+              <div class="recipe-desc">Capture an aesthetic — brush strokes, palette, era — without binding to a subject.</div>
+              <div class="recipe-meta">
+                <span>4000 steps</span><span class="sep">·</span>
+                <span>rank 32</span><span class="sep">·</span>
+                <span>~72 min</span>
+              </div>
+            </button>
+            <button class="recipe-card tick-corners" data-recipe="concept">
+              <div class="recipe-glyph" style="color:var(--px-lime)">OBJECT</div>
+              <div class="px-chip lime">OBJECT</div>
+              <div class="recipe-name">Concept / object</div>
+              <div class="recipe-desc">Single object or concept — a logo, a creature, a particular prop.</div>
+              <div class="recipe-meta">
+                <span>2500 steps</span><span class="sep">·</span>
+                <span>rank 32</span><span class="sep">·</span>
+                <span>~45 min</span>
+              </div>
+            </button>
+            <button class="recipe-card tick-corners" data-recipe="custom">
+              <div class="recipe-glyph" style="color:var(--px-violet)">CUSTOM</div>
+              <div class="px-chip violet">CUSTOM</div>
+              <div class="recipe-name">From scratch</div>
+              <div class="recipe-desc">Bring your own settings. Skip presets and tune every knob in step 4.</div>
+              <div class="recipe-meta">
+                <span>2000 steps</span><span class="sep">·</span>
+                <span>rank 32</span><span class="sep">·</span>
+                <span>~36 min</span>
+              </div>
+            </button>
+          </div>
+
+          <div style="margin-top:24px;max-width:520px">
+            <label class="px-label" for="trainerRunName">Name this run</label>
+            <input class="px-field" id="trainerRunName" placeholder="e.g. kerry_v3_realistic" value="kerry_qwen_lora">
+            <div class="filename-hint" id="trainerFilenameHint">→ kerry_qwen_lora.safetensors</div>
+          </div>
+        </div>
+
+        <!-- ── Steps 2-5: Phase 1 stub.
+             Falls through to the existing form so training is still launchable.
+        ────────────────────────────────────────────────────────── -->
+        <div class="wizard-step" data-wizard-step="1" hidden>
+          <div class="bracket-label" style="margin-bottom:10px">Where are the images coming from?</div>
+          <div class="source-picker">
+            <button class="source-card selected" data-source="hf">
+              <div class="source-glyph">▦ HUGGINGFACE</div>
+              <div class="source-title">Pull from HuggingFace</div>
+              <div class="source-desc">Paste a dataset repo. We'll mirror &amp; cache it locally on /workspace.</div>
+            </button>
+            <button class="source-card" data-source="upload">
+              <div class="source-glyph">↑ UPLOAD</div>
+              <div class="source-title">Upload images</div>
+              <div class="source-desc">Drop a folder of JPG/PNG/WebP. Captions can be added per-image in Step 3.</div>
+            </button>
+            <button class="source-card" data-source="folder">
+              <div class="source-glyph">▣ FOLDER</div>
+              <div class="source-title">Use a local folder</div>
+              <div class="source-desc">Already have a dataset on /workspace? Point at the path.</div>
+            </button>
+          </div>
+
+          <!-- ── HF panel ───────────────────────────────────────────── -->
+          <div class="px-panel source-config" data-source-panel="hf">
+            <div class="px-panel-header">
+              <div>
+                <div class="px-panel-header-title">Pull from HuggingFace</div>
+                <div class="px-panel-header-sub">Cache the dataset locally before training.</div>
+              </div>
+            </div>
+            <div class="px-panel-body">
+              <div class="source-config-row hf">
+                <div>
+                  <label class="px-label" for="trainerWizardHFRepo">Dataset repo</label>
+                  <input class="px-field" id="trainerWizardHFRepo" placeholder="username/kerry-dataset" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false">
+                </div>
+                <div>
+                  <label class="px-label" for="trainerWizardHFType">Repo type</label>
+                  <select class="px-field" id="trainerWizardHFType">
+                    <option value="dataset" selected>Dataset</option>
+                    <option value="model">Model</option>
+                  </select>
+                </div>
+                <div>
+                  <label class="px-label" for="trainerWizardHFTarget">Save as</label>
+                  <input class="px-field" id="trainerWizardHFTarget" value="kerry" placeholder="kerry">
+                </div>
+                <div class="wide">
+                  <label class="px-label" for="trainerWizardHFToken">HF token <span class="px-mute">optional</span></label>
+                  <input class="px-field mask-text" id="trainerWizardHFToken" type="text" placeholder="hf_… for private datasets/models" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false" data-1p-ignore="true" data-lpignore="true" data-bwignore="true" data-form-type="other">
+                </div>
+              </div>
+              <div class="source-footer">
+                <span><b style="color:var(--px-text)" id="trainerWizardHFCachePath">datasets/kerry</b> · cached on /workspace</span>
+                <button class="px-btn" id="trainerWizardHFPull">↓ Pull dataset</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- ── Upload panel ──────────────────────────────────────── -->
+          <div class="px-panel source-config" data-source-panel="upload" hidden>
+            <div class="px-panel-header">
+              <div>
+                <div class="px-panel-header-title">Upload images</div>
+                <div class="px-panel-header-sub">Drop JPG / PNG / WebP. Each image can have a matching <code>.txt</code> caption.</div>
+              </div>
+            </div>
+            <div class="px-panel-body">
+              <div class="px-dropzone" id="trainerWizardDrop">
+                <div style="font-size:28px;color:var(--px-text-dim)">↑</div>
+                <div class="dropzone-label">Drop images here</div>
+                <div class="dropzone-hint">JPG · PNG · WebP · matching .txt captions optional</div>
+                <button class="px-btn px-btn-sm" id="trainerWizardBrowseBtn" type="button">Browse files</button>
+                <input type="file" id="trainerWizardFileInput" multiple accept="image/png,image/jpeg,image/webp,.txt" style="display:none">
+              </div>
+              <div class="source-footer">
+                <span id="trainerWizardUploadCount"><b style="color:var(--px-text)">0 files</b> queued</span>
+                <span class="px-mute">Upload happens on Next →</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- ── Folder panel ──────────────────────────────────────── -->
+          <div class="px-panel source-config" data-source-panel="folder" hidden>
+            <div class="px-panel-header">
+              <div>
+                <div class="px-panel-header-title">Use a local folder</div>
+                <div class="px-panel-header-sub">Path relative to <code>/workspace</code> or absolute.</div>
+              </div>
+            </div>
+            <div class="px-panel-body">
+              <label class="px-label" for="trainerWizardFolder">Folder path</label>
+              <input class="px-field" id="trainerWizardFolder" value="datasets/kerry" placeholder="datasets/kerry">
+              <div class="source-footer">
+                <span id="trainerWizardFolderStatus" class="px-mute">Not validated yet</span>
+                <button class="px-btn" id="trainerWizardFolderValidate">✓ Validate</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- ── Stat strip (populates after validation) ───────────── -->
+          <div class="stat-strip" id="trainerWizardStats">
+            <div class="stat-card empty">
+              <div class="stat-label">Images</div>
+              <div class="stat-num" data-stat="images">—</div>
+              <div class="stat-sub">recommend 20–60</div>
+            </div>
+            <div class="stat-card empty">
+              <div class="stat-label">Captions</div>
+              <div class="stat-num cyan" data-stat="captions">—</div>
+              <div class="stat-sub" data-stat-sub="captions">/0 missing</div>
+            </div>
+            <div class="stat-card empty">
+              <div class="stat-label">Pairs</div>
+              <div class="stat-num" data-stat="pairs">—</div>
+              <div class="stat-sub">image + caption</div>
+            </div>
+            <div class="stat-card empty">
+              <div class="stat-label">Issues</div>
+              <div class="stat-num pink" data-stat="issues">—</div>
+              <div class="stat-sub" data-stat-sub="issues">auto-flagged</div>
+            </div>
+          </div>
+        </div>
+        <div class="wizard-step" data-wizard-step="2" hidden>
+          <!-- Filter pills + bulk actions -->
+          <div class="curate-filterbar">
+            <div style="display:flex;gap:8px;flex-wrap:wrap" id="trainerCurateFilters">
+              <button class="filter-pill active" data-filter="all">All <span class="count" data-count="all">0</span></button>
+              <button class="filter-pill" data-filter="flagged">Flagged <span class="count" data-count="flagged">0</span></button>
+              <button class="filter-pill" data-filter="missing">No caption <span class="count" data-count="missing">0</span></button>
+              <button class="filter-pill" data-filter="included">Included <span class="count" data-count="included">0</span></button>
+            </div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap">
+              <button class="px-btn px-btn-sm" id="trainerCurateAutocap" disabled title="Auto-caption (Phase 2.5)">
+                <span style="color:var(--px-amber)">✦</span> Auto-caption all
+              </button>
+              <button class="px-btn px-btn-sm" id="trainerCurateBalance" disabled title="Balance set (Phase 2.5)">⚖ Balance set</button>
+              <button class="px-btn px-btn-sm" id="trainerCurateReload">↻ Reload</button>
+            </div>
+          </div>
+
+          <div class="curate-layout">
+            <!-- Image grid -->
+            <div class="curate-grid-panel">
+              <div class="curate-grid" id="trainerCurateGrid">
+                <!-- Empty state, replaced by JS -->
+              </div>
+              <div id="trainerCurateEmpty" class="px-mute" style="padding:32px;text-align:center;font-size:11.5px">
+                Validate a dataset in Step 2 first, or click Reload to scan the current path again.
+              </div>
+            </div>
+
+            <!-- Inspector -->
+            <aside class="curate-inspector" id="trainerCurateInspector" hidden>
+              <div class="px-panel-header">
+                <div>
+                  <div class="px-panel-header-title" id="trainerInspectorTitle">Inspector</div>
+                  <div class="px-panel-header-sub" id="trainerInspectorSub">No selection</div>
+                </div>
+                <span class="px-chip" id="trainerInspectorStatusChip">—</span>
+              </div>
+              <div class="curate-inspector-body">
+                <div class="curate-inspector-preview">
+                  <img id="trainerInspectorImg" alt="" loading="lazy">
+                </div>
+                <label class="px-label" for="trainerInspectorCaption">Caption</label>
+                <textarea class="px-textarea" id="trainerInspectorCaption" rows="4" placeholder="A woman named Kerry, standing in soft daylight…"></textarea>
+                <div class="caption-meta">
+                  <span id="trainerInspectorCaptionMeta">0 chars · 0 tokens</span>
+                  <button class="px-btn px-btn-sm px-btn-ghost" id="trainerInspectorSave">Save caption</button>
+                </div>
+                <div class="px-divider"></div>
+                <div class="px-label" style="margin-bottom:8px">Flags</div>
+                <div class="flag-list" id="trainerInspectorFlags">
+                  <div class="flag-row"><span class="px-dot ok"></span><span>No issues detected.</span></div>
+                </div>
+              </div>
+            </aside>
+          </div>
+
+          <!-- Dataset health -->
+          <div class="curate-health">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;flex-wrap:wrap;gap:8px">
+              <div class="bracket-label">Dataset health</div>
+              <div style="display:flex;gap:8px;align-items:center">
+                <span class="px-chip" id="trainerHealthReady">Not ready</span>
+                <span class="px-mute" style="font-family:var(--px-font-mono);font-size:11px" id="trainerHealthCounts">— included · — excluded</span>
+              </div>
+            </div>
+            <div class="health-bars">
+              <div class="health-bar-row">
+                <div class="health-bar-head">Coverage <span class="pct" data-health="coverage">—</span></div>
+                <div class="px-bar cyan"><i data-health-bar="coverage" style="width:0%"></i></div>
+              </div>
+              <div class="health-bar-row">
+                <div class="health-bar-head">Variety <span class="pct" data-health="variety">—</span></div>
+                <div class="px-bar amber"><i data-health-bar="variety" style="width:0%"></i></div>
+              </div>
+              <div class="health-bar-row">
+                <div class="health-bar-head">Captions <span class="pct" data-health="captions">—</span></div>
+                <div class="px-bar cyan"><i data-health-bar="captions" style="width:0%"></i></div>
+              </div>
+              <div class="health-bar-row">
+                <div class="health-bar-head">Balance <span class="pct" data-health="balance">—</span></div>
+                <div class="px-bar"><i data-health-bar="balance" style="width:0%"></i></div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="wizard-step" data-wizard-step="3" hidden>
+          <div class="configure-layout">
+            <div class="configure-stack">
+
+              <!-- Trigger phrase -->
+              <div class="px-panel">
+                <div class="px-panel-header">
+                  <div>
+                    <div class="px-panel-header-title">Trigger phrase</div>
+                    <div class="px-panel-header-sub">Words that activate this LoRA in prompts. Pick something rare.</div>
+                  </div>
+                </div>
+                <div class="px-panel-body">
+                  <input class="px-field" id="cfgTrigger" value="A woman named Kerry" placeholder="A woman named Kerry">
+                  <div style="margin-top:8px;font-family:var(--px-font-mono);font-size:11px;color:var(--px-text-mute);display:flex;align-items:center;gap:6px">
+                    <span style="color:var(--px-amber)">✦</span>
+                    <span>Auto-prepended to captions during training.</span>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Base model -->
+              <div class="px-panel">
+                <div class="px-panel-header">
+                  <div>
+                    <div class="px-panel-header-title">Base model</div>
+                    <div class="px-panel-header-sub">Foundation the LoRA layers stack onto.</div>
+                  </div>
+                </div>
+                <div class="px-panel-body">
+                  <div class="base-grid" id="cfgBaseGrid">
+                    <button class="base-card selected" data-base="Qwen/Qwen-Image-2512">
+                      <div class="base-glyph">▣ QWEN</div>
+                      <div class="base-name">Qwen-Image-2512</div>
+                      <div class="base-meta">20B · December 2025 update</div>
+                    </button>
+                    <button class="base-card" data-base="Qwen/Qwen-Image">
+                      <div class="base-glyph">▣ QWEN</div>
+                      <div class="base-name">Qwen-Image</div>
+                      <div class="base-meta">20B · stable baseline</div>
+                    </button>
+                  </div>
+                  <div style="margin-top:10px;font-family:var(--px-font-mono);font-size:11px;color:var(--px-text-mute)">
+                    Qwen-Image-Edit variants need paired (input/target) datasets — not supported by Step 3 curation yet.
+                  </div>
+                </div>
+              </div>
+
+              <!-- Training parameters -->
+              <div class="px-panel">
+                <div class="px-panel-header">
+                  <div>
+                    <div class="px-panel-header-title">Training parameters</div>
+                    <div class="px-panel-header-sub" id="cfgPresetSub">Filled from the selected recipe — tweak anything.</div>
+                  </div>
+                  <button class="px-btn px-btn-sm" id="cfgAdvancedToggle">Show advanced</button>
+                </div>
+                <div class="px-panel-body">
+                  <div class="knob-grid" id="cfgKnobs">
+                    <!-- Steps -->
+                    <div class="knob" data-knob="steps">
+                      <div class="knob-head">
+                        <span class="knob-label">Steps</span>
+                        <span class="knob-hint" data-hint="steps">~55 min</span>
+                      </div>
+                      <div class="slider-row">
+                        <input type="range" class="px-slider" min="500" max="6000" step="250" value="3000" data-cfg="steps">
+                        <span class="slider-value" data-value="steps">3000</span>
+                      </div>
+                    </div>
+                    <!-- Rank -->
+                    <div class="knob" data-knob="rank">
+                      <div class="knob-head">
+                        <span class="knob-label">Rank</span>
+                        <span class="knob-hint" data-hint="rank">high · slow</span>
+                      </div>
+                      <div class="option-row" data-cfg="rank">
+                        <button data-value="8">8</button>
+                        <button data-value="16">16</button>
+                        <button data-value="32">32</button>
+                        <button class="selected" data-value="64">64</button>
+                        <button data-value="128">128</button>
+                      </div>
+                    </div>
+                    <!-- Learning rate -->
+                    <div class="knob" data-knob="lr">
+                      <div class="knob-head">
+                        <span class="knob-label">Learning rate</span>
+                        <span class="knob-hint" data-hint="lr"></span>
+                      </div>
+                      <div class="option-row" data-cfg="lr">
+                        <button data-value="0.0001">0.0001</button>
+                        <button class="selected" data-value="0.0002">0.0002</button>
+                        <button data-value="0.0004">0.0004</button>
+                        <button data-value="0.0008">0.0008</button>
+                      </div>
+                    </div>
+                    <!-- Resolution -->
+                    <div class="knob" data-knob="res">
+                      <div class="knob-head">
+                        <span class="knob-label">Resolution</span>
+                        <span class="knob-hint" data-hint="res"></span>
+                      </div>
+                      <div class="option-row" data-cfg="res">
+                        <button data-value="512">512px</button>
+                        <button data-value="768">768px</button>
+                        <button class="selected" data-value="1024">1024px</button>
+                        <button data-value="1328">1328px</button>
+                      </div>
+                    </div>
+                    <!-- Batch -->
+                    <div class="knob" data-knob="batch">
+                      <div class="knob-head">
+                        <span class="knob-label">Batch size</span>
+                        <span class="knob-hint" data-hint="batch">1× VRAM</span>
+                      </div>
+                      <div class="slider-row">
+                        <input type="range" class="px-slider" min="1" max="8" step="1" value="1" data-cfg="batch">
+                        <span class="slider-value" data-value="batch">1</span>
+                      </div>
+                    </div>
+                    <!-- Repeats -->
+                    <div class="knob" data-knob="repeats">
+                      <div class="knob-head">
+                        <span class="knob-label">Repeats</span>
+                        <span class="knob-hint" data-hint="repeats"></span>
+                      </div>
+                      <div class="slider-row">
+                        <input type="range" class="px-slider" min="1" max="10" step="1" value="1" data-cfg="repeats">
+                        <span class="slider-value" data-value="repeats">1</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <!-- Advanced (hidden by default) -->
+                  <div class="advanced-grid knob-grid" id="cfgAdvanced" hidden>
+                    <div class="knob" data-knob="opt">
+                      <div class="knob-head"><span class="knob-label">Optimizer</span><span class="knob-hint">trainer cfg</span></div>
+                      <div class="option-row" data-cfg="opt">
+                        <button class="selected" data-value="adamw8bit">AdamW8</button>
+                        <button data-value="prodigy">Prodigy</button>
+                        <button data-value="lion">Lion</button>
+                        <button data-value="adafactor">AdaFactor</button>
+                      </div>
+                    </div>
+                    <div class="knob" data-knob="sched">
+                      <div class="knob-head"><span class="knob-label">LR scheduler</span><span class="knob-hint">trainer cfg</span></div>
+                      <div class="option-row" data-cfg="sched">
+                        <button class="selected" data-value="cosine">cosine</button>
+                        <button data-value="constant">constant</button>
+                        <button data-value="linear">linear</button>
+                        <button data-value="cosine-restart">cos-rst</button>
+                      </div>
+                    </div>
+                    <div class="knob" data-knob="alpha">
+                      <div class="knob-head"><span class="knob-label">Network alpha</span><span class="knob-hint" data-hint="alpha">= rank</span></div>
+                      <div class="option-row" data-cfg="alpha">
+                        <button data-value="16">16</button>
+                        <button data-value="32">32</button>
+                        <button class="selected" data-value="64">64</button>
+                        <button data-value="128">128</button>
+                      </div>
+                    </div>
+                    <div class="knob" data-knob="saveEvery">
+                      <div class="knob-head"><span class="knob-label">Save every</span><span class="knob-hint">checkpoints</span></div>
+                      <div class="option-row" data-cfg="saveEvery">
+                        <button data-value="100">100</button>
+                        <button data-value="250">250</button>
+                        <button class="selected" data-value="500">500</button>
+                        <button data-value="1000">1000</button>
+                      </div>
+                    </div>
+                    <div class="knob" data-knob="precision">
+                      <div class="knob-head"><span class="knob-label">Mixed precision</span></div>
+                      <div class="option-row" data-cfg="precision">
+                        <button data-value="fp16">fp16</button>
+                        <button class="selected" data-value="bf16">bf16</button>
+                        <button data-value="fp32">fp32</button>
+                      </div>
+                    </div>
+                    <div class="knob" data-knob="gradCkpt">
+                      <div class="knob-head"><span class="knob-label">Gradient ckpt</span><span class="knob-hint">memory ↓ · speed ↓</span></div>
+                      <div class="option-row" data-cfg="gradCkpt">
+                        <button data-value="off">off</button>
+                        <button class="selected" data-value="on">on</button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Sample prompts -->
+              <div class="px-panel">
+                <div class="px-panel-header">
+                  <div>
+                    <div class="px-panel-header-title">Sample prompts</div>
+                    <div class="px-panel-header-sub">Iggle generates these at every checkpoint so you can watch progress.</div>
+                  </div>
+                  <button class="px-btn px-btn-sm" id="cfgSampleAdd">+ Add</button>
+                </div>
+                <div class="px-panel-body">
+                  <div class="sample-list" id="cfgSampleList"></div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Run summary -->
+            <aside class="configure-summary">
+              <div class="px-panel-header">
+                <div style="display:flex;align-items:center;gap:8px">
+                  <span class="px-dot pink"></span>
+                  <div class="px-panel-header-title">Run summary</div>
+                </div>
+              </div>
+              <div class="summary-block">
+                <div class="summary-rows" id="cfgSummaryRows">
+                  <div class="summary-row"><span class="k">Recipe</span><span class="v" data-summary="recipe" style="color:var(--px-pink)">Character</span></div>
+                  <div class="summary-row"><span class="k">Base</span><span class="v" data-summary="base">Qwen-Image-2512</span></div>
+                  <div class="summary-row"><span class="k">Trigger</span><span class="v" data-summary="trigger">"A woman named Kerry"</span></div>
+                  <div class="summary-row"><span class="k">Steps</span><span class="v" data-summary="steps">3000</span></div>
+                  <div class="summary-row"><span class="k">Rank</span><span class="v" data-summary="rank">64</span></div>
+                  <div class="summary-row"><span class="k">Res</span><span class="v" data-summary="res">1024px</span></div>
+                </div>
+                <div class="px-divider"></div>
+                <div class="summary-stat">
+                  <div class="bracket-label">VRAM budget</div>
+                  <div class="px-bar cyan"><i id="cfgVramBar" style="width:50%"></i></div>
+                  <div style="font-family:var(--px-font-mono);font-size:11px;color:var(--px-text-mute);text-align:right" id="cfgVramText">40 / 80 GB</div>
+                </div>
+                <div class="px-divider"></div>
+                <div class="summary-stat">
+                  <div class="bracket-label">Est. wall clock</div>
+                  <div><span class="stat-num" id="cfgEtaNum" style="color:var(--px-cyan)">55</span><span style="font-family:var(--px-font-mono);font-size:14px;color:var(--px-text-mute);margin-left:6px">min</span></div>
+                </div>
+                <div class="px-divider"></div>
+                <div class="summary-stat">
+                  <div class="bracket-label">Est. cost</div>
+                  <div><span class="stat-num" id="cfgCostNum" style="color:var(--px-pink)">$3.30</span></div>
+                  <div style="font-family:var(--px-font-mono);font-size:10.5px;color:var(--px-text-mute)" id="cfgRateLabel">@ $3.60/hr · H100</div>
+                </div>
+                <div class="px-divider"></div>
+                <div style="display:flex;align-items:center;gap:8px;font-family:var(--px-font-mono);font-size:11px" id="cfgCheckRow">
+                  <span class="px-dot ok"></span>
+                  <span class="px-mute">All checks pass · ready to launch</span>
+                </div>
+              </div>
+            </aside>
+          </div>
+        </div>
+        <div class="wizard-step" data-wizard-step="4" hidden>
+          <div class="launch-layout">
+
+            <!-- Final check -->
+            <div class="px-panel" style="padding:20px">
+              <div class="bracket-label" style="margin-bottom:14px">Final check</div>
+              <h2 class="px-font" style="font-size:16px;margin:0 0 10px;letter-spacing:0.04em" id="launchRunName">kerry_qwen_lora</h2>
+              <div class="final-check-prose" id="launchProse">
+                You're about to spend approximately <b style="color:var(--px-pink)" data-launch="cost">$3.30</b>
+                over <b style="color:var(--px-cyan)" data-launch="eta">55 minutes</b> on a single H100.
+                Iggle will checkpoint every <b data-launch="saveevery">500</b> steps and let you stop early if it looks good.
+              </div>
+              <div class="px-divider"></div>
+              <div class="check-list" id="launchChecks">
+                <div class="check-row on" data-launch-flag="samples">
+                  <span class="px-check"></span>
+                  <span>Generate sample images at every checkpoint</span>
+                </div>
+                <div class="check-row on" data-launch-flag="autoPublish">
+                  <span class="px-check"></span>
+                  <span>Auto-add to LoRA library when training finishes</span>
+                </div>
+                <div class="check-row disabled" data-launch-flag="notify" data-disabled="true" aria-disabled="true">
+                  <span class="px-check"></span>
+                  <span>Notify me when training finishes <span class="px-mute">(Phase 3)</span></span>
+                </div>
+                <div class="check-row disabled" data-launch-flag="autoShutdown" data-disabled="true" aria-disabled="true">
+                  <span class="px-check"></span>
+                  <span>Auto-shutdown GPU on completion <span class="px-mute">(Phase 3)</span></span>
+                </div>
+              </div>
+            </div>
+
+            <!-- Generated command preview -->
+            <div class="px-panel" style="padding:20px">
+              <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+                <div class="bracket-label">Generated command</div>
+                <span class="px-mute" style="font-family:var(--px-font-mono);font-size:10.5px">matches launch payload</span>
+              </div>
+              <div class="cmd-block" id="launchCmdBlock"></div>
+              <div style="display:flex;gap:8px;margin-top:14px">
+                <button class="px-btn px-btn-sm" id="launchCopyBtn">⎘ Copy command</button>
+                <button class="px-btn px-btn-sm" id="launchSaveRecipeBtn" disabled title="Save as recipe — Phase 2.5">★ Save as recipe</button>
+              </div>
+            </div>
+
+            <!-- Big Launch CTA -->
+            <div class="launch-cta-wrap">
+              <button class="launch-cta" id="launchTrainingBtn">
+                <span class="bolt">⚡</span>
+                <span>Launch training run</span>
+              </button>
+            </div>
+
+          </div>
+        </div>
+
+        <div class="wizard-footer">
+          <div style="font-family:var(--px-font-mono);font-size:11px;color:var(--px-text-dim)">
+            <span id="trainerStepLabel">Step 1 of 5</span>
+            <span class="blink" style="color:var(--px-pink);margin-left:6px">▎</span>
+          </div>
+          <div style="display:flex;gap:8px">
+            <button class="px-btn px-btn-ghost" id="trainerWizardCancel">Cancel</button>
+            <button class="px-btn" id="trainerWizardBack" disabled>← Back</button>
+            <button class="px-btn px-btn-primary" id="trainerWizardNext">Next →</button>
+          </div>
         </div>
       </div>
 
-      <div class="trainer-layout">
-        <div class="trainer-card">
+      <div class="trainer-home-panels">
+        <div class="trainer-card trainer-status-card">
           <div class="trainer-card-head">
             <div>
-              <div class="trainer-title">Qwen Character LoRA</div>
+              <div class="trainer-title">Trainer engine</div>
               <div class="trainer-sub" id="trainerConfigState">Checking trainer setup…</div>
             </div>
             <span class="tag solid" id="trainerReadyTag">Setup</span>
           </div>
-
-          <div class="trainer-import">
-            <div class="trainer-title">Pull Dataset From Hugging Face</div>
-            <div class="trainer-form compact">
-              <label class="field wide">
-                <span class="field-label">Dataset repo</span>
-                <input class="text-input" id="trainerDatasetRepo" placeholder="username/kerry-dataset" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false">
-              </label>
-              <label class="field">
-                <span class="field-label">Repo type</span>
-                <select class="select" id="trainerDatasetRepoType">
-                  <option value="dataset" selected>Dataset</option>
-                  <option value="model">Model</option>
-                </select>
-              </label>
-              <label class="field">
-                <span class="field-label">Save as folder</span>
-                <input class="text-input" id="trainerDatasetTarget" value="kerry" placeholder="kerry">
-              </label>
+          <div id="trainerDatasetSummary" class="trainer-summary">
+            <div class="empty" style="padding:18px">No validation yet.</div>
+          </div>
+        </div>
+        <div class="trainer-card trainer-jobs-card">
+          <div class="trainer-card-head">
+            <div>
+              <div class="trainer-title">Training jobs</div>
+              <div class="trainer-sub">Open a running job to watch samples, logs, config, and GPU use.</div>
             </div>
-            <div class="trainer-actions">
-              <button class="btn" id="trainerDatasetDownloadBtn"><svg><use href="#i-down"/></svg>Pull dataset</button>
+          </div>
+          <div id="trainerJobList" class="trainer-job-list">
+            <div class="empty" style="padding:18px">No training jobs yet.</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── Trainer Running Monitor (Phase 3) ────────────────────────────
+         Opened from a job card on the Trainers tab. Polls /api/train-jobs/{id}
+         every 1.5s while running; 5 tabs render the live state.
+    ──────────────────────────────────────────────────────────────────── -->
+    <section class="view px-theme scanlines" data-view="trainer-running">
+      <div class="run-view">
+        <button class="px-btn px-btn-ghost px-btn-sm" id="runBack" style="margin-bottom:14px">← Back to trainers</button>
+
+        <div class="px-panel" style="padding:20px;margin-bottom:16px">
+          <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin-bottom:16px;flex-wrap:wrap">
+            <div>
+              <div style="display:flex;gap:8px;margin-bottom:8px;align-items:center;flex-wrap:wrap">
+                <span class="px-dot pink blink" id="runStatusDot"></span>
+                <span class="bracket-label" id="runIdLabel">Run · —</span>
+                <span class="px-chip pink" id="runStatusChip">QUEUED</span>
+                <span class="px-chip" id="runRecipeChip">RECIPE</span>
+                <span class="px-chip" id="runBaseChip">QWEN-IMAGE</span>
+              </div>
+              <h1 class="px-font" id="runName" style="font-size:18px;margin:0;letter-spacing:0.04em">Run name</h1>
+              <div class="px-mute" id="runSub" style="font-family:var(--px-font-mono);font-size:11.5px;margin-top:4px">trigger phrase</div>
+            </div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap">
+              <button class="px-btn px-btn-sm" id="runPauseBtn" disabled title="Pause is not available for this trainer yet">Pause</button>
+              <button class="px-btn px-btn-sm" id="runStopBtn" style="border-color:var(--px-err);color:var(--px-err)">Cancel run</button>
+              <button class="px-btn px-btn-sm" id="runAbortBtn" style="border-color:var(--px-border);color:var(--px-text)" hidden>Dismiss</button>
             </div>
           </div>
 
-          <div class="trainer-form">
-            <label class="field">
-              <span class="field-label">Dataset folder</span>
-              <input class="text-input" id="trainerDatasetPath" value="datasets/kerry" placeholder="datasets/kerry">
-            </label>
-            <label class="field">
-              <span class="field-label">Output name</span>
-              <input class="text-input" id="trainerOutputName" value="kerry_qwen_lora">
-            </label>
-            <label class="field wide">
-              <span class="field-label">Trigger phrase</span>
-              <input class="text-input" id="trainerTriggerPhrase" value="A woman named Kerry">
-            </label>
-            <label class="field wide">
-              <span class="field-label">Base model</span>
-              <select class="select" id="trainerBaseModel">
-                <option value="Qwen/Qwen-Image-2512" selected>Qwen-Image-2512</option>
-                <option value="Qwen/Qwen-Image">Qwen-Image</option>
-                <option value="Qwen/Qwen-Image-Edit">Qwen-Image-Edit</option>
-                <option value="Qwen/Qwen-Image-Edit-2511">Qwen-Image-Edit 2511</option>
-              </select>
-            </label>
-            <label class="field">
-              <span class="field-label">Steps</span>
-              <input class="text-input" type="number" id="trainerSteps" min="1" max="100000" step="100" value="3000">
-            </label>
-            <label class="field">
-              <span class="field-label">Rank</span>
-              <select class="select" id="trainerRank">
-                <option value="8">8</option>
-                <option value="16">16</option>
-                <option value="32">32</option>
-                <option value="64" selected>64</option>
-              </select>
-            </label>
-            <label class="field">
-              <span class="field-label">Learning rate</span>
-              <input class="text-input" type="number" id="trainerLearningRate" min="0" step="0.00001" value="0.0002">
-            </label>
-            <label class="field">
-              <span class="field-label">Resolution</span>
-              <select class="select" id="trainerResolution">
-                <option value="768">768</option>
-                <option value="1024" selected>1024</option>
-                <option value="1328">1328</option>
-              </select>
-            </label>
-            <label class="field">
-              <span class="field-label">Batch size</span>
-              <input class="text-input" type="number" id="trainerBatchSize" min="1" max="16" step="1" value="1">
-            </label>
-            <label class="field">
-              <span class="field-label">Repeats</span>
-              <input class="text-input" type="number" id="trainerRepeats" min="1" max="100" step="1" value="1">
-            </label>
-            <label class="field wide">
-              <span class="field-label">HF token <span class="hint">for gated/private trainers or models</span></span>
-              <input class="text-input mask-text" id="trainerHFToken" type="text" placeholder="hf_…" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false" data-1p-ignore="true" data-lpignore="true" data-bwignore="true" data-form-type="other">
-            </label>
-          </div>
+          <div class="px-bar"><i id="runProgressBar" style="width:0%"></i></div>
 
-          <div class="trainer-actions">
-            <button class="btn" id="trainerValidateBtn"><svg><use href="#i-check"/></svg>Validate dataset</button>
-            <button class="btn primary" id="trainerStartBtn"><svg><use href="#i-bolt"/></svg>Start training</button>
+          <div class="run-stat-strip">
+            <div class="run-stat"><div class="bracket-label">Step</div><div class="stat-num" data-run-stat="step">—</div><div class="run-stat-sub" data-run-stat-sub="step">/ —</div></div>
+            <div class="run-stat"><div class="bracket-label">Loss</div><div class="stat-num" style="color:var(--px-cyan)" data-run-stat="loss">—</div><div class="run-stat-sub" data-run-stat-sub="loss">trend</div></div>
+            <div class="run-stat"><div class="bracket-label">LR</div><div class="stat-num" data-run-stat="lr">—</div><div class="run-stat-sub" data-run-stat-sub="lr">scheduler</div></div>
+            <div class="run-stat"><div class="bracket-label">Phase</div><div class="stat-num" style="font-size:18px" data-run-stat="phase">—</div><div class="run-stat-sub" data-run-stat-sub="phase">progress</div></div>
+            <div class="run-stat"><div class="bracket-label">ETA</div><div class="stat-num" style="color:var(--px-pink)" data-run-stat="eta">—</div><div class="run-stat-sub" data-run-stat-sub="eta">remaining</div></div>
+            <div class="run-stat"><div class="bracket-label">Cost</div><div class="stat-num" style="color:var(--px-amber)" data-run-stat="cost">$0.00</div><div class="run-stat-sub" data-run-stat-sub="cost">@ $3.60/hr</div></div>
           </div>
         </div>
 
-        <aside class="trainer-side">
-          <div class="trainer-card">
-            <div class="trainer-title">Dataset</div>
-            <div id="trainerDatasetSummary" class="trainer-summary">
-              <div class="empty" style="padding:18px">No validation yet.</div>
+        <div class="px-tabs" id="runTabs" style="margin-bottom:14px">
+          <button class="px-tab active" data-run-tab="monitor">▤ Monitor</button>
+          <button class="px-tab" data-run-tab="samples">▦ Samples</button>
+          <button class="px-tab" data-run-tab="test">✦ Test prompt</button>
+          <button class="px-tab" data-run-tab="terminal">▶ Terminal</button>
+          <button class="px-tab" data-run-tab="config">⚙ Config</button>
+        </div>
+
+        <div class="run-tab-body" data-run-pane="monitor">
+          <div class="run-monitor-grid">
+            <div style="display:flex;flex-direction:column;gap:12px">
+              <div class="px-panel">
+                <div class="px-panel-header">
+                  <div><div class="px-panel-header-title">Loss curve</div><div class="px-panel-header-sub">Lower is better · smoother is healthier</div></div>
+                  <span class="px-mute" id="runLossWindow" style="font-family:var(--px-font-mono);font-size:11px">last 0 steps</span>
+                </div>
+                <div class="px-panel-body">
+                  <svg class="run-sparkline" id="runLossSpark" viewBox="0 0 400 180" preserveAspectRatio="none"></svg>
+                  <div class="run-sparkline-foot">
+                    <span data-loss-range="left">step —</span>
+                    <span data-loss-range="middle">min — · max —</span>
+                    <span data-loss-range="right">step —</span>
+                  </div>
+                </div>
+              </div>
+              <div class="px-panel">
+                <div class="px-panel-header"><div><div class="px-panel-header-title">Learning rate · <span id="runSchedName">cosine</span></div></div></div>
+                <div class="px-panel-body"><svg class="run-sparkline" id="runLrSpark" viewBox="0 0 400 90" preserveAspectRatio="none"></svg></div>
+              </div>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:12px">
+              <div class="px-panel">
+                <div class="px-panel-header">
+                  <div style="display:flex;align-items:center;gap:8px">
+                    <span class="px-dot ok"></span>
+                    <div class="px-panel-header-title" id="runGpuTitle">GPU · —</div>
+                  </div>
+                </div>
+                <div class="px-panel-body" id="runGpuBars">
+                  <div class="px-mute" style="font-family:var(--px-font-mono);font-size:11.5px">GPU live stats land in Phase 3.5 (needs nvidia-smi polling).</div>
+                </div>
+              </div>
+              <div class="px-panel">
+                <div class="px-panel-header"><div><div class="px-panel-header-title">Health signals</div></div></div>
+                <div class="px-panel-body">
+                  <div class="flag-list" id="runHealthList">
+                    <div class="flag-row"><span class="px-dot ok"></span><span>Waiting for first metrics…</span></div>
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
-          <div class="trainer-card">
-            <div class="trainer-title">Jobs</div>
-            <div id="trainerJobList" class="trainer-job-list">
-              <div class="empty" style="padding:18px">No training jobs yet.</div>
+        </div>
+
+        <div class="run-tab-body" data-run-pane="samples" hidden>
+          <div class="px-panel">
+            <div class="px-panel-header">
+              <div>
+                <div class="px-panel-header-title">Sample grid</div>
+                <div class="px-panel-header-sub" id="runSampleSub">Same prompts at every checkpoint — spot the moment likeness clicks.</div>
+              </div>
+              <button class="px-btn px-btn-sm" id="runSampleReload">↻ Reload</button>
+            </div>
+            <div class="px-panel-body" id="runSampleBody" style="overflow-x:auto">
+              <div class="px-mute" style="padding:24px;text-align:center;font-family:var(--px-font-mono);font-size:11.5px">
+                Samples appear here once the first checkpoint completes.
+              </div>
             </div>
           </div>
-        </aside>
+        </div>
+
+        <div class="run-tab-body" data-run-pane="test" hidden>
+          <div class="run-test-grid">
+            <div class="px-panel">
+              <div class="px-panel-header">
+                <div>
+                  <div class="px-panel-header-title">Checkpoint test prompt</div>
+                  <div class="px-panel-header-sub">Prepared from the sample prompts saved with this run.</div>
+                </div>
+              </div>
+              <div class="px-panel-body">
+                <textarea id="runTestPrompt" class="trainer-field" rows="5" placeholder="Prompt for the latest checkpoint"></textarea>
+                <div class="run-test-controls">
+                  <label><span>Checkpoint</span><select id="runTestCheckpoint" class="trainer-field"></select></label>
+                  <label><span>Strength</span><input id="runTestStrength" class="trainer-field" type="number" min="0" max="1.5" step="0.05" value="0.7"></label>
+                  <label><span>Seed</span><input id="runTestSeed" class="trainer-field" type="number" value="2512"></label>
+                  <button class="px-btn px-btn-sm primary" id="runTestBtn" disabled>Run test</button>
+                </div>
+                <div class="px-mute" id="runTestHint" style="font-family:var(--px-font-mono);font-size:11.5px;line-height:1.45;margin-top:10px"></div>
+              </div>
+            </div>
+            <div class="px-panel">
+              <div class="px-panel-header"><div><div class="px-panel-header-title">Available checkpoints</div></div></div>
+              <div class="px-panel-body">
+                <div class="flag-list" id="runCheckpointList">
+                  <div class="flag-row"><span class="px-dot warn"></span><span>Waiting for first checkpoint...</span></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="run-tab-body" data-run-pane="terminal" hidden>
+          <div class="px-panel">
+            <div class="px-panel-header">
+              <div>
+                <div class="px-panel-header-title">Trainer log</div>
+                <div class="px-panel-header-sub">Last 80 lines streamed from the trainer subprocess.</div>
+              </div>
+              <span class="px-mute" style="font-family:var(--px-font-mono);font-size:11px"><span class="blink">▎</span></span>
+            </div>
+            <pre class="run-terminal scanlines" id="runTerminal">Waiting for the trainer to print…</pre>
+          </div>
+        </div>
+
+        <div class="run-tab-body" data-run-pane="config" hidden>
+          <div class="px-panel">
+            <div class="px-panel-header">
+              <div>
+                <div class="px-panel-header-title">Frozen run config</div>
+                <div class="px-panel-header-sub">Exactly what the trainer received at launch. Read-only.</div>
+              </div>
+            </div>
+            <div class="px-panel-body"><div class="config-rows" id="runConfigRows"></div></div>
+          </div>
+        </div>
       </div>
     </section>
 
     <!-- LoRAs -->
-    <section class="view" data-view="loras">
+    <section class="view px-theme scanlines" data-view="loras">
       <div class="page-head">
         <div>
           <div class="page-title">LoRAs</div>
@@ -589,7 +1280,7 @@
     </section>
 
     <!-- Assets -->
-    <section class="view" data-view="assets">
+    <section class="view px-theme scanlines" data-view="assets">
       <div class="page-head">
         <div>
           <div class="page-title">Assets</div>
@@ -616,7 +1307,7 @@
     </section>
 
     <!-- Downloads -->
-    <section class="view" data-view="downloads">
+    <section class="view px-theme scanlines" data-view="downloads">
       <div class="page-head">
         <div>
           <div class="page-title">Downloads</div>
@@ -670,7 +1361,7 @@
     </section>
 
     <!-- HF Browser modal: flat list of safetensors/ckpt/bin/gguf/pth from a repo -->
-    <div class="modal-scrim" id="hfBrowserScrim" aria-hidden="true">
+    <div class="modal-scrim px-theme px-hf-scrim" id="hfBrowserScrim" aria-hidden="true">
       <div class="modal hf-browser" role="dialog" aria-modal="true" aria-labelledby="hfBrowserTitle">
         <div class="modal-head">
           <div id="hfBrowserTitle" class="modal-title">Browse HuggingFace</div>
@@ -702,7 +1393,7 @@
     </div>
 
     <!-- Settings -->
-    <section class="view" data-view="settings">
+    <section class="view px-theme scanlines" data-view="settings">
       <div class="page-head">
         <div>
           <div class="page-title">Settings</div>
@@ -736,10 +1427,10 @@
             <div class="field" style="margin:0">
               <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
                 <span class="status-pill" id="moderationPill" data-state="loading">Checking…</span>
-                <span style="font-size:12px;color:var(--t-3)" id="moderationSource"></span>
+                <span class="px-mute settings-inline-note" id="moderationSource"></span>
               </div>
             </div>
-            <div style="font-size:12px;color:var(--t-3);line-height:1.45">
+            <div class="px-mute settings-body-copy">
               On by default. Gates prompts, reference uploads, generated outputs, and CivitAI browsing. Disabling is a deliberate-friction control — see the moderator source for the acknowledgement token.
             </div>
             <div style="display:flex;gap:8px;flex-wrap:wrap">
@@ -750,7 +1441,7 @@
         </div>
         <div class="card settings-full" style="padding:14px">
           <div class="section-title" style="margin:0 0 10px;border:0;padding:0">GPU</div>
-          <pre id="gpuDebug" style="font-family:var(--font-mono);font-size:11px;color:var(--t-3);white-space:pre-wrap;margin:0">Loading…</pre>
+          <pre id="gpuDebug" class="settings-debug">Loading…</pre>
         </div>
       </div>
     </section>
@@ -817,7 +1508,7 @@
 <div class="lightbox" id="lightbox" role="dialog" aria-modal="true" aria-hidden="true">
   <div class="lightbox-head">
     <div class="meta" id="lightboxMeta"></div>
-    <button class="btn" id="lightboxDownload"><svg><use href="#i-down"/></svg>Download</button>
+    <button class="btn lightbox-download-btn" id="lightboxDownload"><svg><use href="#i-down"/></svg><span>Download</span></button>
     <button class="icon-btn" id="lightboxClose" title="Close"><svg><use href="#i-x"/></svg></button>
   </div>
   <div class="lightbox-stage" id="lightboxStage"></div>

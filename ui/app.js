@@ -473,11 +473,25 @@ const api = {
   assets:        () => json(apiCall('/api/assets', { timeoutMs: 8000 })),
   trainers:      () => json(apiCall('/api/trainers')),
   downloadTrainerDataset: (b) => json(apiCall('/api/trainers/datasets/download', jsonBody(b))),
+  uploadTrainerDataset:   (files, targetName) => {
+    const fd = new FormData();
+    files.forEach(file => fd.append('files', file, file.name));
+    const qs = new URLSearchParams({ target_name: targetName || 'upload' });
+    return json(apiCall(`/api/trainers/dataset/upload?${qs}`, {
+      method: 'POST',
+      body: fd,
+      timeoutMs: 120000,
+    }));
+  },
   validateTrainerDataset: (b) => json(apiCall('/api/trainers/validate', jsonBody(b))),
+  listTrainerDataset:     (b) => json(apiCall('/api/trainers/dataset/list', jsonBody(b))),
+  saveTrainerCaption:     (b) => json(apiCall('/api/trainers/dataset/caption', jsonBody(b))),
+  toggleTrainerExclude:   (b) => json(apiCall('/api/trainers/dataset/exclude', jsonBody(b))),
   trainJobs:     () => json(apiCall('/api/train-jobs')),
   startTrainJob: (b) => json(apiCall('/api/train-jobs', jsonBody(b))),
   trainJob:      (id) => json(apiCall(`/api/train-jobs/${encodeURIComponent(id)}`)),
   cancelTrainJob:(id) => json(apiCall(`/api/train-jobs/${encodeURIComponent(id)}`, { method: 'DELETE' })),
+  trainJobSamples:(id) => json(apiCall(`/api/train-jobs/${encodeURIComponent(id)}/samples`)),
   // Lifecycle
   launch:        (b) => json(apiCall('/api/launch', jsonBody(b))),
   stop:          (id) => json(apiCall(`/api/stop/${id}`, { method: 'POST' })),
@@ -992,9 +1006,7 @@ function bindShell() {
   $('#hfDownloadBtn')?.addEventListener('click', startHFDownload);
   $('#hfBrowseBtn')?.addEventListener('click', () => openHFBrowser());
   $('#hfRepo')?.addEventListener('keydown', (e) => { if (e.key === 'Enter') openHFBrowser(); });
-  $('#trainerDatasetDownloadBtn')?.addEventListener('click', downloadTrainerDataset);
-  $('#trainerValidateBtn')?.addEventListener('click', validateTrainerDataset);
-  $('#trainerStartBtn')?.addEventListener('click', startTrainerJob);
+  bindTrainerWizard();
   // HF Browser modal wiring. Each handler is null-safe so the modal works
   // even before any tab navigation has touched the markup.
   $('#hfBrowserClose')?.addEventListener('click', closeHFBrowser);
@@ -1020,7 +1032,7 @@ function bindShell() {
   });
   $('#hfBrowserDownload')?.addEventListener('click', submitHFBrowserDownload);
   $('#dlQueueClear')?.addEventListener('click', clearCompletedDownloads);
-  ['#settingsHFToken', '#wsHFToken', '#hfTokenDl', '#trainerHFToken'].forEach(sel => {
+  ['#settingsHFToken', '#wsHFToken', '#hfTokenDl', '#trainerWizardHFToken'].forEach(sel => {
     $(sel)?.addEventListener('change', e => saveHFToken(e.target.value));
   });
 
@@ -1143,7 +1155,7 @@ function currentHFToken(selector) {
 
 function syncHFTokenInputs() {
   const token = state.settings.hf_token || '';
-  ['#settingsHFToken', '#drawerHFToken', '#wsHFToken', '#hfTokenDl', '#trainerHFToken'].forEach(sel => {
+  ['#settingsHFToken', '#drawerHFToken', '#wsHFToken', '#hfTokenDl', '#trainerWizardHFToken'].forEach(sel => {
     const el = $(sel);
     if (el && el.value !== token) el.value = token;
   });
@@ -1151,6 +1163,12 @@ function syncHFTokenInputs() {
 
 // ── Views ────────────────────────────────────────────────────────────────
 function switchView(name, push = true) {
+  // Stop the trainer-running polling whenever we leave that view.
+  // openTrainerRunningView starts its own poll, so this only fires on
+  // navigation AWAY from the running monitor.
+  if (name !== 'trainer-running' && typeof stopTrainerRunningPoll === 'function') {
+    stopTrainerRunningPoll();
+  }
   if (name !== 'workspace') {
     $('.main')?.classList.remove('llm-open');
     $('[data-view="workspace"]')?.classList.remove('llm-mode');
@@ -1163,7 +1181,8 @@ function switchView(name, push = true) {
     history.pushState({ view: name, workspace: state.workspace }, '', url);
   }
   $$('.view').forEach(v => v.classList.toggle('active', v.dataset.view === name));
-  $$('.nav-item').forEach(n => n.classList.toggle('active', n.dataset.view === name));
+  const navName = name === 'trainer-running' ? 'trainers' : name;
+  $$('.nav-item').forEach(n => n.classList.toggle('active', n.dataset.view === navName));
   state.view = name;
   if (name === 'loras')   loadLoras();
   if (name === 'assets')  loadAssets();
@@ -5006,28 +5025,1679 @@ function activeTrainer() {
   return state.trainers.find(t => t.id === 'qwen-character-lora') || state.trainers[0] || null;
 }
 
+// ── Trainer wizard (Phase 1) ────────────────────────────────────────────
+// State lives on the module — small enough not to warrant the global
+// state object. Steps 2-5 are stubbed (Phase 2 work); Step 1 is the
+// fully-functional recipe picker + run name. Next/Back navigate
+// strictly; clicking a completed stepper chip jumps back to that step.
+const RECIPES = {
+  character: { steps: 3000, rank: 64,  lr: 0.0002, label: 'Character / person' },
+  style:     { steps: 4000, rank: 32,  lr: 0.0001, label: 'Art style' },
+  concept:   { steps: 2500, rank: 32,  lr: 0.0002, label: 'Concept / object' },
+  custom:    { steps: 2000, rank: 32,  lr: 0.0002, label: 'From scratch' },
+};
+let trainerWizardStep = 0;
+let trainerWizardRecipe = 'character';
+let trainerWizardSource = 'hf';            // 'hf' | 'upload' | 'folder'
+let trainerWizardUploadFiles = [];          // File[] queued for Step 2 upload
+let trainerWizardDatasetPath = 'datasets/kerry';
+let trainerValidationPath = '';             // path that state.trainValidation belongs to
+
+// ── Step 3 state ──
+let trainerCurateDataset = null;            // { dataset_path, pair_count, pairs, health }
+let trainerCurateSelected = null;           // image rel_path
+let trainerCurateFilter = 'all';            // 'all' | 'flagged' | 'missing' | 'included'
+let trainerCuratePendingSaves = 0;           // caption/exclude writes still in flight
+
+// ── Step 4 state ──
+// trainerWizardCfg is the wizard's source of truth for the launch payload.
+// Advanced knobs are written into the backend job manifest and trainer wrapper
+// environment so the generated command and real training run stay aligned.
+const trainerWizardCfg = {
+  trigger:   'A woman named Kerry',
+  base:      'Qwen/Qwen-Image-2512',
+  steps:     3000,
+  rank:      64,
+  lr:        0.0002,
+  res:       1024,
+  batch:     1,
+  repeats:   1,
+  opt:       'adamw8bit',
+  sched:     'cosine',
+  alpha:     64,
+  saveEvery: 500,
+  precision: 'bf16',
+  gradCkpt:  'on',
+};
+const trainerWizardSamples = [
+  'A woman named Kerry, portrait, natural skin texture, studio lighting',
+  'A woman named Kerry, smiling, golden hour, soft daylight',
+];
+let trainerWizardAdvanced = false;
+let trainerAlphaTouched = false;
+
+// Step 5 launch options. Mirrored into the trainer payload at launch time
+// (Phase 3 will wire 'notify' + 'autoShutdown' to backend hooks; right
+// now they're UI-only acknowledgements).
+const trainerLaunchOpts = {
+  samples:      true,
+  autoPublish:  true,
+  notify:       false,
+  autoShutdown: false,
+};
+
+function bindTrainerWizard() {
+  // Recipe selection — update the wizard config that feeds the launch payload.
+  $$('.recipe-card').forEach(card => {
+    card.addEventListener('click', () => {
+      trainerWizardRecipe = card.dataset.recipe;
+      $$('.recipe-card').forEach(c => c.classList.toggle('selected', c === card));
+      applyRecipeToWizard();
+    });
+  });
+  // Live-derive filename hint from the name input.
+  $('#trainerRunName')?.addEventListener('input', renderTrainerFilenameHint);
+  renderTrainerFilenameHint();
+  // Step navigation.
+  $('#trainerWizardNext')?.addEventListener('click', onTrainerWizardNext);
+  $('#trainerWizardBack')?.addEventListener('click', () => setTrainerWizardStep(trainerWizardStep - 1));
+  $('#trainerWizardCancel')?.addEventListener('click', () => {
+    setTrainerWizardStep(0);
+    toast('Trainer wizard reset', 'info');
+  });
+  $$('#trainerStepper .px-step').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const idx = Number(btn.dataset.step);
+      // Only allow jumping back to completed steps (left-of-current).
+      if (idx < trainerWizardStep) setTrainerWizardStep(idx);
+    });
+  });
+  // GPU chip — pull current VRAM tier from state.gpu if available.
+  renderTrainerGpuChip();
+
+  // ── Step 2: source picker ──
+  $$('.source-card').forEach(card => {
+    card.addEventListener('click', () => setTrainerWizardSource(card.dataset.source));
+  });
+
+  // HF inputs — the wizard owns the dataset source and launch payload.
+  const hfRepo   = $('#trainerWizardHFRepo');
+  const hfType   = $('#trainerWizardHFType');
+  const hfTarget = $('#trainerWizardHFTarget');
+  hfRepo  ?.addEventListener('input',  () => clearTrainerDatasetState());
+  hfType  ?.addEventListener('change', () => clearTrainerDatasetState());
+  hfTarget?.addEventListener('input',  () => {
+    const path = $('#trainerWizardHFCachePath');
+    if (path) path.textContent = `datasets/${(hfTarget.value || 'kerry').trim()}`;
+    setTrainerDatasetPath(`datasets/${(hfTarget.value || 'kerry').trim()}`);
+    clearTrainerDatasetState();
+  });
+  $('#trainerWizardHFPull')?.addEventListener('click', async () => {
+    await downloadTrainerDataset();
+  });
+
+  // Upload — collect files, count them, queue for upload on Next.
+  const drop  = $('#trainerWizardDrop');
+  const file  = $('#trainerWizardFileInput');
+  const browse = $('#trainerWizardBrowseBtn');
+  browse?.addEventListener('click', (e) => { e.stopPropagation(); file?.click(); });
+  drop?.addEventListener('click',  () => file?.click());
+  file?.addEventListener('change', () => addTrainerUploadFiles([...(file.files || [])]));
+  drop?.addEventListener('dragover',  (e) => { e.preventDefault(); drop.classList.add('dragging'); });
+  drop?.addEventListener('dragleave', () => drop.classList.remove('dragging'));
+  drop?.addEventListener('drop', (e) => {
+    e.preventDefault();
+    drop.classList.remove('dragging');
+    addTrainerUploadFiles([...(e.dataTransfer?.files || [])]);
+  });
+
+  // Folder — path input + validate.
+  $('#trainerWizardFolder')?.addEventListener('input', (e) => {
+    setTrainerDatasetPath(e.target.value);
+    clearTrainerDatasetState();
+  });
+  $('#trainerWizardFolderValidate')?.addEventListener('click', async () => {
+    await validateTrainerDataset();
+    renderTrainerWizardStats(state.trainValidation);
+    const status = $('#trainerWizardFolderStatus');
+    if (status) {
+      if (state.trainValidation?.valid) {
+        status.innerHTML = `<span class="ok">✓ Dataset readable</span>`;
+      } else if (isTrainerValidationUsable()) {
+        status.innerHTML = `<span class="warn">✓ Readable · fix captions in Curate</span>`;
+      } else {
+        status.innerHTML = `<span class="err">✗ ${esc(state.trainValidation?.error || 'Validation failed')}</span>`;
+      }
+    }
+  });
+
+  // Re-render the stat strip when validation changes.
+  document.addEventListener('forge:trainer-validated', () => renderTrainerWizardStats(state.trainValidation));
+
+  // ── Step 4: trigger / base / knobs / samples / summary ──
+  bindTrainerConfigure();
+  // ── Step 5: launch ──
+  bindTrainerLaunch();
+
+  // ── Step 3: filter pills + bulk actions + inspector ──
+  $$('#trainerCurateFilters .filter-pill').forEach(p => {
+    p.addEventListener('click', () => {
+      trainerCurateFilter = p.dataset.filter;
+      $$('#trainerCurateFilters .filter-pill').forEach(x => x.classList.toggle('active', x === p));
+      renderTrainerCurateGrid();
+    });
+  });
+  $('#trainerCurateReload')?.addEventListener('click', () => loadTrainerCurate(true));
+  $('#trainerInspectorSave')?.addEventListener('click', saveTrainerInspectorCaption);
+  $('#trainerInspectorCaption')?.addEventListener('input', () => {
+    const text = $('#trainerInspectorCaption').value;
+    const meta = $('#trainerInspectorCaptionMeta');
+    if (meta) meta.textContent = `${text.length} chars · ${text.split(/\s+/).filter(Boolean).length} tokens`;
+  });
+}
+
+function currentTrainerDatasetPath() {
+  return (trainerWizardDatasetPath || '').trim();
+}
+
+function setTrainerDatasetPath(value) {
+  trainerWizardDatasetPath = (value || '').trim();
+}
+
+function resetTrainerCurateState() {
+  trainerCurateDataset = null;
+  trainerCurateSelected = null;
+  trainerCuratePendingSaves = 0;
+}
+
+function clearTrainerDatasetState() {
+  state.trainValidation = null;
+  trainerValidationPath = '';
+  resetTrainerCurateState();
+  renderTrainerWizardStats(null);
+  renderTrainerDatasetSummary(null);
+  renderTrainerConfigureSummary();
+  updateTrainerWizardNextGate();
+}
+
+function setTrainerValidation(summary, datasetPath) {
+  state.trainValidation = summary || null;
+  trainerValidationPath = (datasetPath || summary?.requested_path || currentTrainerDatasetPath()).trim();
+  resetTrainerCurateState();
+  renderTrainerDatasetSummary(state.trainValidation);
+  renderTrainerWizardStats(state.trainValidation);
+  document.dispatchEvent(new CustomEvent('forge:trainer-validated'));
+}
+
+function isTrainerValidationUsable() {
+  const summary = state.trainValidation;
+  if (!summary) return false;
+  if (trainerValidationPath && trainerValidationPath !== currentTrainerDatasetPath()) return false;
+  return Number(summary.image_count || 0) > 0;
+}
+
+function setTrainerWizardSource(id) {
+  if (trainerWizardSource === id) return;
+  trainerWizardSource = id;
+  $$('.source-card').forEach(c => c.classList.toggle('selected', c.dataset.source === id));
+  $$('[data-source-panel]').forEach(p => { p.hidden = p.dataset.sourcePanel !== id; });
+  if (id === 'hf') {
+    const target = ($('#trainerWizardHFTarget')?.value || 'kerry').trim() || 'kerry';
+    setTrainerDatasetPath(`datasets/${target}`);
+  } else if (id === 'folder') {
+    setTrainerDatasetPath($('#trainerWizardFolder')?.value || '');
+  }
+  clearTrainerDatasetState();
+}
+
+function addTrainerUploadFiles(files) {
+  if (!files.length) return;
+  trainerWizardUploadFiles.push(...files);
+  clearTrainerDatasetState();
+  const count = $('#trainerWizardUploadCount');
+  if (count) {
+    const imgs = trainerWizardUploadFiles.filter(f => /^image\//.test(f.type)).length;
+    const txts = trainerWizardUploadFiles.length - imgs;
+    count.innerHTML = `<b style="color:var(--px-text)">${imgs} image${imgs === 1 ? '' : 's'}</b> queued · ${txts} caption file${txts === 1 ? '' : 's'}`;
+  }
+}
+
+async function uploadTrainerDatasetFromWizard() {
+  if (!trainerWizardUploadFiles.length) return null;
+  const runName = ($('#trainerRunName')?.value || 'dataset').trim();
+  const count = $('#trainerWizardUploadCount');
+  if (count) count.innerHTML = `<span class="spinner"></span><span>Uploading ${trainerWizardUploadFiles.length} files…</span>`;
+  try {
+    let res;
+    if (state.preview) {
+      await delay(450);
+      const target = runName.replace(/[^A-Za-z0-9._-]+/g, '_').replace(/^_+|_+$/g, '') || 'dataset';
+      res = {
+        dataset_path: `datasets/uploads/${target}_preview`,
+        scan: { valid: true, image_count: 80, caption_count: 80, pair_count: 80 },
+      };
+    } else {
+      res = await api.uploadTrainerDataset(trainerWizardUploadFiles, `${runName}_dataset`);
+    }
+    setTrainerDatasetPath(res.dataset_path || '');
+    setTrainerValidation(res.scan || null, res.dataset_path || currentTrainerDatasetPath());
+    trainerWizardUploadFiles = [];
+    if (count) count.innerHTML = `<b style="color:var(--px-text)">${res.scan?.image_count || 0} images</b> uploaded · ${res.dataset_path || 'dataset cached'}`;
+    toast('Dataset uploaded', 'success');
+    return res;
+  } catch (e) {
+    clearTrainerDatasetState();
+    if (count) count.innerHTML = `<b style="color:var(--px-text)">${trainerWizardUploadFiles.length} files</b> queued`;
+    toast(e.message || 'Dataset upload failed', 'error');
+    return null;
+  }
+}
+
+function renderTrainerWizardStats(summary) {
+  const strip = $('#trainerWizardStats');
+  if (!strip) return;
+  const cards = $$('.stat-card', strip);
+  if (!summary) {
+    cards.forEach(c => {
+      c.classList.add('empty');
+      const num = $('.stat-num', c);
+      if (num) num.textContent = '—';
+    });
+    updateTrainerWizardNextGate();
+    return;
+  }
+  const images   = Number(summary.image_count   || 0);
+  const captions = Number(summary.caption_count || 0);
+  const pairs    = Number(summary.pair_count    || 0);
+  const missing  = (summary.missing_captions || []).length;
+  const orphan   = (summary.orphan_captions  || []).length;
+  const empty    = (summary.empty_captions   || []).length;
+  const issues   = missing + orphan + empty;
+
+  const setStat = (key, value, subText) => {
+    const card = strip.querySelector(`[data-stat="${key}"]`)?.closest('.stat-card');
+    if (!card) return;
+    card.classList.toggle('empty', value === '—' || value === 0);
+    const num = $('.stat-num', card);
+    const sub = card.querySelector(`[data-stat-sub="${key}"]`);
+    if (num) num.textContent = String(value);
+    if (sub && subText) sub.textContent = subText;
+  };
+  setStat('images',   images);
+  setStat('captions', captions, missing ? `${missing} missing` : 'all matched');
+  setStat('pairs',    pairs);
+  setStat('issues',   issues,   issues ? 'auto-flagged' : 'none');
+  // Update Next-gating based on validity.
+  updateTrainerWizardNextGate();
+}
+
+function updateTrainerWizardNextGate() {
+  const next = $('#trainerWizardNext');
+  if (!next) return;
+  if (trainerWizardStep === 1) {
+    // Step 2: curation can fix captions, so require a readable image set,
+    // not a fully train-ready caption set.
+    if (trainerWizardSource === 'upload') {
+      next.disabled = !(trainerWizardUploadFiles.length > 0 || isTrainerValidationUsable());
+    } else {
+      next.disabled = !isTrainerValidationUsable();
+    }
+    return;
+  }
+  if (trainerWizardStep === 2) {
+    // Step 3: Need at least 8 included pairs and the dataset to be "ready".
+    const included = trainerCurateDataset?.pairs.filter(p => !p.excluded).length || 0;
+    const ready = trainerCurateDataset?.health?.ready;
+    next.disabled = trainerCuratePendingSaves > 0 || !(included >= 8 && ready);
+    return;
+  }
+  next.disabled = false;
+}
+
+// Next behavior is source-aware on Step 2: HF/folder need a validation,
+// upload needs files queued. Other steps just advance.
+async function onTrainerWizardNext() {
+  if (trainerWizardStep === 1) {
+    if (trainerWizardSource === 'upload' && trainerWizardUploadFiles.length > 0 && !isTrainerValidationUsable()) {
+      const uploaded = await uploadTrainerDatasetFromWizard();
+      if (!uploaded) return;
+    }
+    if (!isTrainerValidationUsable()) {
+      if (trainerWizardSource === 'upload') {
+        toast('Add images to upload before continuing.', 'error');
+        return;
+      }
+      // Auto-run validate for HF/folder paths the user typed but didn't click.
+      await validateTrainerDataset();
+      if (!isTrainerValidationUsable()) {
+        toast('Dataset has no readable training images yet.', 'error');
+        return;
+      }
+    }
+  }
+  setTrainerWizardStep(trainerWizardStep + 1);
+}
+
+function applyRecipeToWizard() {
+  const r = RECIPES[trainerWizardRecipe];
+  if (!r) return;
+  trainerWizardCfg.steps = r.steps;
+  trainerWizardCfg.rank = r.rank;
+  trainerWizardCfg.lr = r.lr;
+  if (!trainerAlphaTouched) {
+    trainerWizardCfg.alpha = r.rank;
+    setTrainerOptionRowValue('alpha', r.rank);
+  }
+  setTrainerSliderValue('steps', r.steps);
+  setTrainerOptionRowValue('rank', r.rank);
+  setTrainerOptionRowValue('lr', r.lr);
+  renderTrainerConfigureSummary();
+}
+
+function setTrainerSliderValue(key, value) {
+  const slider = $(`input.px-slider[data-cfg="${key}"]`);
+  if (slider) slider.value = String(value);
+  const chip = document.querySelector(`[data-value="${key}"]`);
+  if (chip) chip.textContent = String(value);
+}
+
+function setTrainerOptionRowValue(key, value) {
+  const row = $(`.option-row[data-cfg="${key}"]`);
+  if (!row) return;
+  const wanted = String(value);
+  $$('button[data-value]', row).forEach(btn => {
+    btn.classList.toggle('selected', btn.dataset.value === wanted);
+  });
+}
+
+function renderTrainerFilenameHint() {
+  const name = ($('#trainerRunName')?.value || '').trim() || 'kerry_qwen_lora';
+  const safe = name.replace(/[^A-Za-z0-9._-]+/g, '_').replace(/^_+|_+$/g, '') || 'kerry_qwen_lora';
+  const hint = $('#trainerFilenameHint');
+  if (hint) hint.textContent = `→ ${safe}.safetensors`;
+}
+
+function renderTrainerGpuChip() {
+  const chip = $('#trainerGpuChip');
+  if (!chip) return;
+  const g = state.gpu || {};
+  if (!g.total_gb) {
+    chip.textContent = '⚙ GPU · checking…';
+    return;
+  }
+  chip.textContent = `⚙ GPU · ${Math.round(g.total_gb)} GB · ready`;
+}
+
+function setTrainerWizardStep(idx) {
+  const clamped = Math.max(0, Math.min(4, idx));
+  trainerWizardStep = clamped;
+  $$('[data-wizard-step]').forEach(el => {
+    el.hidden = Number(el.dataset.wizardStep) !== clamped;
+  });
+  $$('#trainerStepper .px-step').forEach((btn) => {
+    const stepIdx = Number(btn.dataset.step);
+    btn.classList.toggle('active', stepIdx === clamped);
+    btn.classList.toggle('done',   stepIdx <  clamped);
+  });
+  const back = $('#trainerWizardBack');
+  const next = $('#trainerWizardNext');
+  if (back) back.disabled = (clamped === 0);
+  if (next) {
+    next.textContent = 'Next →';
+    next.style.display = (clamped === 4) ? 'none' : '';
+  }
+  const label = $('#trainerStepLabel');
+  if (label) label.textContent = `Step ${clamped + 1} of 5`;
+  // Step 5 entry — refresh the generated command + final-check numerics.
+  if (clamped === 4) {
+    renderTrainerLaunchPreview();
+  }
+  // Step 3 entry — pull the dataset listing for the current path. Explicit
+  // Reload refetches even when the path hasn't changed.
+  if (clamped === 2 && (!trainerCurateDataset || trainerCurateDataset.requested_path !== currentTrainerDatasetPath())) {
+    loadTrainerCurate(false);
+  }
+  // Re-evaluate Next-gate based on what the new step requires.
+  updateTrainerWizardNextGate();
+}
+
+// ── Step 3 (Curate) data + rendering ────────────────────────────────────
+function previewTrainerImageUrl(index) {
+  const hue = (index * 37) % 360;
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="512" height="640" viewBox="0 0 512 640">
+    <rect width="512" height="640" fill="hsl(${hue},35%,18%)"/>
+    <circle cx="256" cy="220" r="92" fill="hsl(${hue},45%,72%)"/>
+    <rect x="124" y="330" width="264" height="240" rx="64" fill="hsl(${(hue + 90) % 360},45%,48%)"/>
+    <text x="256" y="610" text-anchor="middle" font-family="monospace" font-size="34" fill="white">${String(index + 1).padStart(2, '0')}</text>
+  </svg>`;
+  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+}
+
+function previewTrainerCurateDataset(datasetPath) {
+  const pairs = Array.from({ length: 18 }, (_, i) => ({
+    image: `${String(i + 1).padStart(2, '0')}.png`,
+    caption_path: `${String(i + 1).padStart(2, '0')}.txt`,
+    caption: i % 7 === 0 ? '' : `A woman named Kerry, training reference image ${i + 1}, varied outfit and lighting.`,
+    size_bytes: 420000 + i * 13000,
+    flags: i % 7 === 0 ? [{ label: 'EMPTY CAP', tone: 'warn', detail: 'caption file exists but is empty' }] : [],
+    excluded: i === 3,
+    url: previewTrainerImageUrl(i),
+  }));
+  return {
+    dataset_path: datasetPath,
+    requested_path: datasetPath,
+    pair_count: pairs.length,
+    pairs,
+    health: computeTrainerCurateHealth(pairs),
+  };
+}
+
+async function loadTrainerCurate(force) {
+  const datasetPath = currentTrainerDatasetPath();
+  if (!datasetPath) {
+    toast('Validate a dataset first in Step 2.', 'error');
+    return;
+  }
+  if (trainerCurateDataset && !force && trainerCurateDataset.requested_path === datasetPath) return;
+  if (!trainerCurateDataset || trainerCurateDataset.requested_path !== datasetPath) {
+    resetTrainerCurateState();
+  }
+  const grid = $('#trainerCurateGrid');
+  const empty = $('#trainerCurateEmpty');
+  if (grid) grid.innerHTML = `<div class="px-mute" style="grid-column:1/-1;padding:24px;text-align:center">Loading…</div>`;
+  if (empty) empty.hidden = true;
+  try {
+    if (state.preview) {
+      await delay(250);
+      trainerCurateDataset = previewTrainerCurateDataset(datasetPath);
+    } else {
+      trainerCurateDataset = await api.listTrainerDataset({ dataset_path: datasetPath });
+    }
+    trainerCurateDataset.requested_path = datasetPath;
+    recomputeTrainerCurateHealth();
+    if (!trainerCurateDataset?.pairs?.length) {
+      if (grid) grid.innerHTML = '';
+      if (empty) {
+        empty.hidden = false;
+        empty.textContent = 'No images found in this dataset folder.';
+      }
+      return;
+    }
+    // Auto-select the first image if nothing's selected yet.
+    if (!trainerCurateSelected || !trainerCurateDataset.pairs.find(p => p.image === trainerCurateSelected)) {
+      trainerCurateSelected = trainerCurateDataset.pairs[0].image;
+    }
+    renderTrainerCurateAll();
+  } catch (e) {
+    if (grid) grid.innerHTML = `<div class="px-mute" style="grid-column:1/-1;padding:24px;text-align:center;color:var(--px-err)">Failed to load: ${esc(e.message || 'unknown')}</div>`;
+    updateTrainerWizardNextGate();
+  }
+}
+
+function computeTrainerCurateHealth(pairs) {
+  const included = (pairs || []).filter(p => !p.excluded);
+  const total = included.length;
+  const denom = total || 1;
+  const covered = included.filter(p => p.caption_path).length;
+  const hasText = included.filter(p => (p.caption || '').trim()).length;
+  const avgLen = included.reduce((sum, p) => sum + (p.caption || '').trim().length, 0) / denom;
+  const buckets = new Set(included.map(p => Math.floor(Number(p.size_bytes || 0) / (200 * 1024))));
+  return {
+    coverage: total ? Math.round(100 * covered / denom) : 0,
+    captions: total ? Math.round(100 * hasText / denom) : 0,
+    balance: avgLen ? Math.round(Math.max(0, Math.min(100, 100 * (1 - Math.abs(avgLen - 90) / 90)))) : 0,
+    variety: total ? Math.min(100, Math.round(100 * buckets.size / Math.max(8, Math.floor(total / 6)))) : 0,
+    ready: total >= 8 && covered === total && hasText === total,
+  };
+}
+
+function recomputeTrainerCurateHealth() {
+  if (!trainerCurateDataset) return;
+  trainerCurateDataset.health = computeTrainerCurateHealth(trainerCurateDataset.pairs);
+  trainerCurateDataset.included_count = trainerCurateDataset.pairs.filter(p => !p.excluded).length;
+  trainerCurateDataset.excluded_count = trainerCurateDataset.pairs.length - trainerCurateDataset.included_count;
+}
+
+function renderTrainerCurateAll() {
+  recomputeTrainerCurateHealth();
+  renderTrainerCurateGrid();
+  renderTrainerCurateInspector();
+  renderTrainerCurateHealth();
+  updateTrainerWizardNextGate();
+}
+
+// Filter + render the grid. Visibility is purely client-side — we hold the
+// full list in trainerCurateDataset and never refetch on filter change.
+function renderTrainerCurateGrid() {
+  const grid = $('#trainerCurateGrid');
+  const empty = $('#trainerCurateEmpty');
+  if (!grid) return;
+  if (!trainerCurateDataset) return;
+  const all = trainerCurateDataset.pairs;
+  const visible = all.filter(p => {
+    if (trainerCurateFilter === 'flagged')  return p.flags.length > 0;
+    if (trainerCurateFilter === 'missing')  return !p.caption;
+    if (trainerCurateFilter === 'included') return !p.excluded;
+    return true;
+  });
+  const counts = {
+    all:      all.length,
+    flagged:  all.filter(p => p.flags.length > 0).length,
+    missing:  all.filter(p => !p.caption).length,
+    included: all.filter(p => !p.excluded).length,
+  };
+  $$('#trainerCurateFilters [data-count]').forEach(el => {
+    el.textContent = counts[el.dataset.count] ?? 0;
+  });
+  if (!visible.length) {
+    grid.innerHTML = `<div class="px-mute" style="grid-column:1/-1;padding:24px;text-align:center">Nothing matches this filter.</div>`;
+    if (empty) empty.hidden = true;
+    return;
+  }
+  if (empty) empty.hidden = true;
+  grid.innerHTML = visible.map(p => trainerCurateTileHtml(p)).join('');
+  // Wire interactions per-tile. Doing it inline rather than via delegation
+  // keeps the handler logic simple and the check vs body click distinct.
+  $$('.curate-tile', grid).forEach(tile => {
+    const rel = tile.dataset.rel;
+    tile.addEventListener('click', () => {
+      trainerCurateSelected = rel;
+      renderTrainerCurateGrid();
+      renderTrainerCurateInspector();
+    });
+    const check = $('.curate-check', tile);
+    check?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      toggleTrainerCurateExclude(rel);
+    });
+  });
+}
+
+function trainerCurateTileHtml(p) {
+  const selectedCls = (p.image === trainerCurateSelected) ? ' selected' : '';
+  const excludedCls = p.excluded ? ' excluded' : '';
+  const checkCls    = p.excluded ? '' : 'on';
+  const chips = (p.flags || []).slice(0, 2)
+    .map(f => `<span class="px-chip ${f.tone || 'warn'}">${esc(f.label)}</span>`)
+    .join('');
+  const nocap = !p.caption
+    ? `<div class="curate-tile-nocap"><span class="px-chip warn">NO CAP</span></div>`
+    : '';
+  return `
+    <div class="curate-tile${selectedCls}${excludedCls}" data-rel="${esc(p.image)}">
+      <img src="${esc(p.url)}" alt="${esc(p.image)}" loading="lazy" onerror="this.style.display='none'">
+      <button class="curate-check ${checkCls}" type="button" title="${p.excluded ? 'Include in training' : 'Exclude from training'}"></button>
+      ${nocap}
+      ${chips ? `<div class="curate-tile-chips">${chips}</div>` : ''}
+    </div>`;
+}
+
+function renderTrainerCurateInspector() {
+  const inspector = $('#trainerCurateInspector');
+  if (!inspector || !trainerCurateDataset) return;
+  const sel = trainerCurateDataset.pairs.find(p => p.image === trainerCurateSelected);
+  if (!sel) {
+    inspector.hidden = true;
+    return;
+  }
+  inspector.hidden = false;
+  const idx = trainerCurateDataset.pairs.indexOf(sel);
+  const title = $('#trainerInspectorTitle');
+  const sub   = $('#trainerInspectorSub');
+  const img   = $('#trainerInspectorImg');
+  const cap   = $('#trainerInspectorCaption');
+  const meta  = $('#trainerInspectorCaptionMeta');
+  const chip  = $('#trainerInspectorStatusChip');
+  const flags = $('#trainerInspectorFlags');
+  if (title) title.textContent = sel.image;
+  if (sub)   sub.textContent   = `Image ${idx + 1} of ${trainerCurateDataset.pair_count}`;
+  if (img)   img.src = sel.url;
+  if (cap)   cap.value = sel.caption || '';
+  if (meta)  meta.textContent = `${(sel.caption || '').length} chars · ${(sel.caption || '').split(/\s+/).filter(Boolean).length} tokens`;
+  if (chip) {
+    chip.className = 'px-chip ' + (sel.excluded ? 'warn' : (sel.flags.length ? 'warn' : 'ok'));
+    chip.textContent = sel.excluded ? 'EXCLUDED' : (sel.flags.length ? 'FLAGGED' : 'INCLUDED');
+  }
+  if (flags) {
+    if (!sel.flags.length) {
+      flags.innerHTML = `<div class="flag-row"><span class="px-dot ok"></span><span>No issues detected.</span></div>`;
+    } else {
+      flags.innerHTML = sel.flags.map(f => `
+        <div class="flag-row">
+          <span class="px-dot ${f.tone === 'err' ? 'err' : 'warn'}"></span>
+          <span><b style="color:var(--px-text)">${esc(f.label)}</b> — ${esc(f.detail || '')}</span>
+        </div>`).join('');
+    }
+  }
+}
+
+function renderTrainerCurateHealth() {
+  if (!trainerCurateDataset) return;
+  const h = trainerCurateDataset.health || {};
+  const set = (key, value) => {
+    const pct = document.querySelector(`[data-health="${key}"]`);
+    const bar = document.querySelector(`[data-health-bar="${key}"]`);
+    const v = Math.max(0, Math.min(100, Number(value) || 0));
+    if (pct) pct.textContent = `${v}%`;
+    if (bar) bar.style.width = `${v}%`;
+  };
+  set('coverage', h.coverage);
+  set('variety',  h.variety);
+  set('captions', h.captions);
+  set('balance',  h.balance);
+  // Counts + ready chip
+  const included = trainerCurateDataset.pairs.filter(p => !p.excluded).length;
+  const excluded = trainerCurateDataset.pairs.length - included;
+  const counts = $('#trainerHealthCounts');
+  const ready  = $('#trainerHealthReady');
+  if (counts) counts.textContent = `${included} included · ${excluded} excluded`;
+  if (ready) {
+    const isReady = h.ready && included >= 8;
+    ready.className = 'px-chip ' + (isReady && trainerCuratePendingSaves === 0 ? 'ok' : 'warn');
+    ready.textContent = trainerCuratePendingSaves > 0
+      ? 'SAVING...'
+      : (isReady ? '✓ READY TO TRAIN' : 'NOT READY');
+  }
+}
+
+async function toggleTrainerCurateExclude(rel) {
+  const pair = trainerCurateDataset?.pairs.find(p => p.image === rel);
+  if (!pair) return;
+  const next = !pair.excluded;
+  // Optimistic flip so the click feels instant.
+  pair.excluded = next;
+  if (!state.preview) trainerCuratePendingSaves += 1;
+  renderTrainerCurateAll();
+  if (state.preview) return;
+  try {
+    await api.toggleTrainerExclude({
+      dataset_path: trainerCurateDataset.dataset_path,
+      image_rel:    rel,
+      excluded:     next,
+    });
+  } catch (e) {
+    // Revert on failure.
+    pair.excluded = !next;
+    toast(`Could not update exclude: ${e.message || 'unknown'}`, 'error');
+  } finally {
+    trainerCuratePendingSaves = Math.max(0, trainerCuratePendingSaves - 1);
+    renderTrainerCurateAll();
+  }
+}
+
+// ── Step 4 (Configure) ──────────────────────────────────────────────────
+function bindTrainerConfigure() {
+  // Trigger phrase
+  $('#cfgTrigger')?.addEventListener('input', (e) => {
+    trainerWizardCfg.trigger = e.target.value;
+    renderTrainerConfigureSummary();
+  });
+
+  // Base model cards
+  $$('#cfgBaseGrid .base-card').forEach(card => {
+    card.addEventListener('click', () => {
+      const id = card.dataset.base;
+      trainerWizardCfg.base = id;
+      $$('#cfgBaseGrid .base-card').forEach(c => c.classList.toggle('selected', c === card));
+      renderTrainerConfigureSummary();
+    });
+  });
+
+  // Sliders — Steps / Batch / Repeats. Update value chip + summary live.
+  $$('.knob-grid input.px-slider, #cfgAdvanced input.px-slider').forEach(slider => {
+    slider.addEventListener('input', () => {
+      const key = slider.dataset.cfg;
+      const val = Number(slider.value);
+      trainerWizardCfg[key] = val;
+      const value = document.querySelector(`[data-value="${key}"]`);
+      if (value) value.textContent = String(val);
+      renderTrainerConfigureSummary();
+    });
+  });
+
+  // Option rows — rank / lr / res / advanced pills. Delegate to clicks
+  // on inner buttons; first click wins, mark selected, persist.
+  $$('.option-row').forEach(row => {
+    row.addEventListener('click', (e) => {
+      const btn = e.target.closest('button[data-value]');
+      if (!btn) return;
+      const key = row.dataset.cfg;
+      const rawVal = btn.dataset.value;
+      // Coerce types so summary math doesn't break (rank=64 not "64").
+      const num = Number(rawVal);
+      const val = Number.isFinite(num) && String(num) === rawVal ? num : rawVal;
+      trainerWizardCfg[key] = val;
+      if (key === 'alpha') {
+        trainerAlphaTouched = true;
+      }
+      if (key === 'rank' && !trainerAlphaTouched) {
+        trainerWizardCfg.alpha = Number(val) || trainerWizardCfg.rank;
+        setTrainerOptionRowValue('alpha', trainerWizardCfg.alpha);
+      }
+      $$('button[data-value]', row).forEach(b => b.classList.toggle('selected', b === btn));
+      renderTrainerConfigureSummary();
+    });
+  });
+
+  // Advanced reveal
+  $('#cfgAdvancedToggle')?.addEventListener('click', () => {
+    trainerWizardAdvanced = !trainerWizardAdvanced;
+    const adv = $('#cfgAdvanced');
+    if (adv) adv.hidden = !trainerWizardAdvanced;
+    const btn = $('#cfgAdvancedToggle');
+    if (btn) btn.textContent = trainerWizardAdvanced ? 'Hide advanced' : 'Show advanced';
+  });
+
+  // Sample prompts list — initial render + add/remove
+  renderTrainerSampleList();
+  $('#cfgSampleAdd')?.addEventListener('click', () => {
+    trainerWizardSamples.push('');
+    renderTrainerSampleList();
+    // Focus the new row's input so the user can start typing.
+    const inputs = $$('#cfgSampleList input');
+    inputs[inputs.length - 1]?.focus();
+  });
+
+  renderTrainerConfigureSummary();
+}
+
+function renderTrainerSampleList() {
+  const list = $('#cfgSampleList');
+  if (!list) return;
+  list.innerHTML = trainerWizardSamples.map((s, i) => `
+    <div class="sample-row" data-sample="${i}">
+      <span class="sample-idx">${String(i + 1).padStart(2, '0')}</span>
+      <input class="px-field" value="${esc(s)}" data-sample-input="${i}">
+      <button class="icon-btn" data-sample-remove="${i}" title="Remove">×</button>
+    </div>
+  `).join('');
+  // Wire inputs + remove buttons.
+  $$('input[data-sample-input]', list).forEach(inp => {
+    inp.addEventListener('input', () => {
+      const idx = Number(inp.dataset.sampleInput);
+      trainerWizardSamples[idx] = inp.value;
+    });
+  });
+  $$('button[data-sample-remove]', list).forEach(btn => {
+    btn.addEventListener('click', () => {
+      const idx = Number(btn.dataset.sampleRemove);
+      trainerWizardSamples.splice(idx, 1);
+      renderTrainerSampleList();
+    });
+  });
+}
+
+function renderTrainerConfigureSummary() {
+  const cfg = trainerWizardCfg;
+  const set = (key, value, color) => {
+    const el = document.querySelector(`[data-summary="${key}"]`);
+    if (!el) return;
+    el.textContent = value;
+    if (color) el.style.color = color;
+  };
+  // Recipe name + tint from the Step 1 selection.
+  const recipeMeta = {
+    character: { label: 'Character',  color: 'var(--px-pink)' },
+    style:     { label: 'Art style',  color: 'var(--px-cyan)' },
+    concept:   { label: 'Concept',    color: 'var(--px-lime)' },
+    custom:    { label: 'Custom',     color: 'var(--px-violet)' },
+  }[trainerWizardRecipe] || { label: trainerWizardRecipe, color: 'var(--px-text)' };
+  set('recipe',  recipeMeta.label, recipeMeta.color);
+  set('base',    cfg.base.replace(/^.*\//, ''));
+  set('trigger', `"${cfg.trigger}"`);
+  set('steps',   Number(cfg.steps).toLocaleString());
+  set('rank',    String(cfg.rank));
+  set('res',     `${cfg.res}px`);
+
+  // VRAM budget — heuristic that scales with rank, batch, res. The
+  // numbers are a rough proxy of resident weights + activations on an
+  // 80 GB card; not authoritative, just enough to warn before launch.
+  const vramGb = Math.min(76,
+    cfg.rank * 0.4 + cfg.batch * 8 + cfg.res / 32 + 12 // base model ~12 GB residual
+  );
+  const vramPct = (vramGb / 80) * 100;
+  const bar  = $('#cfgVramBar');
+  const text = $('#cfgVramText');
+  if (bar)  bar.style.width = `${vramPct}%`;
+  if (text) text.textContent = `${Math.round(vramGb)} / 80 GB`;
+
+  // ETA — same crude proxy as the design: ~55 steps/min on H100 for a
+  // 20B Qwen-Image LoRA at rank 64. Real numbers come from trainer logs
+  // once Phase 3 ships the live metrics stream.
+  const etaMin = Math.max(1, Math.round(cfg.steps / 55));
+  set('steps', Number(cfg.steps).toLocaleString());
+  const etaEl  = $('#cfgEtaNum');
+  if (etaEl) etaEl.textContent = String(etaMin);
+
+  // Cost — assume H100 @ $3.60/hr default; configurable later via Settings.
+  const ratePerHour = 3.6;
+  const cost = (etaMin / 60) * ratePerHour;
+  const costEl = $('#cfgCostNum');
+  if (costEl) costEl.textContent = `$${cost.toFixed(2)}`;
+
+  // Check row — basic readiness: rank/steps/res in valid ranges and
+  // dataset is ready (from Step 3 state).
+  const ready = (
+    Number(cfg.steps) >= 500 &&
+    cfg.rank >= 8 &&
+    cfg.res >= 512 &&
+    !!trainerCurateDataset?.health?.ready &&
+    trainerCuratePendingSaves === 0
+  );
+  const row = $('#cfgCheckRow');
+  if (row) {
+    row.innerHTML = ready
+      ? `<span class="px-dot ok"></span><span class="px-mute">All checks pass · ready to launch</span>`
+      : `<span class="px-dot warn"></span><span class="px-mute">${trainerCuratePendingSaves > 0 ? 'Saving curation changes…' : 'Curate at least 8 images in Step 3 first.'}</span>`;
+  }
+}
+
+function trainerCaptionPathForImage(imageRel) {
+  return String(imageRel || '').replace(/\.[^/.]+$/, '.txt');
+}
+
+// ── Step 5 (Launch) ─────────────────────────────────────────────────────
+function bindTrainerLaunch() {
+  // Confirmation check rows — first two are wired (samples is informational
+  // and autoPublish controls whether the trained LoRA gets dropped into
+  // /workspace/loras when done). Last two are Phase 3 placeholders.
+  $$('[data-launch-flag]').forEach(row => {
+    row.addEventListener('click', () => {
+      if (row.dataset.disabled === 'true') return;
+      const key = row.dataset.launchFlag;
+      trainerLaunchOpts[key] = !trainerLaunchOpts[key];
+      row.classList.toggle('on', trainerLaunchOpts[key]);
+      renderTrainerLaunchPreview();
+    });
+  });
+
+  // Copy the rendered command to clipboard.
+  $('#launchCopyBtn')?.addEventListener('click', async () => {
+    const block = $('#launchCmdBlock');
+    if (!block) return;
+    try {
+      await navigator.clipboard.writeText(block.textContent || '');
+      toast('Command copied', 'success');
+    } catch (e) {
+      toast(`Copy failed: ${e.message || 'unknown'}`, 'error');
+    }
+  });
+
+  // Big launch CTA -> create the backend job from the wizard payload, then
+  // land directly in the five-tab run monitor once the job exists.
+  $('#launchTrainingBtn')?.addEventListener('click', async () => {
+    const btn = $('#launchTrainingBtn');
+    if (!btn) return;
+    btn.disabled = true;
+    const label = btn.innerHTML;
+    btn.innerHTML = '<span class="bolt">⏳</span><span>Launching…</span>';
+    try {
+      const job = await startTrainerJob();
+      if (!job?.id) return;
+      openTrainerRunningView(job.id);
+    } catch (e) {
+      toast(`Launch failed: ${e.message || 'unknown'}`, 'error');
+    } finally {
+      btn.disabled = false;
+      btn.innerHTML = label;
+    }
+  });
+}
+
+function renderTrainerLaunchPreview() {
+  // Update the run name + summary numerics from current cfg.
+  const name = $('#trainerRunName')?.value.trim() || 'kerry_qwen_lora';
+  const safeName = name.replace(/[^A-Za-z0-9._-]+/g, '_').replace(/^_+|_+$/g, '') || 'kerry_qwen_lora';
+  const cfg = trainerWizardCfg;
+  const datasetPath = currentTrainerDatasetPath() || 'datasets/kerry';
+
+  const runEl = $('#launchRunName');
+  if (runEl) runEl.textContent = safeName;
+  const etaMin = Math.max(1, Math.round(cfg.steps / 55));
+  const cost   = (etaMin / 60) * 3.6;
+  const setLaunch = (key, value) => {
+    const el = document.querySelector(`[data-launch="${key}"]`);
+    if (el) el.textContent = value;
+  };
+  setLaunch('cost',      `$${cost.toFixed(2)}`);
+  setLaunch('eta',       `${etaMin} minutes`);
+  setLaunch('saveevery', String(cfg.saveEvery));
+
+  // Generated command — multi-line monospace with coloured spans for
+  // arg names. Mirrors the actual trainer wrapper invocation shape
+  // This mirrors the launch payload that backend/main.py sends as trainer
+  // environment variables.
+  const arg = (k, v) => `  <span class="arg">${esc(k)}</span> <span class="val">${esc(String(v))}</span>`;
+  const lines = [
+    `<span class="accent">$ iggle train</span> \\`,
+    arg('--base-model', cfg.base) + ' \\',
+    arg('--dataset',    datasetPath) + ' \\',
+    arg('--output',     `${safeName}.safetensors`) + ' \\',
+    arg('--trigger',    `"${cfg.trigger}"`) + ' \\',
+    arg('--steps',      cfg.steps) + ' ' + arg('--rank', cfg.rank) + ' \\',
+    arg('--lr',         cfg.lr) + ' ' + arg('--resolution', cfg.res) + ' \\',
+    arg('--batch',      cfg.batch) + ' ' + arg('--repeats', cfg.repeats) + ' \\',
+    arg('--optimizer',  cfg.opt) + ' ' + arg('--scheduler', cfg.sched) + ' \\',
+    arg('--alpha',      cfg.alpha) + ' ' + arg('--save-every', cfg.saveEvery) + ' \\',
+    arg('--precision',  cfg.precision) + ' ' + arg('--gradient-checkpointing', cfg.gradCkpt),
+  ];
+  if (!trainerLaunchOpts.samples) {
+    lines[lines.length - 1] += ' \\';
+    lines.push(arg('--samples', 'off'));
+  }
+  if (!trainerLaunchOpts.autoPublish) {
+    lines[lines.length - 1] += ' \\';
+    lines.push(arg('--auto-import-lora', 'off'));
+  }
+  // Sample prompts (one per --sample flag) if the user authored any.
+  const samples = trainerWizardSamples.filter(s => s.trim());
+  if (trainerLaunchOpts.samples && samples.length) {
+    lines[lines.length - 1] += ' \\';
+    samples.forEach((s, i) => {
+      lines.push(arg('--sample', `"${s.replace(/"/g, '\\"')}"`) + (i < samples.length - 1 ? ' \\' : ''));
+    });
+  }
+  const block = $('#launchCmdBlock');
+  if (block) block.innerHTML = lines.join('\n');
+  const launchBtn = $('#launchTrainingBtn');
+  const ready = !!trainerCurateDataset?.health?.ready && trainerCuratePendingSaves === 0;
+  if (launchBtn) launchBtn.disabled = !ready;
+}
+
+// ── Phase 3: Running monitor ────────────────────────────────────────────
+// State for the active running view. Polling kicks off when the view opens
+// and stops on leaving or when the job hits a terminal state.
+let runJobId = null;            // job id currently being monitored
+let trainerRunJob = null;       // last polled trainer job object
+let runTab = 'monitor';
+let runPollTimer = null;
+let runSamplesCache = null;     // last samples response, indexed by job id
+let runSamplesJobId = null;
+const RUN_POLL_MS = 1500;
+const RUN_SAMPLES_POLL_MS = 6000;   // samples poll runs at a slower cadence
+const RUN_TERMINAL_STATUSES = new Set(['done', 'error', 'cancelled']);
+let runLastSamplesPoll = 0;
+
+function trainerRunIsTerminal(job = trainerRunJob) {
+  return RUN_TERMINAL_STATUSES.has(job?.status);
+}
+
+function trainerPromptSlug(prompt, index = 0) {
+  return String(prompt || `prompt ${index + 1}`)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 42) || `prompt_${index + 1}`;
+}
+
+function previewTrainerMetrics(current, total, lr) {
+  const stepsDone = Math.max(1, Number(current || 1));
+  const stepsTotal = Math.max(stepsDone, Number(total || stepsDone || 1));
+  const count = Math.max(6, Math.min(40, Math.ceil(stepsDone / Math.max(1, stepsTotal / 60))));
+  const baseLr = Number(lr || 0.0002);
+  const loss = [];
+  const lrs = [];
+  for (let i = 0; i < count; i += 1) {
+    const step = Math.max(1, Math.round((stepsDone * (i + 1)) / count));
+    const t = Math.min(1, step / stepsTotal);
+    const curve = 0.88 - 0.42 * Math.log1p(t * 6) / Math.log(7);
+    const wobble = Math.sin(i * 1.7) * 0.018 + Math.cos(i * 0.61) * 0.009;
+    loss.push([step, Math.max(0.19, curve + wobble)]);
+    lrs.push([step, Math.max(baseLr * 0.04, baseLr * (1 - t * 0.82))]);
+  }
+  return { loss, lr: lrs };
+}
+
+function previewTrainerCheckpointSteps(job, includeFuture = false) {
+  const total = Math.max(1, Number(job?.total_steps || job?.steps || 3000));
+  const current = Math.max(0, Number(job?.current_step || 0));
+  const every = Math.max(1, Number(job?.save_every || Math.max(250, Math.min(1000, Math.floor(total / 4) || 250))));
+  const limit = includeFuture ? total : current;
+  const steps = [];
+  for (let step = every; step < total; step += every) {
+    if (step <= limit) steps.push(step);
+  }
+  if ((includeFuture || current >= total) && !steps.includes(total)) steps.push(total);
+  return steps;
+}
+
+function previewTrainerSampleUrl(job, step, slug) {
+  const name = String(job?.output_name || 'preview_lora').replace(/[<>&"]/g, '');
+  const label = String(slug || 'sample').replace(/[<>&"]/g, '');
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 768 768">
+    <defs>
+      <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+        <stop offset="0%" stop-color="#151018"/>
+        <stop offset="55%" stop-color="#221126"/>
+        <stop offset="100%" stop-color="#07191d"/>
+      </linearGradient>
+    </defs>
+    <rect width="768" height="768" fill="url(#bg)"/>
+    <rect x="54" y="54" width="660" height="660" rx="18" fill="rgba(255,255,255,0.045)" stroke="rgba(255,255,255,0.18)"/>
+    <circle cx="384" cy="322" r="132" fill="rgba(255,43,214,0.28)" stroke="rgba(0,229,255,0.46)" stroke-width="4"/>
+    <path d="M210 620c45-128 302-128 348 0" fill="rgba(0,229,255,0.16)" stroke="rgba(255,255,255,0.22)" stroke-width="3"/>
+    <text x="384" y="610" fill="rgba(255,255,255,0.86)" font-family="ui-monospace,monospace" font-size="34" text-anchor="middle">${name}</text>
+    <text x="384" y="656" fill="rgba(255,255,255,0.55)" font-family="ui-monospace,monospace" font-size="22" text-anchor="middle">step ${step} / ${label}</text>
+  </svg>`;
+  return 'data:image/svg+xml;utf8,' + encodeURIComponent(svg);
+}
+
+function previewTrainerSamplesForJob(job) {
+  if (!job || job.generate_samples === false) {
+    return { job_id: job?.id || '', output_dir: job?.output_dir || '', prompts: [], checkpoints: [] };
+  }
+  const rawPrompts = (Array.isArray(job.sample_prompts) && job.sample_prompts.length
+    ? job.sample_prompts
+    : trainerWizardSamples).slice(0, 6);
+  const prompts = rawPrompts.map((p, i) => trainerPromptSlug(p, i));
+  const checkpoints = previewTrainerCheckpointSteps(job).map(step => ({
+    step,
+    samples: prompts.map(slug => ({
+      name: `${String(job.output_name || 'preview')}_${step}_${slug}.png`,
+      url: previewTrainerSampleUrl(job, step, slug),
+      prompt_slug: slug,
+    })),
+  }));
+  return { job_id: job.id, output_dir: job.output_dir || '', prompts, checkpoints };
+}
+
+function previewAdvanceTrainerJob(job, progressStep = 5) {
+  if (!job || !['queued', 'running'].includes(job.status)) return job;
+  const total = Math.max(1, Number(job.total_steps || job.steps || 3000));
+  const previousStep = Math.max(0, Number(job.current_step || 0));
+  const previousProgress = Math.max(0, Math.min(100, Number(job.progress || (previousStep / total) * 100 || 0)));
+  const progress = Math.min(100, previousProgress + progressStep);
+  const current = Math.min(total, Math.round((progress / 100) * total));
+  const metrics = previewTrainerMetrics(current, total, job.learning_rate);
+  const latestLoss = metrics.loss[metrics.loss.length - 1]?.[1];
+  const latestLr = metrics.lr[metrics.lr.length - 1]?.[1];
+  const every = Math.max(1, Number(job.save_every || Math.max(250, Math.min(1000, Math.floor(total / 4) || 250))));
+  const crossedCheckpoint = Math.floor(previousStep / every) < Math.floor(current / every);
+  const logLine = progress >= 100
+    ? 'Preview LoRA imported'
+    : `step ${current}/${total} loss=${latestLoss?.toFixed(4) || '0.0000'} lr=${latestLr?.toExponential(2) || job.learning_rate}`;
+  const logTail = [
+    ...(job.log_tail || []),
+    crossedCheckpoint ? `Saved checkpoint at step ${Math.floor(current / every) * every}` : null,
+    logLine,
+  ].filter(Boolean).slice(-80);
+  const finished = progress >= 100;
+  const loraSteps = previewTrainerCheckpointSteps({ ...job, current_step: total, total_steps: total }, true);
+  return {
+    ...job,
+    status: finished ? 'done' : 'running',
+    phase: finished ? 'Done' : 'Training',
+    phase_progress: progress,
+    current_step: current,
+    total_steps: total,
+    progress,
+    metrics,
+    lora_filename: finished ? `${job.output_name}_step${String(total).padStart(4, '0')}.safetensors` : job.lora_filename,
+    lora_filenames: finished ? loraSteps.map(step => `${job.output_name}_step${String(step).padStart(4, '0')}.safetensors`) : job.lora_filenames,
+    log_tail: logTail,
+  };
+}
+
+function openTrainerRunningView(jobId) {
+  if (!jobId) return;
+  runJobId = jobId;
+  trainerRunJob = null;
+  runTab = 'monitor';
+  runSamplesCache = null;
+  runSamplesJobId = null;
+  runLastSamplesPoll = 0;
+  // Switch view + start polling. switchView already wires the section
+  // toggle; we trigger our own once-then-interval refresh.
+  switchView('trainer-running');
+  startTrainerRunningPoll();
+  // Bind tab buttons + actions once per view open. They live in a
+  // detached <section> so the first time we touch the view we wire
+  // everything; idempotent re-wiring is fine (event listeners get
+  // re-added but the handlers are pure).
+  bindTrainerRunningOnce();
+  refreshTrainerRunning();   // immediate
+}
+
+let trainerRunningBound = false;
+function bindTrainerRunningOnce() {
+  if (trainerRunningBound) return;
+  trainerRunningBound = true;
+  $('#runBack')?.addEventListener('click', closeTrainerRunningView);
+  $('#runStopBtn')?.addEventListener('click', () => cancelRunningJob('stop'));
+  $('#runAbortBtn')?.addEventListener('click', () => cancelRunningJob('abort'));
+  $$('#runTabs .px-tab').forEach(tab => {
+    tab.addEventListener('click', () => setTrainerRunningTab(tab.dataset.runTab));
+  });
+  $('#runSampleReload')?.addEventListener('click', () => {
+    runLastSamplesPoll = 0;       // force the next poll to refetch
+    refreshTrainerRunning();
+  });
+}
+
+function closeTrainerRunningView() {
+  stopTrainerRunningPoll();
+  runJobId = null;
+  trainerRunJob = null;
+  switchView('trainers');
+}
+
+function startTrainerRunningPoll() {
+  stopTrainerRunningPoll();
+  runPollTimer = setInterval(refreshTrainerRunning, RUN_POLL_MS);
+}
+
+function stopTrainerRunningPoll() {
+  if (runPollTimer) {
+    clearInterval(runPollTimer);
+    runPollTimer = null;
+  }
+}
+
+async function refreshTrainerRunning() {
+  if (!runJobId) return;
+  if (state.preview) {
+    const existing = (state.trainJobs || []).find(j => j.id === runJobId);
+    if (!existing) {
+      stopTrainerRunningPoll();
+      return;
+    }
+    const next = previewAdvanceTrainerJob(existing, 4.5);
+    state.trainJobs = (state.trainJobs || []).map(j => j.id === runJobId ? next : j);
+    trainerRunJob = next;
+    if (runTab === 'samples') {
+      runSamplesCache = previewTrainerSamplesForJob(next);
+      runSamplesJobId = runJobId;
+    }
+    renderTrainerRunning();
+    if (trainerRunIsTerminal(next)) stopTrainerRunningPoll();
+    return;
+  }
+  try {
+    trainerRunJob = await api.trainJob(runJobId);
+  } catch (e) {
+    // 404 → job dismissed; stop polling and bail back to trainers.
+    console.warn('trainer run poll failed', e);
+    stopTrainerRunningPoll();
+    return;
+  }
+  renderTrainerRunning();
+  // Stop polling once we reach a terminal state. The render call above
+  // still shows the final state; subsequent renders need a manual reload.
+  if (trainerRunIsTerminal(trainerRunJob)) {
+    stopTrainerRunningPoll();
+  }
+  // Throttle samples polling to RUN_SAMPLES_POLL_MS — image listings are
+  // cheap but enumerating an output dir on every 1.5s poll is wasteful.
+  const now = Date.now();
+  if (runTab === 'samples' && now - runLastSamplesPoll > RUN_SAMPLES_POLL_MS) {
+    runLastSamplesPoll = now;
+    pollTrainerSamples();
+  }
+}
+
+async function pollTrainerSamples() {
+  if (!runJobId) return;
+  if (state.preview) {
+    const job = trainerRunJob || (state.trainJobs || []).find(j => j.id === runJobId);
+    runSamplesCache = previewTrainerSamplesForJob(job);
+    runSamplesJobId = runJobId;
+    if (runTab === 'samples') renderTrainerRunningSamples();
+    return;
+  }
+  try {
+    const data = await api.trainJobSamples(runJobId);
+    runSamplesCache = data;
+    runSamplesJobId = runJobId;
+    if (runTab === 'samples') renderTrainerRunningSamples();
+  } catch {/* silent — common 401/404 during job lifecycle */}
+}
+
+function setTrainerRunningTab(name) {
+  runTab = name;
+  $$('#runTabs .px-tab').forEach(b => b.classList.toggle('active', b.dataset.runTab === name));
+  $$('[data-run-pane]').forEach(p => { p.hidden = p.dataset.runPane !== name; });
+  if (name === 'samples') {
+    // Force a refresh on tab open if we don't have cached samples yet.
+    if (!runSamplesCache || runSamplesJobId !== runJobId) pollTrainerSamples();
+    else renderTrainerRunningSamples();
+  }
+  if (name === 'test') {
+    if (!runSamplesCache || runSamplesJobId !== runJobId) pollTrainerSamples();
+    renderTrainerRunningTest();
+  }
+}
+
+function renderTrainerRunning() {
+  if (!trainerRunJob) return;
+  const j = trainerRunJob;
+  // ── Header strip ──
+  const setEl = (sel, text) => { const el = $(sel); if (el) el.textContent = text; };
+  setEl('#runIdLabel', `Run · ${j.output_name || j.id || '—'}`);
+  setEl('#runName',    j.output_name || j.id || 'Run');
+  const trigger = j.trigger_phrase ? `"${j.trigger_phrase}"` : 'no trigger';
+  const startedAgo = j.started_at ? `${Math.max(0, Math.round((Date.now() / 1000 - j.started_at) / 60))} min ago` : '';
+  setEl('#runSub', `started ${startedAgo} · ${trigger}`);
+  // Status chip + dot.
+  const statusChip = $('#runStatusChip');
+  const dot = $('#runStatusDot');
+  const status = (j.status || 'unknown').toUpperCase();
+  if (statusChip) statusChip.textContent = status;
+  if (dot) {
+    dot.className = 'px-dot ' + (
+      j.status === 'running' ? 'pink blink' :
+      j.status === 'done'    ? 'ok'         :
+      j.status === 'error'   ? 'err'        :
+      j.status === 'cancelled' ? 'warn'     : 'pink'
+    );
+  }
+  setEl('#runRecipeChip', `BASE · ${String(j.base_model || 'qwen').replace(/^.*\//, '').toUpperCase()}`);
+  setEl('#runBaseChip',   j.phase ? j.phase.toUpperCase() : 'STARTING');
+
+  const terminal = trainerRunIsTerminal(j);
+  const active = ['queued', 'running'].includes(j.status);
+  const cancelBtn = $('#runStopBtn');
+  const dismissBtn = $('#runAbortBtn');
+  if (cancelBtn) {
+    cancelBtn.hidden = terminal;
+    cancelBtn.disabled = !active;
+    cancelBtn.textContent = 'Cancel run';
+    cancelBtn.title = active ? 'Cancel this training process' : 'Run is not active';
+  }
+  if (dismissBtn) {
+    dismissBtn.hidden = !terminal;
+    dismissBtn.disabled = !terminal;
+    dismissBtn.textContent = 'Dismiss';
+    dismissBtn.title = 'Remove this job from the list';
+  }
+
+  // Progress bar.
+  const bar = $('#runProgressBar');
+  if (bar) bar.style.width = `${Math.max(0, Math.min(100, Number(j.progress || 0)))}%`;
+
+  // 6-cell stat strip.
+  const lossSeries = j.metrics?.loss || [];
+  const lrSeries   = j.metrics?.lr   || [];
+  const lastLoss   = lossSeries.length ? lossSeries[lossSeries.length - 1][1] : null;
+  const firstLoss  = lossSeries.length ? lossSeries[0][1] : null;
+  const lastLr     = lrSeries.length ? lrSeries[lrSeries.length - 1][1] : null;
+  setRunStat('step', j.current_step ?? '—', j.total_steps ? `/ ${Number(j.total_steps).toLocaleString()}` : '/ —');
+  setRunStat('loss', lastLoss != null ? lastLoss.toFixed(3) : '—',
+             (lastLoss != null && firstLoss != null) ? `↓ ${(firstLoss - lastLoss).toFixed(2)}` : 'trend');
+  setRunStat('lr',   lastLr != null ? lastLr.toExponential(2) : '—', j.scheduler || 'scheduler');
+  setRunStat('phase', j.phase || '—', `${Math.round(Number(j.phase_progress || 0))}%`);
+
+  // ETA + cost — assume ~55 step/min on H100 default.
+  const remaining = (j.total_steps && j.current_step) ? Math.max(0, j.total_steps - j.current_step) : null;
+  const etaMin = remaining != null ? Math.max(0, Math.round(remaining / 55)) : null;
+  setRunStat('eta',  etaMin != null ? `${etaMin}m` : '—', 'remaining');
+  const stepsDone = Number(j.current_step || 0);
+  const totalSteps = Number(j.total_steps || j.steps || 0);
+  const cost      = (stepsDone / 55 / 60) * 3.6;
+  const totalCost = (totalSteps / 55 / 60) * 3.6;
+  setRunStat('cost', `$${cost.toFixed(2)}`, totalCost ? `of $${totalCost.toFixed(2)}` : '');
+
+  // ── Tab body — render only the active tab to keep DOM cheap.
+  if (runTab === 'monitor')  renderTrainerRunningMonitor();
+  if (runTab === 'terminal') renderTrainerRunningTerminal();
+  if (runTab === 'config')   renderTrainerRunningConfig();
+  if (runTab === 'samples')  renderTrainerRunningSamples();
+  if (runTab === 'test')     renderTrainerRunningTest();
+}
+
+function setRunStat(key, value, sub) {
+  const num = document.querySelector(`[data-run-stat="${key}"]`);
+  const subEl = document.querySelector(`[data-run-stat-sub="${key}"]`);
+  if (num)  num.textContent  = String(value);
+  if (subEl) subEl.textContent = String(sub || '');
+}
+
+// SVG sparkline renderer — no external deps, scales to the viewBox so
+// the CSS height controls the on-screen size.
+function renderSparklinePath(svg, data, options = {}) {
+  if (!svg) return;
+  const w = 400;
+  const h = svg.id === 'runLossSpark' ? 180 : 90;
+  svg.setAttribute('viewBox', `0 0 ${w} ${h}`);
+  if (!data || data.length < 2) {
+    svg.innerHTML = '';
+    return;
+  }
+  const min = Math.min(...data);
+  const max = Math.max(...data);
+  const range = max - min || 1;
+  const padX = 4;
+  const padY = 8;
+  const innerW = w - padX * 2;
+  const innerH = h - padY * 2;
+  const xs = data.map((_, i) => padX + (i / (data.length - 1)) * innerW);
+  const ys = data.map(v => padY + innerH - ((v - min) / range) * innerH);
+  const path = xs.map((x, i) => `${i === 0 ? 'M' : 'L'}${x.toFixed(1)},${ys[i].toFixed(1)}`).join(' ');
+  const fillPath = `${path} L${xs[xs.length - 1].toFixed(1)},${(padY + innerH).toFixed(1)} L${xs[0].toFixed(1)},${(padY + innerH).toFixed(1)} Z`;
+  const grid = options.grid !== false ? `
+    <line x1="0" y1="${(padY).toFixed(1)}"          x2="${w}" y2="${(padY).toFixed(1)}"          stroke="var(--px-border-soft)" stroke-width="1"/>
+    <line x1="0" y1="${(padY + innerH / 2).toFixed(1)}" x2="${w}" y2="${(padY + innerH / 2).toFixed(1)}" stroke="var(--px-border-soft)" stroke-width="1"/>
+    <line x1="0" y1="${(padY + innerH).toFixed(1)}" x2="${w}" y2="${(padY + innerH).toFixed(1)}" stroke="var(--px-border-soft)" stroke-width="1"/>
+  ` : '';
+  svg.innerHTML = `
+    ${grid}
+    <path d="${fillPath}" fill="${options.fill || 'rgba(255,43,214,0.12)'}" stroke="none"/>
+    <path d="${path}"     fill="none" stroke="${options.color || 'var(--px-pink)'}" stroke-width="${options.width || 1.6}" shape-rendering="geometricPrecision"/>
+  `;
+}
+
+function renderTrainerRunningMonitor() {
+  const lossSeries = trainerRunJob?.metrics?.loss || [];
+  const lrSeries   = trainerRunJob?.metrics?.lr   || [];
+  const lossValues = lossSeries.map(([, v]) => v);
+  const lrValues   = lrSeries.map(([, v]) => v);
+  renderSparklinePath($('#runLossSpark'), lossValues, { color: 'var(--px-pink)', fill: 'rgba(255,43,214,0.12)' });
+  renderSparklinePath($('#runLrSpark'),   lrValues,   { color: 'var(--px-cyan)', fill: 'rgba(0,229,255,0.08)' });
+
+  const window = $('#runLossWindow');
+  if (window) window.textContent = `last ${lossValues.length} steps`;
+
+  const gpuTitle = $('#runGpuTitle');
+  if (gpuTitle) gpuTitle.textContent = trainerRunJob?.gpu_name ? `GPU · ${trainerRunJob.gpu_name}` : 'GPU · training host';
+  const gpuBars = $('#runGpuBars');
+  if (gpuBars) {
+    const progress = Math.max(0, Math.min(100, Number(trainerRunJob?.progress || 0)));
+    const step = Number(trainerRunJob?.current_step || 0);
+    const total = Number(trainerRunJob?.total_steps || trainerRunJob?.steps || 0);
+    const elapsed = trainerRunJob?.started_at ? Math.max(0, Math.round((Date.now() / 1000 - trainerRunJob.started_at) / 60)) : null;
+    const sampleState = trainerRunJob?.generate_samples === false ? 'off' : 'on';
+    gpuBars.innerHTML = `
+      <div class="run-gpu-row"><span>Trainer progress</span><b>${progress.toFixed(progress % 1 ? 1 : 0)}%</b></div>
+      <div class="run-gpu-meter"><i style="width:${progress}%"></i></div>
+      <div class="run-gpu-row"><span>Step window</span><b>${step.toLocaleString()}${total ? ` / ${total.toLocaleString()}` : ''}</b></div>
+      <div class="run-gpu-row"><span>Elapsed</span><b>${elapsed != null ? `${elapsed}m` : 'starting'}</b></div>
+      <div class="run-gpu-row"><span>Samples</span><b>${sampleState}</b></div>
+    `;
+  }
+
+  // Footer min/max/step bounds.
+  if (lossSeries.length >= 2) {
+    const minV = Math.min(...lossValues).toFixed(3);
+    const maxV = Math.max(...lossValues).toFixed(3);
+    const left  = document.querySelector('[data-loss-range="left"]');
+    const right = document.querySelector('[data-loss-range="right"]');
+    const mid   = document.querySelector('[data-loss-range="middle"]');
+    if (left)  left.textContent  = `step ${Number(lossSeries[0][0]).toLocaleString()}`;
+    if (right) right.textContent = `step ${Number(lossSeries[lossSeries.length - 1][0]).toLocaleString()}`;
+    if (mid)   mid.textContent   = `min ${minV} · max ${maxV}`;
+  }
+
+  // Health signals — derived from the data we have.
+  const health = [];
+  if (lossValues.length >= 6) {
+    const recent = lossValues.slice(-6);
+    const trend = recent[recent.length - 1] - recent[0];
+    health.push(trend <= 0
+      ? { dot: 'ok',   text: 'Loss trending down · OK' }
+      : { dot: 'warn', text: `Loss flat or rising · Δ ${trend.toFixed(3)} over last ${recent.length} steps` });
+  } else {
+    health.push({ dot: 'warn', text: `Collecting metrics… ${lossValues.length}/6 samples` });
+  }
+  const hasNan = lossValues.some(v => !Number.isFinite(v));
+  health.push(hasNan
+    ? { dot: 'err', text: 'NaN/Inf detected in loss — abort + retry with lower LR' }
+    : { dot: 'ok',  text: 'No NaN / Inf gradients' });
+  if (trainerRunJob?.rank_warning) {
+    health.push({ dot: 'warn', text: trainerRunJob.rank_warning });
+  }
+  if (trainerRunJob?.status === 'error' && trainerRunJob?.error) {
+    health.push({ dot: 'err', text: trainerRunJob.error });
+  }
+  const list = $('#runHealthList');
+  if (list) {
+    list.innerHTML = health.map(h => `
+      <div class="flag-row"><span class="px-dot ${h.dot}"></span><span>${esc(h.text)}</span></div>
+    `).join('');
+  }
+}
+
+function renderTrainerRunningTerminal() {
+  const term = $('#runTerminal');
+  if (!term) return;
+  const tail = trainerRunJob?.log_tail || [];
+  term.textContent = tail.length ? tail.join('\n') : 'Waiting for the trainer to print…';
+  // Auto-scroll to bottom.
+  term.scrollTop = term.scrollHeight;
+}
+
+function renderTrainerRunningConfig() {
+  const rows = $('#runConfigRows');
+  if (!rows || !trainerRunJob) return;
+  const fields = [
+    ['Run name',     trainerRunJob.output_name],
+    ['Trainer',      trainerRunJob.trainer_id],
+    ['Base model',   trainerRunJob.base_model],
+    ['Trigger',      trainerRunJob.trigger_phrase],
+    ['Dataset',      trainerRunJob.dataset_path],
+    ['Steps',        trainerRunJob.steps],
+    ['Rank',         trainerRunJob.rank],
+    ['Observed rank',trainerRunJob.observed_rank],
+    ['Network alpha',trainerRunJob.network_alpha],
+    ['Learning rate',trainerRunJob.learning_rate],
+    ['Resolution',   trainerRunJob.resolution],
+    ['Batch size',   trainerRunJob.batch_size],
+    ['Repeats',      trainerRunJob.repeats],
+    ['Optimizer',    trainerRunJob.optimizer],
+    ['Scheduler',    trainerRunJob.scheduler],
+    ['Precision',    trainerRunJob.precision],
+    ['Save every',   trainerRunJob.save_every],
+    ['Generate samples', trainerRunJob.generate_samples === false ? 'no' : 'yes'],
+    ['Auto-import LoRA', trainerRunJob.auto_import_lora === false ? 'no' : 'yes'],
+    ['Output dir',   trainerRunJob.output_dir],
+  ].filter(([, v]) => v !== undefined && v !== null && v !== '');
+  rows.innerHTML = fields.map(([k, v]) => `
+    <div class="row"><span class="k">${esc(k)}</span><span class="v">${esc(String(v))}</span></div>
+  `).join('');
+}
+
+function renderTrainerRunningSamples() {
+  const body = $('#runSampleBody');
+  if (!body) return;
+  const data = runSamplesCache;
+  if (!data || !data.checkpoints?.length) {
+    body.innerHTML = `<div class="px-mute" style="padding:24px;text-align:center;font-family:var(--px-font-mono);font-size:11.5px">
+      No samples yet. They appear after the first save-every checkpoint completes.
+    </div>`;
+    return;
+  }
+  const prompts = data.prompts || [];
+  const checkpoints = data.checkpoints || [];
+  // Build a step × prompt grid. The first column is prompt-slug labels;
+  // each subsequent column is a checkpoint.
+  const cols = `200px ${checkpoints.map(() => '140px').join(' ')}`;
+  const headerRow = `
+    <div></div>
+    ${checkpoints.map(c => `<div class="col-head">step ${Number(c.step).toLocaleString()}</div>`).join('')}
+  `;
+  const rows = prompts.map(slug => {
+    const cells = checkpoints.map(c => {
+      const hit = (c.samples || []).find(s => s.prompt_slug === slug);
+      if (!hit) return `<div class="sample-cell empty">—</div>`;
+      return `<div class="sample-cell"><img src="${esc(hit.url)}" alt="${esc(hit.name)}" loading="lazy"></div>`;
+    }).join('');
+    return `<div class="row-head" title="${esc(slug)}">${esc(slug)}</div>${cells}`;
+  }).join('');
+  body.innerHTML = `
+    <div class="sample-grid" style="grid-template-columns:${cols};min-width:${200 + checkpoints.length * 148}px">
+      ${headerRow}
+      ${rows}
+    </div>
+  `;
+}
+
+function renderTrainerRunningTest() {
+  const prompt = $('#runTestPrompt');
+  if (prompt && !prompt.value.trim()) {
+    const firstSample = Array.isArray(trainerRunJob?.sample_prompts) ? trainerRunJob.sample_prompts.find(Boolean) : '';
+    prompt.value = firstSample || `${trainerRunJob?.trigger_phrase || 'subject'}, portrait, natural light, detailed face`;
+  }
+
+  const checkpointSteps = runSamplesCache?.checkpoints?.length
+    ? runSamplesCache.checkpoints.map(c => Number(c.step))
+    : (state.preview ? previewTrainerCheckpointSteps(trainerRunJob) : []);
+  const select = $('#runTestCheckpoint');
+  if (select) {
+    if (checkpointSteps.length) {
+      select.innerHTML = checkpointSteps
+        .slice()
+        .sort((a, b) => a - b)
+        .map(step => `<option value="${step}">step ${Number(step).toLocaleString()}</option>`)
+        .join('');
+      select.value = String(checkpointSteps[checkpointSteps.length - 1]);
+    } else {
+      select.innerHTML = '<option value="">waiting for checkpoint</option>';
+    }
+  }
+
+  const list = $('#runCheckpointList');
+  if (list) {
+    if (!checkpointSteps.length) {
+      list.innerHTML = `<div class="flag-row"><span class="px-dot warn"></span><span>Waiting for first checkpoint...</span></div>`;
+    } else {
+      list.innerHTML = checkpointSteps.slice().sort((a, b) => b - a).map((step, idx) => `
+        <div class="flag-row"><span class="px-dot ${idx === 0 ? 'ok' : 'pink'}"></span><span>step ${Number(step).toLocaleString()}</span></div>
+      `).join('');
+    }
+  }
+
+  const btn = $('#runTestBtn');
+  if (btn) {
+    btn.disabled = true;
+    btn.title = 'Checkpoint inference is not wired to the trainer wrapper yet';
+  }
+  const hint = $('#runTestHint');
+  if (hint) {
+    hint.textContent = checkpointSteps.length
+      ? 'Latest checkpoint is ready to test once checkpoint inference is connected.'
+      : 'The first saved checkpoint will appear here before live testing is available.';
+  }
+}
+
+async function cancelRunningJob(mode) {
+  if (!runJobId) return;
+  const terminal = trainerRunIsTerminal(trainerRunJob);
+  const verb = terminal ? 'Dismiss' : 'Cancel';
+  if (!terminal && !window.confirm('Cancel this training run?')) return;
+  if (state.preview) {
+    if (terminal) {
+      state.trainJobs = (state.trainJobs || []).filter(j => j.id !== runJobId);
+      closeTrainerRunningView();
+      renderTrainerJobs();
+      return;
+    }
+    const cancelled = {
+      ...(trainerRunJob || (state.trainJobs || []).find(j => j.id === runJobId)),
+      status: 'cancelled',
+      phase: 'Cancelled',
+      log_tail: [...((trainerRunJob?.log_tail) || []), 'Preview run cancelled by user'].slice(-80),
+    };
+    state.trainJobs = (state.trainJobs || []).map(j => j.id === runJobId ? cancelled : j);
+    trainerRunJob = cancelled;
+    stopTrainerRunningPoll();
+    renderTrainerRunning();
+    renderTrainerJobs();
+    toast('Run cancelled', 'success');
+    return;
+  }
+  try {
+    await api.cancelTrainJob(runJobId);
+    toast(terminal ? 'Run dismissed' : 'Cancelling run...', 'success');
+    if (terminal) {
+      closeTrainerRunningView();
+      await refreshTrainerJobs();
+    } else {
+      // Force an immediate refresh so the UI flips status.
+      refreshTrainerRunning();
+    }
+  } catch (e) {
+    toast(`${verb} failed: ${e.message || 'unknown'}`, 'error');
+  }
+}
+
+async function saveTrainerInspectorCaption() {
+  const sel = trainerCurateDataset?.pairs.find(p => p.image === trainerCurateSelected);
+  if (!sel) return;
+  const text = $('#trainerInspectorCaption')?.value || '';
+  const btn = $('#trainerInspectorSave');
+  if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
+  if (!state.preview) {
+    trainerCuratePendingSaves += 1;
+    updateTrainerWizardNextGate();
+  }
+  try {
+    if (!state.preview) {
+      await api.saveTrainerCaption({
+        dataset_path: trainerCurateDataset.dataset_path,
+        image_rel:    sel.image,
+        caption:      text,
+      });
+    } else {
+      await delay(120);
+    }
+    // Patch local state — keeps the grid + filter counts accurate without
+    // a full refetch. Flags need re-deriving because empty caption was a
+    // flag; the backend recomputes on next list call but we mirror its
+    // logic here so the chip strip stays in sync.
+    sel.caption = text.trim();
+    sel.caption_path = trainerCaptionPathForImage(sel.image);
+    sel.flags = sel.flags.filter(f => f.label !== 'NO CAP' && f.label !== 'EMPTY CAP' && f.label !== 'SHORT CAP');
+    if (!sel.caption) {
+      sel.flags.unshift({ label: 'EMPTY CAP', tone: 'warn', detail: 'caption was just cleared' });
+    } else if (sel.caption.length < 12) {
+      sel.flags.unshift({ label: 'SHORT CAP', tone: 'warn', detail: `caption is only ${sel.caption.length} chars` });
+    }
+    renderTrainerCurateAll();
+    toast('Caption saved', 'success');
+  } catch (e) {
+    toast(`Save failed: ${e.message || 'unknown'}`, 'error');
+  } finally {
+    if (!state.preview) {
+      trainerCuratePendingSaves = Math.max(0, trainerCuratePendingSaves - 1);
+      renderTrainerCurateAll();
+    }
+    if (btn) { btn.disabled = false; btn.textContent = 'Save caption'; }
+  }
+}
+
 function trainerPayload() {
+  // The pixel wizard is the single UI source of truth for trainer launches.
+  const samples = trainerWizardSamples.filter(s => s.trim());
+  const name = ($('#trainerRunName')?.value || '').trim();
+  const safeName = name.replace(/[^A-Za-z0-9._-]+/g, '_').replace(/^_+|_+$/g, '') || 'kerry_qwen_lora';
   return {
     trainer_id: 'qwen-character-lora',
-    dataset_path: $('#trainerDatasetPath')?.value.trim() || '',
-    output_name: $('#trainerOutputName')?.value.trim() || 'kerry_qwen_lora',
-    trigger_phrase: $('#trainerTriggerPhrase')?.value.trim() || 'A woman named Kerry',
-    base_model: $('#trainerBaseModel')?.value || 'Qwen/Qwen-Image-2512',
-    steps: Number($('#trainerSteps')?.value || 3000),
-    rank: Number($('#trainerRank')?.value || 64),
-    learning_rate: Number($('#trainerLearningRate')?.value || 0.0002),
-    resolution: Number($('#trainerResolution')?.value || 1024),
-    batch_size: Number($('#trainerBatchSize')?.value || 1),
-    repeats: Number($('#trainerRepeats')?.value || 1),
-    hf_token: currentHFToken('#trainerHFToken') || null,
+    dataset_path: currentTrainerDatasetPath(),
+    output_name: safeName,
+    trigger_phrase: trainerWizardCfg.trigger || 'A woman named Kerry',
+    base_model: trainerWizardCfg.base || 'Qwen/Qwen-Image-2512',
+    steps: Number(trainerWizardCfg.steps || 3000),
+    rank: Number(trainerWizardCfg.rank || 64),
+    learning_rate: Number(trainerWizardCfg.lr || 0.0002),
+    resolution: Number(trainerWizardCfg.res || 1024),
+    batch_size: Number(trainerWizardCfg.batch || 1),
+    repeats: Number(trainerWizardCfg.repeats || 1),
+    hf_token: currentHFToken('#trainerWizardHFToken') || null,
+    optimizer:             trainerWizardCfg.opt,
+    scheduler:             trainerWizardCfg.sched,
+    network_alpha:         Number(trainerWizardCfg.alpha) || null,
+    save_every:            Number(trainerWizardCfg.saveEvery) || null,
+    precision:             trainerWizardCfg.precision,
+    gradient_checkpointing: trainerWizardCfg.gradCkpt === 'on',
+    sample_prompts:        samples.length ? samples : null,
+    generate_samples:      !!trainerLaunchOpts.samples,
+    auto_import_lora:      !!trainerLaunchOpts.autoPublish,
   };
 }
 
 async function downloadTrainerDataset() {
-  const repo = $('#trainerDatasetRepo')?.value.trim() || '';
-  const target = $('#trainerDatasetTarget')?.value.trim() || repo.split('/').pop() || 'dataset';
-  const repoType = $('#trainerDatasetRepoType')?.value || 'dataset';
-  const btn = $('#trainerDatasetDownloadBtn');
+  const repo = $('#trainerWizardHFRepo')?.value.trim() || '';
+  const target = $('#trainerWizardHFTarget')?.value.trim() || repo.split('/').pop() || 'dataset';
+  const repoType = $('#trainerWizardHFType')?.value || 'dataset';
+  const btn = $('#trainerWizardHFPull');
   if (!repo) return toast('Enter a Hugging Face dataset repo first.', 'error');
   if (btn) {
     btn.disabled = true;
@@ -5046,20 +6716,19 @@ async function downloadTrainerDataset() {
         hf_repo: repo,
         repo_type: repoType,
         target_name: target,
-        hf_token: currentHFToken('#trainerHFToken') || null,
+        hf_token: currentHFToken('#trainerWizardHFToken') || null,
       });
     }
-    const pathInput = $('#trainerDatasetPath');
-    if (pathInput) pathInput.value = res.dataset_path || `datasets/${target}`;
-    state.trainValidation = res.scan || null;
-    renderTrainerDatasetSummary(state.trainValidation);
+    setTrainerDatasetPath(res.dataset_path || `datasets/${target}`);
+    setTrainerValidation(res.scan || null, res.dataset_path || `datasets/${target}`);
     toast(state.trainValidation?.valid ? 'Dataset pulled and ready' : 'Dataset pulled; check captions', state.trainValidation?.valid ? 'success' : 'info');
   } catch (e) {
+    clearTrainerDatasetState();
     toast(e.message || 'Dataset pull failed', 'error');
   } finally {
     if (btn) {
       btn.disabled = false;
-      btn.innerHTML = '<svg><use href="#i-down"/></svg>Pull dataset';
+      btn.innerHTML = '↓ Pull dataset';
     }
   }
 }
@@ -5102,11 +6771,15 @@ function renderTrainerDatasetSummary(summary) {
   if ((summary.missing_captions || []).length) warnings.push(`Missing captions: ${summary.missing_captions.slice(0, 4).join(', ')}`);
   if ((summary.orphan_captions || []).length) warnings.push(`Orphan captions: ${summary.orphan_captions.slice(0, 4).join(', ')}`);
   if ((summary.empty_captions || []).length) warnings.push(`Empty captions: ${summary.empty_captions.slice(0, 4).join(', ')}`);
+  const imageValue = summary.total_image_count && summary.total_image_count !== summary.image_count
+    ? `${summary.image_count} / ${summary.total_image_count}`
+    : (summary.image_count ?? 0);
   root.innerHTML = `
     <div class="trainer-summary-grid">
-      ${metric('Images', summary.image_count ?? 0)}
+      ${metric('Images', imageValue)}
       ${metric('Captions', summary.caption_count ?? 0)}
       ${metric('Pairs', summary.pair_count ?? 0)}
+      ${metric('Excluded', summary.excluded_count ?? 0)}
     </div>
     ${summary.valid ? `<div class="trainer-ok">Dataset is ready.</div>` : `<div class="trainer-warnings">${esc(warnings.join('\n') || 'Dataset is not ready.')}</div>`}
   `;
@@ -5114,7 +6787,7 @@ function renderTrainerDatasetSummary(summary) {
 
 async function validateTrainerDataset() {
   const payload = trainerPayload();
-  const btn = $('#trainerValidateBtn');
+  const btn = $('#trainerWizardFolderValidate');
   if (btn) {
     btn.disabled = true;
     btn.innerHTML = '<span class="spinner"></span><span>Validating…</span>';
@@ -5127,58 +6800,86 @@ async function validateTrainerDataset() {
     } else {
       summary = await api.validateTrainerDataset({ dataset_path: payload.dataset_path });
     }
-    state.trainValidation = summary;
-    renderTrainerDatasetSummary(summary);
+    setTrainerValidation(summary, payload.dataset_path);
     toast(summary.valid ? 'Dataset ready' : 'Dataset needs attention', summary.valid ? 'success' : 'error');
   } catch (e) {
+    clearTrainerDatasetState();
     toast(e.message || 'Dataset validation failed', 'error');
   } finally {
     if (btn) {
       btn.disabled = false;
-      btn.innerHTML = '<svg><use href="#i-check"/></svg>Validate dataset';
+      btn.innerHTML = '✓ Validate';
     }
   }
 }
 
 async function startTrainerJob() {
+  if (trainerCuratePendingSaves > 0) {
+    toast('Still saving curation changes. Try again in a moment.', 'error');
+    return false;
+  }
   const payload = trainerPayload();
-  const btn = $('#trainerStartBtn');
+  const btn = null;
   if (btn) {
     btn.disabled = true;
     btn.innerHTML = '<span class="spinner"></span><span>Starting…</span>';
   }
   try {
     if (state.preview) {
+      const startStep = Math.max(1, Math.round(Number(payload.steps || 3000) * 0.04));
       const job = {
         id: 'preview-train-' + Date.now(),
         status: 'running',
         phase: 'Training',
+        phase_progress: 4,
+        trainer_id: payload.trainer_id,
         output_name: payload.output_name,
+        trigger_phrase: payload.trigger_phrase,
+        dataset_path: payload.dataset_path,
+        output_dir: `outputs/${payload.output_name}`,
         base_model: payload.base_model,
         steps: payload.steps,
         rank: payload.rank,
         learning_rate: payload.learning_rate,
         resolution: payload.resolution,
-        save_every: Math.max(250, Math.min(1000, Math.floor(payload.steps / 4) || 250)),
-        current_step: 360,
+        save_every: payload.save_every || Math.max(250, Math.min(1000, Math.floor(payload.steps / 4) || 250)),
+        optimizer: payload.optimizer,
+        scheduler: payload.scheduler,
+        network_alpha: payload.network_alpha,
+        precision: payload.precision,
+        batch_size: payload.batch_size,
+        repeats: payload.repeats,
+        generate_samples: payload.generate_samples,
+        sample_prompts: payload.sample_prompts,
+        auto_import_lora: payload.auto_import_lora,
+        current_step: startStep,
         total_steps: payload.steps,
-        progress: 12,
-        log_tail: ['Preview training job started', `Requested settings: rank ${payload.rank}, steps ${payload.steps}, lr ${payload.learning_rate}, resolution ${payload.resolution}`],
+        progress: 4,
+        metrics: previewTrainerMetrics(startStep, payload.steps, payload.learning_rate),
+        imported_to_library: payload.auto_import_lora,
+        log_tail: [
+          'Preview training job started',
+          `Requested settings: rank ${payload.rank}, steps ${payload.steps}, lr ${payload.learning_rate}, resolution ${payload.resolution}`,
+          `Advanced settings: optimizer ${payload.optimizer}, scheduler ${payload.scheduler}, alpha ${payload.network_alpha}, precision ${payload.precision}, samples ${payload.generate_samples ? 'on' : 'off'}, auto-import ${payload.auto_import_lora ? 'on' : 'off'}`,
+        ],
         created_at: Date.now() / 1000,
+        started_at: Date.now() / 1000,
       };
       state.trainJobs = [job, ...state.trainJobs];
       renderTrainerJobs();
       pokeTrainerPoll();
       toast('Training queued', 'success');
-      return;
+      return job;
     }
     const res = await api.startTrainJob(payload);
     state.trainJobs = [res.job, ...state.trainJobs.filter(j => j.id !== res.job.id)];
     renderTrainerJobs();
     pokeTrainerPoll();
     toast('Training queued', 'success');
+    return res.job;
   } catch (e) {
     toast(e.message || 'Training failed to start', 'error');
+    return false;
   } finally {
     if (btn) {
       btn.disabled = false;
@@ -5208,8 +6909,8 @@ function renderTrainerJobs() {
       : (j.lora_filename ? [j.lora_filename] : []);
     const importedText = imported.length
       ? imported.length === 1
-        ? `Imported ${imported[0]}`
-        : `Imported ${imported.length} checkpoints: ${imported.join(', ')}`
+        ? `${j.imported_to_library === false ? 'Output ready' : 'Imported'} ${imported[0]}`
+        : `${j.imported_to_library === false ? 'Outputs ready' : 'Imported'} ${imported.length} checkpoints: ${imported.join(', ')}`
       : '';
     const detail = [
       phase,
@@ -5219,6 +6920,11 @@ function renderTrainerJobs() {
       j.learning_rate ? `lr ${j.learning_rate}` : '',
       j.resolution ? `${j.resolution}px` : '',
       j.save_every ? `save every ${j.save_every}` : '',
+      j.optimizer ? j.optimizer : '',
+      j.scheduler ? j.scheduler : '',
+      j.network_alpha ? `alpha ${j.network_alpha}` : '',
+      j.generate_samples === false ? 'samples off' : '',
+      j.auto_import_lora === false ? 'no auto-import' : '',
       modelLabel,
     ].filter(Boolean).join(' · ');
     const progressLabel = j.current_step && j.total_steps
@@ -5227,7 +6933,7 @@ function renderTrainerJobs() {
     const action = ['queued', 'running'].includes(j.status)
       ? `<button class="btn sm danger" data-train-cancel="${esc(j.id)}">Cancel</button>`
       : `<button class="btn sm" data-train-dismiss="${esc(j.id)}">Dismiss</button>`;
-    return `<div class="trainer-job">
+    return `<div class="trainer-job" data-train-open="${esc(j.id)}" style="cursor:pointer">
       <div class="trainer-job-head">
         <div class="trainer-job-name" title="${esc(j.output_name || j.id)}">${esc(j.output_name || j.id)}</div>
         <div class="trainer-job-status">${esc(j.status || 'unknown')}</div>
@@ -5245,8 +6951,17 @@ function renderTrainerJobs() {
       <div class="trainer-actions">${action}</div>
     </div>`;
   }).join('');
+  // Whole card clicks open the running monitor; the inner cancel/dismiss
+  // button stops propagation in its own handler below.
+  root.querySelectorAll('[data-train-open]').forEach(card => {
+    card.addEventListener('click', (e) => {
+      if (e.target.closest('[data-train-cancel],[data-train-dismiss]')) return;
+      openTrainerRunningView(card.dataset.trainOpen);
+    });
+  });
   root.querySelectorAll('[data-train-cancel],[data-train-dismiss]').forEach(btn => {
-    btn.addEventListener('click', async () => {
+    btn.addEventListener('click', async (ev) => {
+      ev.stopPropagation();
       const id = btn.dataset.trainCancel || btn.dataset.trainDismiss;
       if (!id) return;
       if (state.preview) {
@@ -5267,24 +6982,10 @@ function renderTrainerJobs() {
 async function refreshTrainerJobs() {
   if (state.preview) {
     state.trainJobs = (state.trainJobs || []).map(j => {
-      if (j.status !== 'running') return j;
-      const progress = Math.min(100, Number(j.progress || 0) + 18);
-      const total = Number(j.total_steps || j.steps || 3000);
-      const current = Math.min(total, Math.round((progress / 100) * total));
-      return {
-        ...j,
-        progress,
-        phase: progress >= 100 ? 'Done' : 'Training',
-        current_step: current,
-        total_steps: total,
-        status: progress >= 100 ? 'done' : 'running',
-        lora_filename: progress >= 100 ? `${j.output_name}_step${String(total).padStart(4, '0')}.safetensors` : j.lora_filename,
-        lora_filenames: progress >= 100
-          ? [1, 2, 3, 4].map(n => `${j.output_name}_step${String(Math.round((total / 4) * n)).padStart(4, '0')}.safetensors`)
-          : j.lora_filenames,
-        log_tail: [...(j.log_tail || []), progress >= 100 ? 'Preview LoRA imported' : `step ${Math.round(progress)}/100`],
-      };
+      if (!['queued', 'running'].includes(j.status)) return j;
+      return previewAdvanceTrainerJob(j, 12);
     });
+    if (runJobId) trainerRunJob = state.trainJobs.find(j => j.id === runJobId) || trainerRunJob;
     renderTrainerJobs();
     return;
   }

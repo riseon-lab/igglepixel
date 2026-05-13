@@ -9,6 +9,7 @@ to OUTPUT_PATH for Igglepixel to import.
 
 from __future__ import annotations
 
+import json
 import os
 import shlex
 import shutil
@@ -150,6 +151,59 @@ def model_quant_block(base_model: str) -> str:
     )
 
 
+def _read_sample_prompts(trigger: str) -> list[str]:
+    """Resolve sample prompts from env or fall back to a sensible default.
+
+    Backend sets TRAIN_SAMPLES as a JSON-encoded list (one entry per
+    prompt) when the wizard's Step 4 sample list is non-empty. Older
+    callers don't set it → we synthesize one prompt from the trigger.
+    """
+    raw = os.environ.get("TRAIN_SAMPLES", "").strip()
+    if raw:
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, list):
+                cleaned = [str(p).strip() for p in parsed if str(p).strip()]
+                if cleaned:
+                    return cleaned
+        except json.JSONDecodeError:
+            log(f"Warning: TRAIN_SAMPLES is not valid JSON; ignoring ({raw[:80]}…)")
+    if trigger:
+        return [f"{trigger}, portrait photo, natural skin texture, studio lighting"]
+    return ["portrait photo, studio lighting"]
+
+
+def _normalise_optimizer(name: str) -> str:
+    """Map wizard-side optimizer ids to AI Toolkit's expected strings.
+    Returns the AI Toolkit value or falls back to adamw8bit."""
+    table = {
+        "adamw8bit": "adamw8bit",
+        "adamw":     "adamw",
+        "prodigy":   "prodigy",
+        "lion":      "lion",
+        "adafactor": "adafactor",
+    }
+    return table.get((name or "").strip().lower(), "adamw8bit")
+
+
+def _normalise_scheduler(name: str) -> str:
+    """AI Toolkit consumes the literal scheduler name. Map our wizard
+    options; fall back to 'constant' for anything unknown so training
+    still launches rather than hard-erroring on the YAML parse."""
+    aliases = {
+        "cosine":         "cosine",
+        "cosine-restart": "cosine_with_restarts",
+        "linear":         "linear",
+        "constant":       "constant",
+    }
+    return aliases.get((name or "").strip().lower(), "constant")
+
+
+def _normalise_precision(name: str) -> str:
+    n = (name or "").strip().lower()
+    return n if n in {"bf16", "fp16", "fp32"} else "bf16"
+
+
 def write_config(toolkit_dir: Path, dataset_dir: Path, output_dir: Path) -> Path:
     output_name = safe_name(os.environ.get("OUTPUT_NAME", "qwen_lora"))
     base_model = os.environ.get("BASE_MODEL", "Qwen/Qwen-Image-2512")
@@ -163,12 +217,26 @@ def write_config(toolkit_dir: Path, dataset_dir: Path, output_dir: Path) -> Path
     save_every = int(float(os.environ.get("TRAIN_SAVE_EVERY", "0") or "0"))
     if save_every <= 0:
         save_every = max(250, min(1000, steps // 4 or 250))
-    sample_prompt = f"{trigger}, portrait photo, natural skin texture, studio lighting" if trigger else "portrait photo, studio lighting"
+
+    # Advanced cfg threaded through by the wizard (Phase 2.5). All optional
+    # — defaults match the previous hard-coded behaviour so old callers
+    # produce byte-identical configs.
+    alpha = int(float(os.environ.get("TRAIN_ALPHA", "0") or "0")) or rank
+    optimizer = _normalise_optimizer(os.environ.get("TRAIN_OPTIMIZER", "adamw8bit"))
+    scheduler = _normalise_scheduler(os.environ.get("TRAIN_SCHEDULER", "constant"))
+    precision = _normalise_precision(os.environ.get("TRAIN_PRECISION", "bf16"))
+    grad_ckpt = py_bool(os.environ.get("TRAIN_GRAD_CKPT"), True)
+    generate_samples = py_bool(os.environ.get("TRAIN_GENERATE_SAMPLES"), True)
+    sample_prompts = _read_sample_prompts(trigger) if generate_samples else _read_sample_prompts(trigger)[:1]
+
     log(
         "Igglepixel training config: "
         f"base_model={base_model}, trigger={trigger or '(none)'}, "
-        f"steps={steps}, save_every={save_every}, rank={rank}, lr={lr}, "
-        f"resolution={resolution}, batch={batch_size}"
+        f"steps={steps}, save_every={save_every}, rank={rank}, alpha={alpha}, "
+        f"lr={lr}, optimizer={optimizer}, scheduler={scheduler}, "
+        f"resolution={resolution}, batch={batch_size}, precision={precision}, "
+        f"grad_ckpt={'on' if grad_ckpt else 'off'}, "
+        f"samples={len(sample_prompts) if generate_samples else 0}"
     )
 
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -177,7 +245,17 @@ def write_config(toolkit_dir: Path, dataset_dir: Path, output_dir: Path) -> Path
     config_path = config_dir / f"{output_name}.yaml"
     toolkit_output = output_dir / "ai-toolkit-output"
 
-    trigger_line = f'    trigger_word: "{trigger}"\n' if trigger else ""
+    trigger_line = f"    trigger_word: {json.dumps(trigger)}\n" if trigger else ""
+
+    # Build the YAML sample-prompt block. AI Toolkit accepts a list under
+    # sample.prompts; JSON strings are valid YAML scalars and preserve
+    # quotes, backslashes, and multi-line text safely.
+    sample_block = "\n".join(
+        f"      - {json.dumps(p)}"
+        for p in sample_prompts
+    )
+    disable_sampling = not generate_samples
+
     config = f"""\
 ---
 job: extension
@@ -190,7 +268,7 @@ config:
 {trigger_line}    network:
       type: "lora"
       linear: {rank}
-      linear_alpha: {rank}
+      linear_alpha: {alpha}
     save:
       dtype: float16
       save_every: {save_every}
@@ -210,23 +288,24 @@ config:
       gradient_accumulation: {grad_accum}
       train_unet: true
       train_text_encoder: false
-      gradient_checkpointing: true
+      gradient_checkpointing: {str(grad_ckpt).lower()}
       noise_scheduler: "flowmatch"
-      optimizer: "adamw8bit"
+      optimizer: "{optimizer}"
+      lr_scheduler: "{scheduler}"
       lr: {lr}
-      dtype: bf16
+      dtype: {precision}
       skip_first_sample: true
-      disable_sampling: true
+      disable_sampling: {str(disable_sampling).lower()}
     model:
       name_or_path: "{base_model}"
       arch: "{model_arch(base_model)}"
 {model_quant_block(base_model)}    sample:
       sampler: "flowmatch"
-      sample_every: 250
+      sample_every: {save_every}
       width: {resolution}
       height: {resolution}
       prompts:
-      - "{sample_prompt}"
+{sample_block}
       neg: ""
       seed: 42
       walk_seed: true
@@ -238,27 +317,27 @@ config:
 """
     config_path.write_text(config, encoding="utf-8")
     log(f"Wrote AI Toolkit config: {config_path}")
-    log(f"AI Toolkit network rank written: linear={rank}, linear_alpha={rank}")
+    log(f"AI Toolkit network rank written: linear={rank}, linear_alpha={alpha}")
     return config_path
 
 
 def check_dataset(dataset_dir: Path) -> None:
     if not dataset_dir.is_dir():
         raise SystemExit(f"Dataset folder does not exist: {dataset_dir}")
-    supported = {".jpg", ".jpeg", ".png"}
+    supported = {".jpg", ".jpeg", ".png", ".webp"}
     images = [p for p in dataset_dir.rglob("*") if p.is_file() and p.suffix.lower() in supported]
     if not images:
-        raise SystemExit("AI Toolkit needs at least one .jpg, .jpeg, or .png image")
+        raise SystemExit("AI Toolkit needs at least one .jpg, .jpeg, .png, or .webp image")
     missing = [p.relative_to(dataset_dir).as_posix() for p in images if not p.with_suffix(".txt").exists()]
     if missing:
         raise SystemExit("Missing caption files for: " + ", ".join(missing[:10]))
     unsupported = [
         p.relative_to(dataset_dir).as_posix()
         for p in dataset_dir.rglob("*")
-        if p.is_file() and p.suffix.lower() in {".webp", ".gif", ".bmp"}
+        if p.is_file() and p.suffix.lower() in {".gif", ".bmp"}
     ]
     if unsupported:
-        log("Warning: AI Toolkit ignores non-png/jpg images: " + ", ".join(unsupported[:10]))
+        log("Warning: AI Toolkit ignores gif/bmp images: " + ", ".join(unsupported[:10]))
     log(f"Dataset ready for AI Toolkit: {len(images)} images")
 
 

@@ -2299,6 +2299,10 @@ def update_lora(filename: str, req: LoraTagRequest):
 TRAINER_ID_QWEN_CHARACTER = "qwen-character-lora"
 QWEN_TRAINER_COMMAND_ENV = "IGGLEPIXEL_QWEN_LORA_TRAIN_CMD"
 QWEN_TRAINER_SCRIPT = BASE_DIR / "trainers" / "qwen_lora_train.py"
+TRAINING_IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp"}
+TRAINER_OPTIMIZERS = {"adamw8bit", "adamw", "prodigy", "lion", "adafactor"}
+TRAINER_SCHEDULERS = {"cosine", "constant", "linear", "cosine-restart"}
+TRAINER_PRECISIONS = {"fp16", "bf16", "fp32"}
 QWEN_TRAINER_BASE_MODELS = (
     "Qwen/Qwen-Image-2512",
     "Qwen/Qwen-Image",
@@ -2333,6 +2337,18 @@ class TrainJobRequest(BaseModel):
     batch_size: int = 1
     repeats: int = 1
     hf_token: Optional[str] = None
+    # Advanced cfg + sample prompts surfaced by the wizard's Step 4/5.
+    # All optional with sensible defaults so older callers (legacy form,
+    # automation scripts) keep working unchanged.
+    optimizer: Optional[str] = None       # adamw8bit | prodigy | lion | adafactor
+    scheduler: Optional[str] = None       # cosine | constant | linear | cosine-restart
+    network_alpha: Optional[int] = None   # defaults to rank if unset
+    save_every: Optional[int] = None      # default 500
+    precision: Optional[str] = None       # fp16 | bf16 | fp32
+    gradient_checkpointing: Optional[bool] = None
+    sample_prompts: Optional[list[str]] = None
+    generate_samples: bool = True
+    auto_import_lora: bool = True
 
 
 class HFLoraUploadRequest(BaseModel):
@@ -2349,6 +2365,13 @@ def _safe_name(value: str, fallback: str = "qwen_lora") -> str:
     return out or fallback
 
 
+def _safe_upload_filename(value: str) -> str:
+    name = Path(value or "").name
+    stem = _safe_name(Path(name).stem, "file")
+    ext = Path(name).suffix.lower()
+    return f"{stem}{ext}"
+
+
 def _resolve_training_path(value: str) -> Path:
     if not value or not value.strip():
         raise HTTPException(400, "Dataset path is required")
@@ -2360,6 +2383,40 @@ def _resolve_training_path(value: str) -> Path:
     except ValueError:
         raise HTTPException(400, "Dataset path must be inside /workspace")
     return path
+
+
+def _read_caption_text(path: Path) -> str:
+    try:
+        return path.read_text(encoding="utf-8").strip()
+    except UnicodeDecodeError:
+        return path.read_text(errors="ignore").strip()
+
+
+def _training_images(dataset_dir: Path) -> list[Path]:
+    return sorted(
+        p for p in dataset_dir.rglob("*")
+        if p.is_file() and p.suffix.lower() in TRAINING_IMAGE_EXTS
+    )
+
+
+def _caption_key(dataset_dir: Path, path: Path) -> tuple[str, str]:
+    return (path.parent.relative_to(dataset_dir).as_posix(), path.stem)
+
+
+def _resolve_dataset_image(dataset_dir: Path, image_rel: str) -> tuple[Path, str]:
+    rel = Path(image_rel or "")
+    if rel.is_absolute() or not image_rel or ".." in rel.parts:
+        raise HTTPException(400, "Image path must stay inside the dataset folder")
+    image_path = (dataset_dir / rel).resolve()
+    try:
+        image_path.relative_to(dataset_dir.resolve())
+    except ValueError:
+        raise HTTPException(400, "Image path escapes the dataset folder")
+    if not image_path.exists() or not image_path.is_file():
+        raise HTTPException(404, "Image does not exist")
+    if image_path.suffix.lower() not in TRAINING_IMAGE_EXTS:
+        raise HTTPException(400, "Unsupported training image type")
+    return image_path, image_path.relative_to(dataset_dir).as_posix()
 
 
 def _scan_training_dataset(dataset_dir: Path) -> dict:
@@ -2388,37 +2445,40 @@ def _scan_training_dataset(dataset_dir: Path) -> dict:
             "empty_captions": [],
         }
 
-    images = sorted(p for p in dataset_dir.rglob("*") if p.is_file() and p.suffix.lower() in IMAGE_EXTS)
+    images = _training_images(dataset_dir)
     captions = sorted(p for p in dataset_dir.rglob("*.txt") if p.is_file())
-    image_keys = {(p.parent.relative_to(dataset_dir).as_posix(), p.stem): p for p in images}
-    caption_keys = {(p.parent.relative_to(dataset_dir).as_posix(), p.stem): p for p in captions}
+    excludes = _load_excludes(dataset_dir)
+    included_images = [p for p in images if p.relative_to(dataset_dir).as_posix() not in excludes]
+    image_keys = {_caption_key(dataset_dir, p): p for p in images}
+    included_image_keys = {_caption_key(dataset_dir, p): p for p in included_images}
+    caption_keys = {_caption_key(dataset_dir, p): p for p in captions}
 
     pairs = []
     missing = []
     empty = []
-    for key, img in image_keys.items():
+    for key, img in included_image_keys.items():
         cap = caption_keys.get(key)
         rel_img = img.relative_to(dataset_dir).as_posix()
         if cap is None:
             missing.append(rel_img)
             continue
         rel_cap = cap.relative_to(dataset_dir).as_posix()
-        try:
-            caption_text = cap.read_text(encoding="utf-8").strip()
-        except UnicodeDecodeError:
-            caption_text = cap.read_text(errors="ignore").strip()
+        caption_text = _read_caption_text(cap)
         if not caption_text:
             empty.append(rel_cap)
         pairs.append({"image": rel_img, "caption": rel_cap})
 
     orphan = [p.relative_to(dataset_dir).as_posix() for key, p in caption_keys.items() if key not in image_keys]
-    valid = bool(images) and not missing and not orphan and not empty
+    valid = bool(included_images) and not missing and not empty
     return {
         "valid": valid,
         "dataset_path": str(dataset_dir),
-        "image_count": len(images),
-        "caption_count": len(captions),
+        "image_count": len(included_images),
+        "caption_count": sum(1 for key in included_image_keys if key in caption_keys),
         "pair_count": len(pairs),
+        "total_image_count": len(images),
+        "total_caption_count": len(captions),
+        "excluded_count": len(images) - len(included_images),
         "pairs": pairs[:12],
         "missing_captions": missing[:25],
         "orphan_captions": orphan[:25],
@@ -2472,6 +2532,238 @@ def validate_trainer_dataset(req: TrainerDatasetRequest):
     return _scan_training_dataset(_resolve_training_path(req.dataset_path))
 
 
+# ── Dataset curation (wizard Step 3) ─────────────────────────────────────
+# A separate "list" endpoint that returns the FULL pair set (not capped at
+# 12 like the scan path) plus per-image flags. The /api/trainers/file
+# route serves the raw bytes — training datasets aren't encrypted at rest
+# so we can stream them directly without the SW decrypt dance.
+
+class TrainerCaptionUpdate(BaseModel):
+    dataset_path: str
+    image_rel: str          # path of the image inside the dataset
+    caption: str
+
+
+class TrainerExcludeUpdate(BaseModel):
+    dataset_path: str
+    image_rel: str
+    excluded: bool
+
+
+def _excludes_path(dataset_dir: Path) -> Path:
+    """Per-dataset .igglepixel_excludes.json — lists image rel_paths the
+    operator marked excluded in the curate step. The launch path builds a
+    job-local snapshot from included pairs only, so the listed paths are
+    dropped before training starts. Lives inside the dataset folder so it
+    travels with it."""
+    return dataset_dir / ".igglepixel_excludes.json"
+
+
+def _load_excludes(dataset_dir: Path) -> set[str]:
+    p = _excludes_path(dataset_dir)
+    if not p.exists():
+        return set()
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+        if isinstance(data, list):
+            return {str(x) for x in data}
+    except Exception:
+        pass
+    return set()
+
+
+def _save_excludes(dataset_dir: Path, excludes: set[str]) -> None:
+    p = _excludes_path(dataset_dir)
+    p.write_text(json.dumps(sorted(excludes), indent=2), encoding="utf-8")
+
+
+@app.post("/api/trainers/dataset/list")
+def list_trainer_dataset(req: TrainerDatasetRequest):
+    """Return the full pair list with caption text + per-image flags. The
+    wizard Step 3 reads this once on open and renders the grid + inspector
+    from it. Caption edits + exclude toggles go through the dedicated
+    endpoints below and the client patches local state — we don't re-fetch
+    the whole list on every interaction."""
+    _require_unlocked()
+    dataset_dir = _resolve_training_path(req.dataset_path)
+    if not dataset_dir.is_dir():
+        raise HTTPException(404, "Dataset folder does not exist")
+
+    images = _training_images(dataset_dir)
+    caption_map = {
+        _caption_key(dataset_dir, p): p
+        for p in dataset_dir.rglob("*.txt") if p.is_file()
+    }
+    excludes = _load_excludes(dataset_dir)
+
+    pairs = []
+    for img in images:
+        rel_img = img.relative_to(dataset_dir).as_posix()
+        key = _caption_key(dataset_dir, img)
+        cap_path = caption_map.get(key)
+        caption_text = ""
+        if cap_path is not None:
+            caption_text = _read_caption_text(cap_path)
+
+        # Lightweight flags computed without ML. Phase 2.5 adds sharpness,
+        # near-dupe detection, and subject-framing scores via a separate
+        # analysis pass.
+        flags = []
+        size = img.stat().st_size if img.exists() else 0
+        if size < 30 * 1024:            # <30 KB usually means corrupt / web-thumb-sized
+            flags.append({"label": "LOW-RES", "tone": "warn", "detail": f"file size only {size // 1024} KB — likely too small for 1024px training"})
+        if cap_path is None:
+            flags.append({"label": "NO CAP", "tone": "warn", "detail": "no .txt caption file alongside this image"})
+        elif not caption_text:
+            flags.append({"label": "EMPTY CAP", "tone": "warn", "detail": "caption file exists but is empty"})
+        elif len(caption_text) < 12:
+            flags.append({"label": "SHORT CAP", "tone": "warn", "detail": f"caption is only {len(caption_text)} chars — usually you want >30"})
+
+        try:
+            ws_rel = img.relative_to(WORKSPACE.resolve()).as_posix()
+        except ValueError:
+            ws_rel = str(img)
+        pairs.append({
+            "image": rel_img,
+            "caption_path": cap_path.relative_to(dataset_dir).as_posix() if cap_path else None,
+            "caption": caption_text,
+            "size_bytes": size,
+            "flags": flags,
+            "excluded": rel_img in excludes,
+            "url": _sign_trainer_url(ws_rel),
+        })
+
+    # Health metrics — coverage (have caption), captions (non-empty), balance
+    # (caption length stddev), variety (unique file size buckets as a cheap
+    # proxy). All produced without ML so the bar fills meaningfully even
+    # without the Phase 2.5 analysis layer.
+    included_pairs = [p for p in pairs if not p["excluded"]]
+    total = len(included_pairs)
+    denom = total or 1
+    covered  = sum(1 for p in included_pairs if p["caption_path"])
+    has_text = sum(1 for p in included_pairs if p["caption"])
+    avg_len  = sum(len(p["caption"]) for p in included_pairs) / denom
+    var_buckets = len({(p["size_bytes"] // (200 * 1024)) for p in included_pairs})  # 200 KB buckets
+    health = {
+        "coverage": round(100 * covered / denom) if total else 0,
+        "captions": round(100 * has_text / denom) if total else 0,
+        "balance":  round(max(0, min(100, 100 * (1 - abs(avg_len - 90) / 90)))) if avg_len else 0,
+        "variety":  min(100, round(100 * var_buckets / max(8, total // 6))) if total else 0,
+        "ready":    covered == total and has_text == total and total >= 8,
+    }
+
+    return {
+        "dataset_path": req.dataset_path,
+        "pair_count":   len(pairs),
+        "included_count": len(included_pairs),
+        "excluded_count": len(pairs) - len(included_pairs),
+        "pairs":        pairs,
+        "health":       health,
+    }
+
+
+@app.post("/api/trainers/dataset/caption")
+def update_trainer_caption(req: TrainerCaptionUpdate):
+    """Write a caption to <dataset>/<image>.txt. Creates the file if
+    missing. Returns the persisted caption + updated flags for the row
+    so the client can patch its local state without re-fetching."""
+    _require_unlocked()
+    dataset_dir = _resolve_training_path(req.dataset_path)
+    image_path, rel_img = _resolve_dataset_image(dataset_dir, req.image_rel)
+    caption_path = image_path.with_suffix(".txt")
+    text = (req.caption or "").strip()
+    caption_path.write_text(text + ("\n" if text else ""), encoding="utf-8")
+    return {
+        "status":   "saved",
+        "image":    rel_img,
+        "caption":  text,
+        "length":   len(text),
+    }
+
+
+@app.post("/api/trainers/dataset/exclude")
+def update_trainer_exclude(req: TrainerExcludeUpdate):
+    """Toggle an image into/out of the dataset's excluded set. Persisted
+    to .igglepixel_excludes.json in the dataset folder. Launch creates a
+    curated snapshot and trains against that snapshot."""
+    _require_unlocked()
+    dataset_dir = _resolve_training_path(req.dataset_path)
+    if not dataset_dir.is_dir():
+        raise HTTPException(404, "Dataset folder does not exist")
+    _, rel_img = _resolve_dataset_image(dataset_dir, req.image_rel)
+    excludes = _load_excludes(dataset_dir)
+    if req.excluded:
+        excludes.add(rel_img)
+    else:
+        excludes.discard(rel_img)
+    _save_excludes(dataset_dir, excludes)
+    return {"status": "saved", "image": rel_img, "excluded": req.excluded, "total_excluded": len(excludes)}
+
+
+def _sign_trainer_url(rel_path: str, ttl_seconds: int = 3600) -> str:
+    """Mirror of `_sign_url` for the trainer/file endpoint. Used by the
+    dataset-list response so the wizard's <img src> tags can fetch
+    thumbnails without an Authorization header (which images can't set).
+    """
+    exp = int(time.time()) + ttl_seconds
+    msg = f"trainer:{rel_path}|{exp}".encode("utf-8")
+    sig = hmac.new(auth.signing_key, msg, hashlib.sha256).hexdigest()[:32]
+    return f"/api/trainers/file?path={rel_path}&sig={sig}&exp={exp}"
+
+
+def _verify_trainer_signature(rel_path: str, sig: Optional[str], exp: Optional[int]) -> bool:
+    if not sig or not exp:
+        return False
+    try:
+        if int(exp) < int(time.time()):
+            return False
+    except (TypeError, ValueError):
+        return False
+    msg = f"trainer:{rel_path}|{exp}".encode("utf-8")
+    expected = hmac.new(auth.signing_key, msg, hashlib.sha256).hexdigest()[:32]
+    return hmac.compare_digest(sig, expected)
+
+
+@app.get("/api/trainers/file")
+def get_trainer_dataset_file(
+    path: str = Query(..., description="Path relative to /workspace"),
+    sig: Optional[str] = Query(None),
+    exp: Optional[int] = Query(None),
+    authorization: Optional[str] = Header(None),
+):
+    """Serve a plain-bytes file from a training dataset. Sandboxed to
+    /workspace, no encryption indirection — training images aren't
+    encrypted at rest so we stream them straight.
+
+    Accepts either a signed URL (sig + exp, issued by _sign_trainer_url)
+    or an Authorization bearer token. Signed URLs are the normal path
+    because <img src> can't set headers.
+
+    The service worker route at /api/assets/file/{path} assumes encrypted
+    bytes and decrypts them client-side; using a separate path means we
+    bypass that layer entirely.
+    """
+    has_sig = _verify_trainer_signature(path, sig, exp)
+    has_token = False
+    if authorization:
+        token = authorization.removeprefix("Bearer ").strip()
+        has_token = auth.verify(token)
+    if not (has_sig or has_token):
+        raise HTTPException(401, "Authentication required")
+    visible = (WORKSPACE / path).resolve()
+    try:
+        visible.relative_to(WORKSPACE.resolve())
+    except ValueError:
+        raise HTTPException(400, "Invalid path")
+    if not visible.exists() or not visible.is_file():
+        raise HTTPException(404, "Not found")
+    media_type = {
+        ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+        ".webp": "image/webp", ".gif": "image/gif", ".bmp": "image/bmp",
+    }.get(visible.suffix.lower(), "application/octet-stream")
+    return FileResponse(str(visible), media_type=media_type)
+
+
 @app.post("/api/trainers/datasets/download")
 def download_trainer_dataset(req: TrainerDatasetDownloadRequest):
     _require_unlocked()
@@ -2519,20 +2811,152 @@ def download_trainer_dataset(req: TrainerDatasetDownloadRequest):
     }
 
 
+@app.post("/api/trainers/dataset/upload")
+async def upload_trainer_dataset(
+    target_name: str = Query("upload"),
+    files: list[UploadFile] = File(...),
+):
+    _require_unlocked()
+    if not files:
+        raise HTTPException(400, "Choose at least one image or caption file")
+
+    safe_target = _safe_name(target_name, "upload")
+    target_dir = (DATASETS_DIR / "uploads" / f"{safe_target}_{int(time.time())}_{secrets.token_hex(3)}").resolve()
+    try:
+        target_dir.relative_to(DATASETS_DIR.resolve())
+    except ValueError:
+        raise HTTPException(400, "Invalid dataset folder name")
+    target_dir.mkdir(parents=True, exist_ok=False)
+
+    saved = []
+    for item in files:
+        filename = _safe_upload_filename(item.filename or "")
+        ext = Path(filename).suffix.lower()
+        if ext not in TRAINING_IMAGE_EXTS | {".txt"}:
+            continue
+        dest = (target_dir / filename).resolve()
+        try:
+            dest.relative_to(target_dir)
+        except ValueError:
+            raise HTTPException(400, "Invalid uploaded filename")
+        i = 1
+        base = dest
+        while dest.exists():
+            dest = target_dir / f"{base.stem}_{i}{base.suffix}"
+            i += 1
+        body = await item.read()
+        if not body:
+            continue
+        dest.write_bytes(body)
+        saved.append(dest.name)
+
+    if not saved:
+        raise HTTPException(400, "No supported JPG, PNG, WebP, or TXT files were uploaded")
+
+    scan = _scan_training_dataset(target_dir)
+    rel = target_dir.relative_to(WORKSPACE.resolve()).as_posix()
+    return {
+        "status": "uploaded",
+        "dataset_path": rel,
+        "path": str(target_dir),
+        "files": saved,
+        "scan": scan,
+    }
+
+
 def _public_train_job(job: dict) -> dict:
     out = {k: v for k, v in job.items() if not k.startswith("_")}
     out["log_tail"] = out.get("log_tail", [])[-80:]
     return out
 
 
+def _mark_train_job_cancelled(job: dict, message: str = "Training cancelled") -> None:
+    job["_cancel"] = True
+    job["status"] = "cancelled"
+    job["phase"] = "Cancelled"
+    job["finished_at"] = time.time()
+    if message:
+        tail = job.setdefault("log_tail", [])
+        if not tail or tail[-1] != message:
+            tail.append(message)
+        job["log_tail"] = tail[-120:]
+
+
 def _set_train_job_error(job: dict, message: str) -> None:
+    if job.get("_cancel") or job.get("status") == "cancelled":
+        _mark_train_job_cancelled(job)
+        return
     job["status"] = "error"
     job["error"] = message
     job["finished_at"] = time.time()
 
 
-def _trainer_save_every(steps: int) -> int:
+def _trainer_save_every(steps: int, requested: Optional[int] = None) -> int:
+    if requested is not None and requested > 0:
+        return int(requested)
     return max(250, min(1000, steps // 4 or 250))
+
+
+def _clean_sample_prompts(prompts: Optional[list[str]]) -> list[str]:
+    if not prompts:
+        return []
+    cleaned = []
+    for prompt in prompts:
+        text = str(prompt or "").strip()
+        if not text:
+            continue
+        cleaned.append(text[:1000])
+        if len(cleaned) >= 12:
+            break
+    return cleaned
+
+
+def _prepare_curated_training_dataset(source_dir: Path, target_dir: Path) -> dict:
+    """Copy the included image/caption pairs into a job-local snapshot.
+
+    Training receives this snapshot as DATASET_DIR, so excluded rows cannot
+    leak into custom trainer commands or AI Toolkit's folder scan.
+    """
+    if target_dir.exists():
+        shutil.rmtree(target_dir)
+    target_dir.mkdir(parents=True, exist_ok=True)
+
+    excludes = _load_excludes(source_dir)
+    copied = []
+    skipped = []
+    for image_path in _training_images(source_dir):
+        rel_img = image_path.relative_to(source_dir).as_posix()
+        if rel_img in excludes:
+            skipped.append(rel_img)
+            continue
+        caption_path = image_path.with_suffix(".txt")
+        rel_cap = caption_path.relative_to(source_dir).as_posix()
+        dest_img = target_dir / rel_img
+        dest_cap = target_dir / rel_cap
+        dest_img.parent.mkdir(parents=True, exist_ok=True)
+        dest_cap.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(image_path, dest_img)
+        shutil.copy2(caption_path, dest_cap)
+        copied.append({"image": rel_img, "caption": rel_cap})
+
+    (target_dir / ".igglepixel_curated_manifest.json").write_text(
+        json.dumps(
+            {
+                "source_dataset_path": str(source_dir),
+                "created_at": time.time(),
+                "included_count": len(copied),
+                "excluded_count": len(skipped),
+                "included": copied,
+                "excluded": skipped,
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    scan = _scan_training_dataset(target_dir)
+    scan["source_dataset_path"] = str(source_dir)
+    scan["training_dataset_path"] = str(target_dir)
+    return scan
 
 
 def _is_trainer_aux_safetensor(path: Path) -> bool:
@@ -2650,6 +3074,18 @@ def _import_trainer_outputs(job: dict, req: TrainJobRequest, output_dir: Path) -
     return imported
 
 
+def _trainer_output_records(output_dir: Path, output_name: str, total_steps: int) -> list[dict]:
+    records = []
+    for row in _trainer_output_candidates(output_dir, output_name, total_steps):
+        path: Path = row["path"]
+        records.append({
+            "path": str(path),
+            "filename": path.name,
+            "step": row.get("step"),
+        })
+    return records
+
+
 def _update_train_job_from_log(job: dict, req: TrainJobRequest, line: str) -> None:
     lower = line.lower()
     if "grabbing lora from the hub" in lower:
@@ -2719,24 +3155,65 @@ def _update_train_job_from_log(job: dict, req: TrainJobRequest, line: str) -> No
             job["total_steps"] = tot
             job["phase_progress"] = min(100, round((cur / tot) * 100, 1))
             job["progress"] = min(98, round(50 + 48 * (cur / tot), 1))
+            # Capture loss + lr on the same line if AI Toolkit emitted them.
+            # Common shapes: `loss 0.42`, `loss=0.42`, `lr 1.96e-4`, `lr=2.0e-04`.
+            # We append to bounded ring buffers so the Monitor sparkline has
+            # a windowed history without unbounded memory growth.
+            _record_train_metric(job, "loss", line)
+            _record_train_metric(job, "lr",   line)
             return
         if "loading checkpoint shards" in lower:
             job["phase"] = "Loading base model"
             job["phase_progress"] = min(100, round((cur / tot) * 100, 1))
 
 
+TRAIN_METRIC_HISTORY_MAX = 240   # ~4 min of samples at 1 step/sec
+
+
+def _record_train_metric(job: dict, name: str, line: str) -> None:
+    """Append a single metric reading parsed from a trainer log line.
+
+    `name` is 'loss' or 'lr'. We tolerate either `key value` or `key=value`
+    forms and either decimal or scientific notation. Values land in
+    job["metrics"][name] as a list of (step, value) tuples capped at
+    TRAIN_METRIC_HISTORY_MAX so the Monitor sparkline has bounded memory.
+    """
+    pattern = rf"{name}\s*[=:]?\s*([0-9]+\.?[0-9]*(?:e[+-]?\d+)?)"
+    m = re.search(pattern, line, re.I)
+    if not m:
+        return
+    try:
+        value = float(m.group(1))
+    except ValueError:
+        return
+    metrics = job.setdefault("metrics", {})
+    series = metrics.setdefault(name, [])
+    step = job.get("current_step") or (series[-1][0] + 1 if series else 0)
+    series.append([int(step), value])
+    if len(series) > TRAIN_METRIC_HISTORY_MAX:
+        # Slice in-place to preserve the dict's reference.
+        del series[: len(series) - TRAIN_METRIC_HISTORY_MAX]
+
+
 def _run_train_job(job_id: str) -> None:
     job = train_jobs[job_id]
     req: TrainJobRequest = job["_request"]
+    if job.get("_cancel") or job.get("status") == "cancelled":
+        _mark_train_job_cancelled(job)
+        return
     job["status"] = "running"
     job["phase"] = "Validating dataset"
     job["started_at"] = time.time()
     job["log_tail"].append("Validating dataset")
 
-    scan = _scan_training_dataset(Path(job["dataset_path"]))
+    source_dataset_dir = Path(job["dataset_path"])
+    scan = _scan_training_dataset(source_dataset_dir)
     job["dataset"] = scan
     if not scan["valid"]:
         _set_train_job_error(job, scan.get("error") or "Dataset validation failed")
+        return
+    if job.get("_cancel"):
+        _mark_train_job_cancelled(job)
         return
 
     command = _trainer_command()
@@ -2749,11 +3226,24 @@ def _run_train_job(job_id: str) -> None:
 
     output_dir = TRAINING_DIR / job_id
     output_dir.mkdir(parents=True, exist_ok=True)
+    training_dataset_dir = output_dir / "dataset_curated"
+    training_scan = _prepare_curated_training_dataset(source_dataset_dir, training_dataset_dir)
+    if job.get("_cancel"):
+        _mark_train_job_cancelled(job)
+        return
+    job["training_dataset_path"] = str(training_dataset_dir)
+    job["training_dataset"] = training_scan
+    job["log_tail"].append(
+        f"Prepared curated dataset: {training_scan.get('image_count', 0)} included, "
+        f"{scan.get('excluded_count', 0)} excluded"
+    )
     manifest_path = output_dir / "manifest.json"
-    save_every = _trainer_save_every(req.steps)
+    save_every = _trainer_save_every(req.steps, req.save_every)
+    sample_prompts = _clean_sample_prompts(req.sample_prompts)
     manifest = {
         "trainer_id": req.trainer_id,
         "dataset_path": job["dataset_path"],
+        "training_dataset_path": str(training_dataset_dir),
         "output_name": job["output_name"],
         "trigger_phrase": req.trigger_phrase,
         "base_model": req.base_model,
@@ -2764,7 +3254,16 @@ def _run_train_job(job_id: str) -> None:
         "batch_size": req.batch_size,
         "repeats": req.repeats,
         "save_every": save_every,
+        "optimizer": req.optimizer or "adamw8bit",
+        "scheduler": req.scheduler or "constant",
+        "network_alpha": req.network_alpha or req.rank,
+        "precision": req.precision or "bf16",
+        "gradient_checkpointing": True if req.gradient_checkpointing is None else req.gradient_checkpointing,
+        "generate_samples": bool(req.generate_samples),
+        "sample_prompts": sample_prompts,
+        "auto_import_lora": bool(req.auto_import_lora),
         "dataset": scan,
+        "training_dataset": training_scan,
     }
     manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     job["manifest_path"] = str(manifest_path)
@@ -2774,13 +3273,22 @@ def _run_train_job(job_id: str) -> None:
         f"Requested settings: rank {req.rank}, steps {req.steps}, lr {req.learning_rate}, "
         f"resolution {req.resolution}, batch {req.batch_size}, checkpoints every {save_every} steps"
     )
+    job["log_tail"].append(
+        "Advanced settings: "
+        f"optimizer {req.optimizer or 'adamw8bit'}, scheduler {req.scheduler or 'constant'}, "
+        f"alpha {req.network_alpha or req.rank}, precision {req.precision or 'bf16'}, "
+        f"samples {'on' if req.generate_samples else 'off'}, "
+        f"auto-import {'on' if req.auto_import_lora else 'off'}"
+    )
 
     env = os.environ.copy()
     if req.hf_token:
         env["HF_TOKEN"] = req.hf_token
     env.update(
         {
-            "DATASET_DIR": job["dataset_path"],
+            "DATASET_DIR": str(training_dataset_dir),
+            "SOURCE_DATASET_DIR": job["dataset_path"],
+            "TRAINING_DATASET_DIR": str(training_dataset_dir),
             "OUTPUT_DIR": str(output_dir),
             "OUTPUT_NAME": job["output_name"],
             "OUTPUT_PATH": str(output_dir / f"{job['output_name']}.safetensors"),
@@ -2793,9 +3301,25 @@ def _run_train_job(job_id: str) -> None:
             "TRAIN_BATCH_SIZE": str(req.batch_size),
             "TRAIN_REPEATS": str(req.repeats),
             "TRAIN_SAVE_EVERY": str(save_every),
+            "TRAIN_GENERATE_SAMPLES": "1" if req.generate_samples else "0",
             "TRAIN_MANIFEST": str(manifest_path),
         }
     )
+    # Advanced cfg from the wizard. Each is optional — wrapper falls back
+    # to its own defaults when not set, so legacy callers stay unaffected.
+    if req.optimizer:                       env["TRAIN_OPTIMIZER"] = req.optimizer
+    if req.scheduler:                       env["TRAIN_SCHEDULER"] = req.scheduler
+    if req.network_alpha is not None:       env["TRAIN_ALPHA"] = str(req.network_alpha)
+    if req.precision:                       env["TRAIN_PRECISION"] = req.precision
+    if req.gradient_checkpointing is not None:
+        env["TRAIN_GRAD_CKPT"] = "1" if req.gradient_checkpointing else "0"
+    if sample_prompts:
+        # JSON-encoded so multi-line prompts and special chars survive the
+        # round-trip cleanly. Wrapper json.loads on read.
+        env["TRAIN_SAMPLES"] = json.dumps(sample_prompts)
+    if job.get("_cancel"):
+        _mark_train_job_cancelled(job)
+        return
 
     try:
         proc = subprocess.Popen(
@@ -2819,10 +3343,12 @@ def _run_train_job(job_id: str) -> None:
             _update_train_job_from_log(job, req, line)
             if job.get("_cancel"):
                 proc.terminate()
-                job["status"] = "cancelled"
-                job["finished_at"] = time.time()
+                _mark_train_job_cancelled(job)
                 return
         rc = proc.wait()
+        if job.get("_cancel"):
+            _mark_train_job_cancelled(job)
+            return
         if rc != 0:
             _set_train_job_error(job, f"Trainer command exited with code {rc}")
             return
@@ -2832,6 +3358,28 @@ def _run_train_job(job_id: str) -> None:
     finally:
         job.pop("_process", None)
 
+    if job.get("_cancel"):
+        _mark_train_job_cancelled(job)
+        return
+
+    if not req.auto_import_lora:
+        outputs = _trainer_output_records(output_dir, job["output_name"], req.steps)
+        if not outputs:
+            _set_train_job_error(job, "Training finished but no exported LoRA checkpoint was found in the output folder")
+            return
+        job["status"] = "done"
+        job["phase"] = "Done"
+        job["progress"] = 100
+        job["finished_at"] = time.time()
+        job["imported_to_library"] = False
+        job["lora_paths"] = [item["path"] for item in outputs]
+        job["lora_filenames"] = [item["filename"] for item in outputs]
+        job["lora_checkpoints"] = [{"filename": item["filename"], "step": item.get("step")} for item in outputs]
+        job["lora_path"] = outputs[-1]["path"]
+        job["lora_filename"] = outputs[-1]["filename"]
+        job["log_tail"].append("LoRA checkpoints left in training output: " + ", ".join(item["filename"] for item in outputs))
+        return
+
     imported = _import_trainer_outputs(job, req, output_dir)
     if not imported:
         _set_train_job_error(job, "Training finished but no exported LoRA checkpoint was found in the output folder")
@@ -2840,6 +3388,7 @@ def _run_train_job(job_id: str) -> None:
     job["phase"] = "Done"
     job["progress"] = 100
     job["finished_at"] = time.time()
+    job["imported_to_library"] = True
     job["lora_paths"] = [item["path"] for item in imported]
     job["lora_filenames"] = [item["filename"] for item in imported]
     job["lora_checkpoints"] = [{"filename": item["filename"], "step": item.get("step")} for item in imported]
@@ -2874,9 +3423,21 @@ def create_train_job(req: TrainJobRequest):
         raise HTTPException(400, "Batch size must be between 1 and 16")
     if req.repeats < 1 or req.repeats > 100:
         raise HTTPException(400, "Repeats must be between 1 and 100")
+    if req.optimizer and req.optimizer not in TRAINER_OPTIMIZERS:
+        raise HTTPException(400, "Unsupported optimizer")
+    if req.scheduler and req.scheduler not in TRAINER_SCHEDULERS:
+        raise HTTPException(400, "Unsupported scheduler")
+    if req.network_alpha is not None and (req.network_alpha < 1 or req.network_alpha > 256):
+        raise HTTPException(400, "Network alpha must be between 1 and 256")
+    if req.save_every is not None and (req.save_every < 1 or req.save_every > 100000):
+        raise HTTPException(400, "Save every must be between 1 and 100000")
+    if req.precision and req.precision not in TRAINER_PRECISIONS:
+        raise HTTPException(400, "Unsupported precision")
+    req.sample_prompts = _clean_sample_prompts(req.sample_prompts) or None
 
     job_id = secrets.token_hex(8)
     output_name = _safe_name(req.output_name, "qwen_lora")
+    save_every = _trainer_save_every(req.steps, req.save_every)
     job = {
         "id": job_id,
         "trainer_id": req.trainer_id,
@@ -2893,7 +3454,15 @@ def create_train_job(req: TrainJobRequest):
         "resolution": req.resolution,
         "batch_size": req.batch_size,
         "repeats": req.repeats,
-        "save_every": _trainer_save_every(req.steps),
+        "save_every": save_every,
+        "optimizer": req.optimizer or "adamw8bit",
+        "scheduler": req.scheduler or "constant",
+        "network_alpha": req.network_alpha or req.rank,
+        "precision": req.precision or "bf16",
+        "gradient_checkpointing": True if req.gradient_checkpointing is None else req.gradient_checkpointing,
+        "generate_samples": bool(req.generate_samples),
+        "sample_prompts": req.sample_prompts or [],
+        "auto_import_lora": bool(req.auto_import_lora),
         "progress": 0,
         "log_tail": [],
         "_request": req,
@@ -2918,6 +3487,63 @@ def get_train_job(job_id: str):
     return _public_train_job(job)
 
 
+@app.get("/api/train-jobs/{job_id}/samples")
+def get_train_job_samples(job_id: str):
+    """List checkpoint sample images written by AI Toolkit during training.
+
+    AI Toolkit writes samples to <output_dir>/ai-toolkit-output/<name>/samples/
+    using filenames like `<step>__<prompt-slug>__<seed>.jpg`. We group by step
+    so the wizard's Samples tab can render a step × prompt matrix.
+    """
+    _require_unlocked()
+    job = train_jobs.get(job_id)
+    if not job:
+        raise HTTPException(404, "Job not found")
+    out_dir = Path(job.get("output_dir") or "")
+    if not out_dir.exists():
+        return {"checkpoints": [], "prompts": []}
+
+    # Walk output_dir for any folder named `samples` (AI Toolkit nests one
+    # level deeper under ai-toolkit-output/<name>). Collect image files,
+    # parse the step out of the filename, and bucket per step.
+    sample_files = list(out_dir.rglob("samples/*.jpg")) + list(out_dir.rglob("samples/*.png"))
+    by_step: dict[int, list[dict]] = {}
+    prompt_order: list[str] = []
+    seen_prompts: set[str] = set()
+    for p in sample_files:
+        m = re.match(r"^(\d+)__(.+?)__\d+\.(?:jpg|png)$", p.name)
+        if not m:
+            # Fall back to leading-int parse so non-standard names still appear.
+            mi = re.match(r"^(\d+)", p.name)
+            if not mi:
+                continue
+            step = int(mi.group(1))
+            prompt_slug = "default"
+        else:
+            step = int(m.group(1))
+            prompt_slug = m.group(2)
+        try:
+            ws_rel = p.relative_to(WORKSPACE.resolve()).as_posix()
+        except ValueError:
+            ws_rel = str(p)
+        if prompt_slug not in seen_prompts:
+            seen_prompts.add(prompt_slug)
+            prompt_order.append(prompt_slug)
+        by_step.setdefault(step, []).append({
+            "prompt_slug": prompt_slug,
+            "url":         _sign_trainer_url(ws_rel),
+            "name":        p.name,
+        })
+
+    checkpoints = sorted(by_step.keys())
+    return {
+        "checkpoints": [
+            {"step": s, "samples": by_step[s]} for s in checkpoints
+        ],
+        "prompts": prompt_order,
+    }
+
+
 @app.delete("/api/train-jobs/{job_id}")
 def cancel_or_dismiss_train_job(job_id: str):
     job = train_jobs.get(job_id)
@@ -2934,8 +3560,13 @@ def cancel_or_dismiss_train_job(job_id: str):
         except Exception:
             pass
     if job["status"] == "queued":
-        job["status"] = "cancelled"
-        job["finished_at"] = time.time()
+        _mark_train_job_cancelled(job)
+    else:
+        job["phase"] = "Cancelling"
+        tail = job.setdefault("log_tail", [])
+        if not tail or tail[-1] != "Cancellation requested":
+            tail.append("Cancellation requested")
+        job["log_tail"] = tail[-120:]
     return {"status": "cancelling"}
 
 
