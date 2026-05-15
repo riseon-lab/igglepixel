@@ -7022,3 +7022,83 @@ select,
     min-width: 38px;
   }
 }
+
+/* Moonstone cleanup for legacy leftovers found after the redesign pass. */
+.asset-grid > .empty,
+.civ-grid > .empty,
+.modal-body > .empty,
+.hf-browser-body > .empty,
+.px-theme .asset-grid > .empty,
+.px-theme .civ-grid > .empty,
+.px-theme .modal-body > .empty,
+.px-theme .hf-browser-body > .empty {
+  display: grid;
+  place-items: center;
+  min-height: 148px;
+  color: var(--moon-text-soft) !important;
+  background: rgba(112,133,138,0.72) !important;
+  border: 1px solid var(--moon-border) !important;
+  border-radius: 14px !important;
+  box-shadow: var(--moon-shadow-soft);
+}
+.modal-body > .empty,
+.hf-browser-body > .empty,
+.px-theme .modal-body > .empty,
+.px-theme .hf-browser-body > .empty {
+  min-height: 120px;
+}
+
+.hf-advanced,
+.px-theme .hf-advanced {
+  overflow: hidden;
+  color: var(--moon-text);
+  background: rgba(112,133,138,0.72) !important;
+  border: 1px solid var(--moon-border) !important;
+  border-radius: 14px !important;
+  box-shadow: var(--moon-shadow-soft);
+}
+.hf-advanced > summary,
+.px-theme .hf-advanced > summary {
+  color: var(--moon-text) !important;
+  background: rgba(49,73,79,0.22) !important;
+  border-color: var(--moon-border) !important;
+  font-family: var(--font-sans);
+  font-size: 14px;
+  font-weight: 600;
+}
+.hf-advanced .field-label,
+.hf-advanced .px-label,
+.px-theme .hf-advanced .field-label,
+.px-theme .hf-advanced .px-label {
+  color: var(--moon-text) !important;
+}
+.hf-advanced > .btn,
+.px-theme .hf-advanced > .btn {
+  background: var(--moon-button) !important;
+  color: var(--moon-text) !important;
+  border-color: var(--moon-border-strong) !important;
+  border-radius: 12px !important;
+}
+
+#moderationCard,
+#moderationCard .settings-body-copy,
+#moderationCard .settings-inline-note,
+#moderationSource,
+.px-theme #moderationCard,
+.px-theme #moderationCard .settings-body-copy,
+.px-theme #moderationCard .settings-inline-note,
+.px-theme #moderationSource {
+  color: var(--moon-text-soft) !important;
+}
+#moderationCard .settings-body-copy,
+.px-theme #moderationCard .settings-body-copy {
+  max-width: 640px;
+  font-size: 14px;
+  line-height: 1.6;
+}
+.status-pill[data-state="unknown"],
+.px-theme .status-pill[data-state="unknown"] {
+  color: var(--moon-text) !important;
+  border-color: rgba(255,255,255,0.32) !important;
+  background: rgba(49,73,79,0.42) !important;
+}
