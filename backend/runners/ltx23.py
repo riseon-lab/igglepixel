@@ -90,10 +90,15 @@ LTX_CPU_OFFLOAD_BELOW_GB = float(os.environ.get("FORGE_LTX_CPU_OFFLOAD_BELOW_GB"
 LTX_FORCE_CPU_OFFLOAD_FP8 = os.environ.get("FORGE_LTX_FORCE_CPU_OFFLOAD_FP8", "1").lower() not in ("0", "false", "no")
 # Quantize the Gemma text encoder via bitsandbytes when loading. Comfy uses
 # a Q4 GGUF (~6 GB); the closest we can get inside ltx-pipelines without
-# a GGUF loader is bitsandbytes 8-bit (~12 GB) or NF4 (~7 GB). 'int8' is
-# the safe default; 'nf4' is the most aggressive; '' or 'off' keeps the
-# original BF16 (~24 GB) for comparison.
-LTX_GEMMA_QUANT = os.environ.get("FORGE_LTX_GEMMA_QUANT", "int8").strip().lower()
+# a GGUF loader is bitsandbytes 8-bit (~12 GB) or NF4 (~7 GB).
+#
+# DEFAULT OFF — experimental. The ltx-pipelines text-encoder factory
+# returns a wrapper with a custom `.encode()` method; replacing it with
+# a raw transformers model crashes with `AttributeError: 'Gemma3...'
+# object has no attribute 'encode'` at the first forward pass. Until we
+# either build a matching wrapper or reach into the wrapper's internal
+# model attribute, leave this off. 'int8'/'nf4' for opt-in testing.
+LTX_GEMMA_QUANT = os.environ.get("FORGE_LTX_GEMMA_QUANT", "off").strip().lower()
 # VAE tile size for the video VAE decode. ltx-pipelines' default is
 # unverified-but-large; smaller tiles cap activation spikes during decode
 # at the cost of marginal extra compute. 256 is conservative; set to 0
