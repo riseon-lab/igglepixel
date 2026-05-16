@@ -21,7 +21,16 @@ from .base import Runner as RunnerBase, WORKSPACE, _data_key
 
 os.environ.setdefault("TORCH_COMPILE_DISABLE", "1")
 os.environ.setdefault("TORCHDYNAMO_DISABLE", "1")
-os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+# The default native caching allocator fragments aggressively under our
+# load/unload pattern. `cudaMallocAsync` uses CUDA's stream-ordered async
+# allocator which fragments much less, so a 24 GB "free" headroom can
+# actually satisfy a 20 GB request instead of failing because no single
+# contiguous block was available. Combined with garbage_collection_threshold
+# at 0.6 we get aggressive defragmentation when the pool pressure is high.
+os.environ.setdefault(
+    "PYTORCH_CUDA_ALLOC_CONF",
+    "backend:cudaMallocAsync,expandable_segments:True,garbage_collection_threshold:0.6",
+)
 
 
 VARIANTS = {
@@ -637,11 +646,13 @@ class Runner(RunnerBase):
                     )
             except Exception as e:
                 if self._is_cuda_oom(e):
-                    # Snapshot the VRAM allocation BEFORE cleanup so the error
-                    # message carries the actual state at OOM. Otherwise the
-                    # subsequent cleanup releases everything and the user sees
-                    # "0 GB allocated" which is misleading.
+                    # Snapshot + summary BEFORE cleanup. The numbers from
+                    # memory_allocated/reserved alone are misleading
+                    # (PyTorch holds memory via fragmentation); the
+                    # memory_summary dump in the runner log shows per-
+                    # bucket sizes which is what we actually need.
                     vram_at_oom = self._vram_snapshot()
+                    self._log_memory_summary("at OOM")
                     self._cleanup_memory()
                     self._log_cuda_memory("after LTX OOM cleanup")
                     raise RuntimeError(self._format_oom_message(
@@ -843,7 +854,15 @@ class Runner(RunnerBase):
     @staticmethod
     def _vram_snapshot() -> dict:
         """Return current VRAM allocation in GiB. Captured before any
-        cleanup so error messages can include the real value."""
+        cleanup so error messages can include the real value.
+
+        `allocated` / `reserved` alone are misleading — PyTorch's caching
+        allocator holds onto memory through fragmentation, so the numbers
+        track pool state rather than literal model footprint. We also
+        capture `max_allocated` (peak since last reset) which is a more
+        honest measure of what the largest single in-flight allocation
+        needed.
+        """
         try:
             import torch
 
@@ -851,15 +870,36 @@ class Runner(RunnerBase):
                 return {}
             allocated = torch.cuda.memory_allocated() / 1024**3
             reserved = torch.cuda.memory_reserved() / 1024**3
+            max_allocated = torch.cuda.max_memory_allocated() / 1024**3
             free, total = torch.cuda.mem_get_info()
             return {
-                "allocated_gb": round(allocated, 2),
-                "reserved_gb":  round(reserved, 2),
-                "free_gb":      round(free / 1024**3, 2),
-                "total_gb":     round(total / 1024**3, 2),
+                "allocated_gb":     round(allocated, 2),
+                "reserved_gb":      round(reserved, 2),
+                "max_allocated_gb": round(max_allocated, 2),
+                "free_gb":          round(free / 1024**3, 2),
+                "total_gb":         round(total / 1024**3, 2),
             }
         except Exception:
             return {}
+
+    @staticmethod
+    def _log_memory_summary(tag: str) -> None:
+        """Dump torch.cuda.memory_summary() at OOM so the runner log
+        carries a per-bucket breakdown of what's actually in the
+        allocator. memory_allocated() / reserved() numbers are
+        misleading on their own; the summary gives sizes per allocation
+        type which is what we actually need to diagnose a stuck pool.
+        """
+        try:
+            import torch
+
+            if not torch.cuda.is_available():
+                return
+            print(f"[runner] === memory_summary {tag} ===", flush=True)
+            print(torch.cuda.memory_summary(abbreviated=True), flush=True)
+            print(f"[runner] === end memory_summary {tag} ===", flush=True)
+        except Exception as e:
+            print(f"[runner] memory_summary failed: {type(e).__name__}: {e}", flush=True)
 
     @staticmethod
     def _format_oom_message(e: Exception, vram: dict, **ctx) -> str:
@@ -871,7 +911,10 @@ class Runner(RunnerBase):
             vram_part = (
                 f"\nVRAM at OOM: allocated={vram.get('allocated_gb')} GiB / "
                 f"reserved={vram.get('reserved_gb')} GiB / "
+                f"peak={vram.get('max_allocated_gb')} GiB / "
                 f"free={vram.get('free_gb')} GiB / total={vram.get('total_gb')} GiB."
+                "\n(allocated/reserved track pool state — see runner log "
+                "[runner] === memory_summary at OOM === for per-bucket breakdown)"
             )
         cfg_part = (
             f"\nVariant: {ctx.get('variant')}. "
