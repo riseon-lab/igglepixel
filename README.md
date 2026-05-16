@@ -78,6 +78,8 @@ This keeps the Docker image stable while the public repo can move quickly.
 | `HF_HOME` | `/workspace/.cache/huggingface` | Hugging Face cache location. |
 | `IGGLEPIXEL_MODERATION_DISABLE_ACK` | unset | Deliberate-friction moderation opt-out token for fork operators. |
 | `FORGE_QUANT` | unset | Set by launcher per runner from the UI. Usually do not set manually. |
+| `FORGE_LTX_OFFLOAD_MODE` | `auto` | LTX-2.3 memory policy. `auto` uses CPU offload below H200-class VRAM. |
+| `FORGE_LTX_CPU_OFFLOAD_BELOW_GB` | `141` | VRAM threshold where LTX-2.3 `auto` switches from CPU offload to no offload. |
 
 If GitHub is unavailable during boot, the entrypoint falls back to the cached clone when possible.
 

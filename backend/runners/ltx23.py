@@ -72,7 +72,7 @@ PRELOAD_COMPONENTS = os.environ.get("FORGE_LTX_PRELOAD_COMPONENTS", "0").lower()
 LTX_OFFLOAD_MODE = os.environ.get("FORGE_LTX_OFFLOAD_MODE", "auto").strip().lower()
 LTX_QUANTIZATION = os.environ.get("FORGE_LTX_QUANTIZATION", "auto").strip().lower()
 LTX_FP8_MIN_GB = float(os.environ.get("FORGE_LTX_FP8_MIN_GB", "80"))
-LTX_CPU_OFFLOAD_BELOW_GB = float(os.environ.get("FORGE_LTX_CPU_OFFLOAD_BELOW_GB", "80"))
+LTX_CPU_OFFLOAD_BELOW_GB = float(os.environ.get("FORGE_LTX_CPU_OFFLOAD_BELOW_GB", "141"))
 
 
 def _normalise_lora_set(loras) -> tuple:
@@ -179,6 +179,7 @@ class Runner(RunnerBase):
             ]
             pipeline_cls = TI2VidTwoStagesPipeline
 
+        self._log_cuda_memory("before LTX pipeline build")
         try:
             pipe = construct_pipeline(quantization, offload_mode)
         except Exception as e:
@@ -191,6 +192,14 @@ class Runner(RunnerBase):
                 fallback_offload = self._offload_mode("cpu")
                 pipe = construct_pipeline(None, fallback_offload)
                 policy_label = "offload=cpu, quantization=none (fallback)"
+            elif self._is_cuda_oom(e):
+                self._cleanup_memory()
+                self._log_cuda_memory("after LTX load OOM cleanup")
+                raise RuntimeError(
+                    "LTX ran out of VRAM while loading the pipeline. This can look like zero VRAM was used "
+                    "afterward because CUDA releases memory when the runner fails. Leave FORGE_LTX_OFFLOAD_MODE=auto "
+                    "or set FORGE_LTX_OFFLOAD_MODE=cpu for 80-96GB cards; use a shorter/lower-resolution test first."
+                ) from e
             else:
                 raise
 
