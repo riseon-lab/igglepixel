@@ -188,6 +188,19 @@ const PARAM_GROUPS = {
       { key: 'port', label: 'Port', type: 'number', default: 7860, min: 1024, max: 65535 },
     ],
   },
+  weights: {
+    title: 'Weights',
+    fields: [
+      { key: 'ltx_weight_repo', label: 'HF repo', type: 'text',
+        placeholder: 'Lightricks/LTX-2.3-fp8' },
+      { key: 'ltx_weight_name', label: 'Weight filename', type: 'hf_file',
+        placeholder: 'ltx-2.3-22b-distilled-fp8.safetensors' },
+      { key: 'ltx_weight_pipeline', label: 'Pipeline', type: 'select',
+        options: ['distilled', 'two_stage'], default: 'distilled' },
+      { key: 'ltx_weight_prequantized_fp8', label: 'Pre-quantized FP8', type: 'select',
+        options: ['true', 'false'], default: 'true' },
+    ],
+  },
 };
 
 // Default group set per category — registry can override per-model.
@@ -356,8 +369,12 @@ function toast(msg, kind = 'info') {
 
 // Resolve which groups a model uses, in order
 function groupsForModel(m) {
-  if (Array.isArray(m.param_groups) && m.param_groups.length) return m.param_groups;
-  return DEFAULT_GROUPS_BY_CATEGORY[m.category] || ['server'];
+  const base = Array.isArray(m.param_groups) && m.param_groups.length
+    ? m.param_groups
+    : (DEFAULT_GROUPS_BY_CATEGORY[m.category] || ['server']);
+  const variantGroups = selectedVariant(m)?.param_groups;
+  if (!Array.isArray(variantGroups) || !variantGroups.length) return base;
+  return [...base, ...variantGroups.filter(g => !base.includes(g))];
 }
 
 // Resolve fields for a model: walk groups, apply per-model overrides
@@ -366,7 +383,11 @@ function resolveFields(m) {
     ...(m.param_overrides || {}),
     ...(selectedVariant(m)?.param_overrides || {}),
   };
-  const enabledKeys = m.param_keys ? new Set(m.param_keys) : null; // optional whitelist
+  const modelKeys = Array.isArray(m.param_keys) ? m.param_keys : null;
+  const variantKeys = selectedVariant(m)?.param_keys;
+  const enabledKeys = (modelKeys || Array.isArray(variantKeys))
+    ? new Set([...(modelKeys || []), ...(Array.isArray(variantKeys) ? variantKeys : [])])
+    : null; // optional whitelist
   const groups = groupsForModel(m);
   const out = [];
   for (const g of groups) {
@@ -2020,6 +2041,14 @@ function renderField(f) {
           <button class="btn" type="button" data-pick-asset data-target="${f.key}">Pick</button>
         </div>
       </div>`;
+    case 'hf_file':
+      return `<div class="field">
+        <label class="field-label">${f.label}${f.hint ? `<span class="hint">${f.hint}</span>` : ''}</label>
+        <div style="display:flex;gap:8px">
+          <input class="text-input" data-key="${f.key}" placeholder="${esc(f.placeholder || '')}" value="${esc(v)}">
+          <button class="btn" type="button" data-pick-hf-weight data-target="${esc(f.key)}">Browse</button>
+        </div>
+      </div>`;
     case 'number':
     default:
       return `<div class="field" data-control-key="${esc(f.key)}">
@@ -2028,7 +2057,8 @@ function renderField(f) {
                ${f.min !== undefined ? `min="${f.min}"` : ''}
                ${f.max !== undefined ? `max="${f.max}"` : ''}
                ${f.step !== undefined ? `step="${f.step}"` : ''}
-               value="${v}" data-key="${f.key}">
+               ${f.placeholder ? `placeholder="${esc(f.placeholder)}"` : ''}
+               value="${esc(v)}" data-key="${f.key}">
       </div>`;
   }
 }
@@ -2175,6 +2205,9 @@ function bindParamInputs(rootEl) {
   rootEl.querySelectorAll('[data-pick-asset]').forEach(b => {
     b.addEventListener('click', () => pickAssetInto(b.dataset.target, rootEl));
   });
+  rootEl.querySelectorAll('[data-pick-hf-weight]').forEach(b => {
+    b.addEventListener('click', () => pickHFWeightInto(b.dataset.target, rootEl));
+  });
 }
 
 function pickAssetInto(targetKey, rootEl) {
@@ -2200,6 +2233,54 @@ function pickAssetInto(targetKey, rootEl) {
     closeModal();
   }));
   openModal();
+}
+
+async function pickHFWeightInto(targetKey, rootEl) {
+  const repoInput = rootEl.querySelector('[data-key="ltx_weight_repo"]');
+  const rawRepo = repoInput?.value || state.params.ltx_weight_repo || '';
+  const { repo, revision } = parseHFRepoInput(rawRepo);
+  if (!repo) {
+    toast('Enter a Hugging Face repo first', 'error');
+    return;
+  }
+  $('#modalTitle').textContent = 'Select LTX weight';
+  $('#modalMeta').textContent  = repo;
+  $('#modalBody').innerHTML = `<div class="empty" style="padding:18px"><span class="spinner"></span> Loading files…</div>`;
+  $('#modalFoot').innerHTML = `<button class="btn ghost" id="modalCancel">Cancel</button>`;
+  $('#modalCancel').onclick = closeModal;
+  openModal();
+  try {
+    const token = currentHFToken('#drawerHFToken') || currentHFToken('#hfTokenDl');
+    const data = await api.hfFiles(repo, revision, token || null);
+    const files = (data.files || []).filter(f => String(f.rel_path || '').toLowerCase().endsWith('.safetensors'));
+    if (!files.length) {
+      $('#modalBody').innerHTML = `<div class="empty" style="padding:18px">No .safetensors files found in <span class="mono">${esc(repo)}</span>.</div>`;
+      return;
+    }
+    $('#modalBody').innerHTML = `<div class="hf-file-list" style="max-height:52vh;overflow:auto">
+      ${files.map(f => {
+        const sizeStr = f.size ? formatBytes(f.size) : '?';
+        const lfs = f.lfs ? '<span class="lfs-pill">LFS</span>' : '';
+        return `<button class="hf-file-row" type="button" data-hf-weight="${esc(f.rel_path)}">
+          <span></span>
+          <span class="hf-file-name" title="${esc(f.rel_path)}">${esc(f.rel_path)}</span>
+          <span class="hf-file-size">${sizeStr}</span>
+          ${lfs}
+        </button>`;
+      }).join('')}
+    </div>`;
+    $$('[data-hf-weight]', $('#modalBody')).forEach(btn => btn.addEventListener('click', () => {
+      const filename = btn.dataset.hfWeight;
+      state.params.ltx_weight_repo = repo;
+      state.params[targetKey] = filename;
+      if (repoInput) repoInput.value = repo;
+      const input = rootEl.querySelector(`[data-key="${CSS.escape(targetKey)}"]`);
+      if (input) input.value = filename;
+      closeModal();
+    }));
+  } catch (e) {
+    $('#modalBody').innerHTML = `<div class="empty hf-error" style="padding:18px"><svg><use href="#i-x"/></svg> ${esc(e.message || 'Failed to fetch files')}</div>`;
+  }
 }
 
 // ── Drawer primary button: dispatches by current phase ───────────────────

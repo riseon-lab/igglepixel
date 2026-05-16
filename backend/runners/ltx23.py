@@ -33,6 +33,15 @@ VARIANTS = {
         "pipeline": "distilled",
         "prequantized_fp8": True,
     },
+    "custom-fp8": {
+        "repo": "Lightricks/LTX-2.3-fp8",
+        "weight": "ltx-2.3-22b-distilled-fp8.safetensors",
+        "default_steps": 8,
+        "default_cfg": 1.0,
+        "pipeline": "distilled",
+        "prequantized_fp8": True,
+        "custom_weight": True,
+    },
     "distilled-1.1": {
         "weight": "ltx-2.3-22b-distilled-1.1.safetensors",
         "default_steps": 8,
@@ -94,6 +103,8 @@ class Runner(RunnerBase):
         self._cancel = False
         self._variant: Optional[str] = None
         self._loaded_lora_key: tuple = ()
+        self._loaded_weight_key: Optional[tuple] = None
+        self._runtime_variant_cfg: Optional[dict] = None
 
     def _build_pipeline(self, lora_set: tuple):
         self._disable_torch_compile()
@@ -105,14 +116,14 @@ class Runner(RunnerBase):
         quantization, offload_mode, policy_label = self._resolve_memory_policy()
 
         token = os.environ.get("HF_TOKEN")
-        variant_cfg = VARIANTS[self._variant]
+        variant_cfg = self._variant_config()
         weight_repo = variant_cfg.get("repo", HF_REPO)
         weight_name = variant_cfg["weight"]
         if variant_cfg.get("prequantized_fp8"):
             quantization = None
             policy_label = f"{policy_label}, prequantized_fp8"
 
-        print(f"[runner] resolving LTX-2.3 weights ({weight_name})...", flush=True)
+        print(f"[runner] resolving LTX-2.3 weights ({weight_repo}/{weight_name})...", flush=True)
         weight_path = hf_hub_download(repo_id=weight_repo, filename=weight_name, token=token)
         upscaler_path = hf_hub_download(repo_id=HF_REPO, filename=SPATIAL_UPSCALER, token=token)
         gemma_root = self._resolve_gemma_root(token)
@@ -189,7 +200,57 @@ class Runner(RunnerBase):
             print("[runner] LTX component preload disabled; lazy loading leaves VRAM headroom for generation", flush=True)
         self._pipe = pipe
         self._loaded_lora_key = lora_set
+        self._loaded_weight_key = self._weight_key(variant_cfg)
         print("[runner] ready", flush=True)
+
+    def _variant_config(self) -> dict:
+        if self._runtime_variant_cfg:
+            return self._runtime_variant_cfg
+        if self._variant and self._variant in VARIANTS:
+            return VARIANTS[self._variant]
+        return VARIANTS["distilled-fp8"]
+
+    def _apply_runtime_variant_params(self, params: dict) -> tuple:
+        variant_cfg = dict(VARIANTS[self._variant])
+        if variant_cfg.get("custom_weight"):
+            repo = str(params.get("ltx_weight_repo") or variant_cfg.get("repo") or HF_REPO).strip()
+            weight = str(params.get("ltx_weight_name") or variant_cfg["weight"]).strip()
+            pipeline = str(params.get("ltx_weight_pipeline") or variant_cfg.get("pipeline", "distilled")).strip().lower()
+            prequantized_fp8 = self._bool_param(
+                params.get("ltx_weight_prequantized_fp8"),
+                bool(variant_cfg.get("prequantized_fp8")),
+            )
+            if not repo:
+                raise ValueError("`ltx_weight_repo` is required for the custom LTX weight variant")
+            if not weight:
+                raise ValueError("`ltx_weight_name` is required for the custom LTX weight variant")
+            if pipeline not in ("distilled", "two_stage"):
+                raise ValueError("`ltx_weight_pipeline` must be `distilled` or `two_stage`")
+            variant_cfg.update(
+                repo=repo,
+                weight=weight,
+                pipeline=pipeline,
+                prequantized_fp8=prequantized_fp8,
+            )
+        self._runtime_variant_cfg = variant_cfg
+        return self._weight_key(variant_cfg)
+
+    @staticmethod
+    def _weight_key(variant_cfg: dict) -> tuple:
+        return (
+            variant_cfg.get("repo", HF_REPO),
+            variant_cfg["weight"],
+            variant_cfg.get("pipeline", "two_stage"),
+            bool(variant_cfg.get("prequantized_fp8")),
+        )
+
+    @staticmethod
+    def _bool_param(value, default: bool = False) -> bool:
+        if value is None:
+            return default
+        if isinstance(value, bool):
+            return value
+        return str(value).strip().lower() in ("1", "true", "yes", "on")
 
     @staticmethod
     def _pipeline_memory_kwargs(pipeline_cls, quantization, offload_mode) -> dict:
@@ -302,13 +363,15 @@ class Runner(RunnerBase):
             print(f"[runner] unknown variant '{variant}', falling back to distilled-fp8", flush=True)
             variant = "distilled-fp8"
         self._variant = variant
+        self._runtime_variant_cfg = dict(VARIANTS[variant])
+        if self._runtime_variant_cfg.get("custom_weight"):
+            print("[runner] custom LTX weight selected; delaying pipeline load until generation params arrive", flush=True)
+            return
         self._build_pipeline(())
 
     def generate(self, params: dict, loras: Optional[list] = None) -> dict:
         import secrets
 
-        if self._pipe is None:
-            raise RuntimeError("Runner not loaded")
         self._cancel = False
 
         prompt = (params.get("prompt") or "").strip()
@@ -319,16 +382,24 @@ class Runner(RunnerBase):
             raise ValueError("`ref_image` is required for LTX-2.3 i2v")
 
         wanted = _normalise_lora_set(loras)
-        if wanted != self._loaded_lora_key:
-            print(f"[runner] LoRA set changed (was {len(self._loaded_lora_key)}, now {len(wanted)}); rebuilding pipeline...", flush=True)
+        weight_key = self._apply_runtime_variant_params(params)
+        if self._pipe is None or wanted != self._loaded_lora_key or weight_key != self._loaded_weight_key:
+            if self._pipe is None:
+                print("[runner] building LTX pipeline for current request...", flush=True)
+            if wanted != self._loaded_lora_key:
+                print(f"[runner] LoRA set changed (was {len(self._loaded_lora_key)}, now {len(wanted)}); rebuilding pipeline...", flush=True)
+            if weight_key != self._loaded_weight_key:
+                print("[runner] LTX weight selection changed; rebuilding pipeline...", flush=True)
             try:
+                self._cleanup_memory()
                 self._pipe = None
                 self._build_pipeline(wanted)
             except Exception:
                 self._loaded_lora_key = ()
+                self._loaded_weight_key = None
                 raise
 
-        variant_cfg = VARIANTS[self._variant]
+        variant_cfg = self._variant_config()
         seed = int(params.get("seed", -1))
         steps = int(params.get("steps", variant_cfg["default_steps"]))
         cfg = float(params.get("cfg", variant_cfg["default_cfg"]))
@@ -372,7 +443,7 @@ class Runner(RunnerBase):
             )
             self._progress(2, 10, "running pipeline")
             try:
-                if VARIANTS[self._variant].get("pipeline") == "distilled":
+                if variant_cfg.get("pipeline") == "distilled":
                     video, audio = self._pipe(**common_kwargs)
                 else:
                     video, audio = self._pipe(
@@ -460,6 +531,8 @@ class Runner(RunnerBase):
             "width": width,
             "height": height,
             "duration": round(frames / fps, 2),
+            "weight_repo": variant_cfg.get("repo", HF_REPO),
+            "weight_name": variant_cfg["weight"],
             "loras": [{"filename": fn, "strength": s} for fn, s in self._loaded_lora_key],
         })
 

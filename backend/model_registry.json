@@ -274,6 +274,23 @@
           ]
         },
         {
+          "id": "custom-fp8",
+          "label": "Custom HF weight",
+          "description": "Enter a Hugging Face repo and safetensors filename, then run that LTX-2.3 weight with the selected pipeline.",
+          "auto_min_vram_gb": 80,
+          "default_params": {
+            "ltx_weight_repo": "Lightricks/LTX-2.3-fp8",
+            "ltx_weight_name": "ltx-2.3-22b-distilled-fp8.safetensors",
+            "ltx_weight_pipeline": "distilled",
+            "ltx_weight_prequantized_fp8": "true"
+          },
+          "param_groups": ["weights"],
+          "param_keys": ["ltx_weight_repo", "ltx_weight_name", "ltx_weight_pipeline", "ltx_weight_prequantized_fp8"],
+          "download_files": [
+            { "hf_repo": "Lightricks/LTX-2.3", "filename": "ltx-2.3-spatial-upscaler-x2-1.1.safetensors" }
+          ]
+        },
+        {
           "id": "distilled-1.1",
           "label": "Distilled 1.1 — 8 steps",
           "description": "Distilled variant tuned for 8-step inference. Same 22B model family as dev, with faster practical generations.",
@@ -347,6 +364,23 @@
           "auto_min_vram_gb": 80,
           "download_files": [
             { "hf_repo": "Lightricks/LTX-2.3-fp8", "filename": "ltx-2.3-22b-distilled-fp8.safetensors" },
+            { "hf_repo": "Lightricks/LTX-2.3", "filename": "ltx-2.3-spatial-upscaler-x2-1.1.safetensors" }
+          ]
+        },
+        {
+          "id": "custom-fp8",
+          "label": "Custom HF weight",
+          "description": "Enter a Hugging Face repo and safetensors filename, then run that LTX-2.3 weight with the selected pipeline.",
+          "auto_min_vram_gb": 80,
+          "default_params": {
+            "ltx_weight_repo": "Lightricks/LTX-2.3-fp8",
+            "ltx_weight_name": "ltx-2.3-22b-distilled-fp8.safetensors",
+            "ltx_weight_pipeline": "distilled",
+            "ltx_weight_prequantized_fp8": "true"
+          },
+          "param_groups": ["weights"],
+          "param_keys": ["ltx_weight_repo", "ltx_weight_name", "ltx_weight_pipeline", "ltx_weight_prequantized_fp8"],
+          "download_files": [
             { "hf_repo": "Lightricks/LTX-2.3", "filename": "ltx-2.3-spatial-upscaler-x2-1.1.safetensors" }
           ]
         },

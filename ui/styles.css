@@ -3573,6 +3573,14 @@ body::before {
   border-bottom: 1px solid var(--line-1);
   transition: background 0.1s;
 }
+button.hf-file-row {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
 .hf-file-row:hover { background: rgba(255,255,255,0.04); }
 .hf-file-row.selected { background: rgba(255,24,189,0.08); }
 /* Custom checkbox so iOS Safari doesn't render an invisible-tick native one.
