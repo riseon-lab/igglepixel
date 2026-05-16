@@ -18,7 +18,7 @@ A self-hosted launcher with a clean UI over the open-source generation stack. Pi
 
 The UI now groups families into model cards with variants. Quants are auto-picked where available; tiers below show the smallest sensible GPU for each current variant path.
 
-**Grouped variants in the app:** Wan 2.2 I2V/T2V each expose 5B, 14B, and 14B Lightning 4/8-step; LTX-2.3 exposes separate distilled 8-step I2V and T2V entries; Qwen 2.5 Chat exposes 7B/14B/32B; HunyuanVideo exposes T2V/I2V; HiDream-I1 exposes Fast/Dev/Full; SenseNova-U1 exposes 8B-MoT, preview, and SFT.
+**Grouped variants in the app:** Wan 2.2 I2V/T2V each expose 5B, 14B, and 14B Lightning 4/8-step; LTX-2.3 exposes separate FP8 distilled 8-step I2V and T2V entries; Qwen 2.5 Chat exposes 7B/14B/32B; HunyuanVideo exposes T2V/I2V; HiDream-I1 exposes Fast/Dev/Full; SenseNova-U1 exposes 8B-MoT, preview, and SFT.
 
 ### 16 GB
 FLUX.2 [klein] 4B · Z-Image Turbo · FLUX.1-dev INT8/NF4 · LongCat Image/Edit INT8/NF4 · Qwen-Image / Edit / 2511 / 2512 NF4 · Qwen ControlNet Union/Inpaint NF4 · Qwen 2.5 7B BF16 · Qwen 2.5 14B INT8/NF4 · Qwen 2.5 32B NF4 · Wan 2.2 5B INT8/NF4
@@ -27,10 +27,10 @@ FLUX.2 [klein] 4B · Z-Image Turbo · FLUX.1-dev INT8/NF4 · LongCat Image/Edit 
 HunyuanVideo NF4 T2V/I2V · HiDream-I1 Fast · Qwen-Image / Edit / 2511 / 2512 INT8 · Qwen ControlNet INT8 · Wan 2.2 14B NF4 · FLUX.2 [klein] 9B INT8 · LongCat Image/Edit BF16 · FLUX.1-dev BF16
 
 ### 36 – 48 GB
-Wan 2.2 5B BF16 · Wan 2.2 14B INT8 · LTX-2.3 distilled minimum · FLUX.2 [klein] 9B BF16 · Qwen 2.5 14B BF16 · Qwen 2.5 32B INT8 · SenseNova-U1 BF16 minimum · HiDream-I1 Dev
+Wan 2.2 5B BF16 · Wan 2.2 14B INT8 · FLUX.2 [klein] 9B BF16 · Qwen 2.5 14B BF16 · Qwen 2.5 32B INT8 · SenseNova-U1 BF16 minimum · HiDream-I1 Dev
 
 ### 80 GB+
-Wan 2.2 14B BF16 · Wan 2.2 14B Lightning 4/8-step I2V/T2V · LTX-2.3 distilled recommended · HunyuanVideo BF16 T2V/I2V · HiDream-I1 Full · Qwen-Image / Edit / 2511 / 2512 BF16 · Qwen ControlNet BF16 · Qwen 2.5 32B BF16 · SenseNova-U1 all variants comfortably
+Wan 2.2 14B BF16 · Wan 2.2 14B Lightning 4/8-step I2V/T2V · LTX-2.3 FP8 distilled I2V/T2V · HunyuanVideo BF16 T2V/I2V · HiDream-I1 Full · Qwen-Image / Edit / 2511 / 2512 BF16 · Qwen ControlNet BF16 · Qwen 2.5 32B BF16 · SenseNova-U1 all variants comfortably
 
 ### CPU only
 Kyutai Pocket TTS. 🛣️ Planned API-only video: **Kling**, **Seedance**, **Veo 3**, **Sora 2**, **Runway**, **Pika**. Bring your own provider key.

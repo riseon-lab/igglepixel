@@ -25,6 +25,14 @@ os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 
 
 VARIANTS = {
+    "distilled-fp8": {
+        "repo": "Lightricks/LTX-2.3-fp8",
+        "weight": "ltx-2.3-22b-distilled-fp8.safetensors",
+        "default_steps": 8,
+        "default_cfg": 1.0,
+        "pipeline": "distilled",
+        "prequantized_fp8": True,
+    },
     "distilled-1.1": {
         "weight": "ltx-2.3-22b-distilled-1.1.safetensors",
         "default_steps": 8,
@@ -77,8 +85,8 @@ class Runner(RunnerBase):
     model_name = "LTX-2.3"
     category = "video"
     supports_lora = True
-    min_vram_gb = 48
-    recommended_vram_gb = 80
+    min_vram_gb = 80
+    recommended_vram_gb = 141
     requires_ref = True
 
     def __init__(self) -> None:
@@ -98,10 +106,14 @@ class Runner(RunnerBase):
 
         token = os.environ.get("HF_TOKEN")
         variant_cfg = VARIANTS[self._variant]
+        weight_repo = variant_cfg.get("repo", HF_REPO)
         weight_name = variant_cfg["weight"]
+        if variant_cfg.get("prequantized_fp8"):
+            quantization = None
+            policy_label = f"{policy_label}, prequantized_fp8"
 
         print(f"[runner] resolving LTX-2.3 weights ({weight_name})...", flush=True)
-        weight_path = hf_hub_download(repo_id=HF_REPO, filename=weight_name, token=token)
+        weight_path = hf_hub_download(repo_id=weight_repo, filename=weight_name, token=token)
         upscaler_path = hf_hub_download(repo_id=HF_REPO, filename=SPATIAL_UPSCALER, token=token)
         gemma_root = self._resolve_gemma_root(token)
 
@@ -285,10 +297,10 @@ class Runner(RunnerBase):
             print(f"[runner] preloaded LTX components: {', '.join(cached)}", flush=True)
 
     def load(self) -> None:
-        variant = os.environ.get("FORGE_VARIANT", "distilled-1.1").lower()
+        variant = os.environ.get("FORGE_VARIANT", "distilled-fp8").lower()
         if variant not in VARIANTS:
-            print(f"[runner] unknown variant '{variant}', falling back to distilled-1.1", flush=True)
-            variant = "distilled-1.1"
+            print(f"[runner] unknown variant '{variant}', falling back to distilled-fp8", flush=True)
+            variant = "distilled-fp8"
         self._variant = variant
         self._build_pipeline(())
 

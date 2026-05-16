@@ -247,7 +247,7 @@
       "id": "ltx23",
       "name": "LTX-2.3 — Image to Video",
       "category": "video",
-      "description": "Lightricks' LTX-2.3 (22B) image-to-video. Workstation-class path using the official LTX pipelines runtime, FP8/CPU-offload memory policy, and distilled 8-step checkpoint with conservative defaults.",
+      "description": "Lightricks' LTX-2.3 (22B) image-to-video. Defaults to the pre-quantized FP8 distilled 8-step checkpoint, with heavier distilled checkpoints available for H200-class runs.",
       "runner_module": "backend.runners.ltx23",
       "hf_repo": "Lightricks/LTX-2.3",
       "download_snapshot": false,
@@ -263,6 +263,16 @@
       "gpu_support": ["nvidia"],
       "runtime_profile": "ltx-pipelines",
       "variants": [
+        {
+          "id": "distilled-fp8",
+          "label": "Distilled FP8 — 8 steps",
+          "description": "Pre-quantized FP8 distilled checkpoint from Lightricks/LTX-2.3-fp8. Best first choice for 80-96 GB cards.",
+          "auto_min_vram_gb": 80,
+          "download_files": [
+            { "hf_repo": "Lightricks/LTX-2.3-fp8", "filename": "ltx-2.3-22b-distilled-fp8.safetensors" },
+            { "hf_repo": "Lightricks/LTX-2.3", "filename": "ltx-2.3-spatial-upscaler-x2-1.1.safetensors" }
+          ]
+        },
         {
           "id": "distilled-1.1",
           "label": "Distilled 1.1 — 8 steps",
@@ -314,7 +324,7 @@
       "id": "ltx23-t2v",
       "name": "LTX-2.3 — Text to Video",
       "category": "video",
-      "description": "Lightricks' LTX-2.3 (22B) text-to-video. Uses the same official LTX pipelines runtime, FP8/CPU-offload memory policy, and distilled 8-step checkpoint as the I2V path, but without image conditioning.",
+      "description": "Lightricks' LTX-2.3 (22B) text-to-video. Defaults to the pre-quantized FP8 distilled 8-step checkpoint, without image conditioning.",
       "runner_module": "backend.runners.ltx23_t2v",
       "hf_repo": "Lightricks/LTX-2.3",
       "download_snapshot": false,
@@ -330,6 +340,16 @@
       "gpu_support": ["nvidia"],
       "runtime_profile": "ltx-pipelines",
       "variants": [
+        {
+          "id": "distilled-fp8",
+          "label": "Distilled FP8 — 8 steps",
+          "description": "Pre-quantized FP8 distilled checkpoint from Lightricks/LTX-2.3-fp8. Best first choice for 80-96 GB cards.",
+          "auto_min_vram_gb": 80,
+          "download_files": [
+            { "hf_repo": "Lightricks/LTX-2.3-fp8", "filename": "ltx-2.3-22b-distilled-fp8.safetensors" },
+            { "hf_repo": "Lightricks/LTX-2.3", "filename": "ltx-2.3-spatial-upscaler-x2-1.1.safetensors" }
+          ]
+        },
         {
           "id": "distilled-1.1",
           "label": "Distilled 1.1 — 8 steps",
