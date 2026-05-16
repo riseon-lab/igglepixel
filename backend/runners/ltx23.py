@@ -629,13 +629,22 @@ class Runner(RunnerBase):
                     )
             except Exception as e:
                 if self._is_cuda_oom(e):
+                    # Snapshot the VRAM allocation BEFORE cleanup so the error
+                    # message carries the actual state at OOM. Otherwise the
+                    # subsequent cleanup releases everything and the user sees
+                    # "0 GB allocated" which is misleading.
+                    vram_at_oom = self._vram_snapshot()
                     self._cleanup_memory()
                     self._log_cuda_memory("after LTX OOM cleanup")
-                    raise RuntimeError(
-                        "LTX ran out of VRAM. Try 1024x576, a shorter duration, or lower FPS. "
-                        "The higher-resolution presets can exceed an 80GB card because the 22B model, "
-                        "Gemma text stack, VAE/upscaler, and video activations overlap during generation."
-                    ) from e
+                    raise RuntimeError(self._format_oom_message(
+                        e, vram_at_oom,
+                        variant=self._variant,
+                        width=width,
+                        height=height,
+                        frames=frames,
+                        fps=fps,
+                        steps=steps,
+                    )) from e
                 raise
             self._log_cuda_memory("after LTX pipeline")
             self._progress(8, 10, "encoding video")
@@ -791,6 +800,57 @@ class Runner(RunnerBase):
         if e.__class__.__name__ == "OutOfMemoryError":
             return True
         return "cuda out of memory" in str(e).lower()
+
+    @staticmethod
+    def _vram_snapshot() -> dict:
+        """Return current VRAM allocation in GiB. Captured before any
+        cleanup so error messages can include the real value."""
+        try:
+            import torch
+
+            if not torch.cuda.is_available():
+                return {}
+            allocated = torch.cuda.memory_allocated() / 1024**3
+            reserved = torch.cuda.memory_reserved() / 1024**3
+            free, total = torch.cuda.mem_get_info()
+            return {
+                "allocated_gb": round(allocated, 2),
+                "reserved_gb":  round(reserved, 2),
+                "free_gb":      round(free / 1024**3, 2),
+                "total_gb":     round(total / 1024**3, 2),
+            }
+        except Exception:
+            return {}
+
+    @staticmethod
+    def _format_oom_message(e: Exception, vram: dict, **ctx) -> str:
+        """Compose a single-line OOM error rich enough that the user can
+        diagnose without digging into runner logs. Includes resolution,
+        variant, VRAM at-OOM, and currently-active memory knobs."""
+        vram_part = ""
+        if vram:
+            vram_part = (
+                f"\nVRAM at OOM: allocated={vram.get('allocated_gb')} GiB / "
+                f"reserved={vram.get('reserved_gb')} GiB / "
+                f"free={vram.get('free_gb')} GiB / total={vram.get('total_gb')} GiB."
+            )
+        cfg_part = (
+            f"\nVariant: {ctx.get('variant')}. "
+            f"Tried: {ctx.get('width')}x{ctx.get('height')} × {ctx.get('frames')} frames "
+            f"@ {ctx.get('fps')} fps × {ctx.get('steps')} steps."
+        )
+        env_part = (
+            f"\nActive knobs: offload={LTX_OFFLOAD_MODE} quant={LTX_QUANTIZATION} "
+            f"force_cpu_fp8={int(LTX_FORCE_CPU_OFFLOAD_FP8)} "
+            f"vae_tile={LTX_VAE_TILE_SIZE} skip_upscaler={int(LTX_SKIP_UPSCALER)} "
+            f"gemma_quant={LTX_GEMMA_QUANT}."
+        )
+        hint_part = (
+            "\nFastest next steps: (1) drop to 768x432 to confirm activations vs residency. "
+            "(2) set FORGE_LTX_OFFLOAD_MODE=disk for more aggressive offload. "
+            "(3) shorten duration / lower fps."
+        )
+        return f"LTX ran out of VRAM ({type(e).__name__}).{cfg_part}{vram_part}{env_part}{hint_part}"
 
     @staticmethod
     def _log_cuda_memory(tag: str) -> None:
