@@ -759,7 +759,14 @@ def get_models():
     with open(REGISTRY_PATH) as f:
         data = json.load(f)
     gpu = detect_gpu()
-    models = [_with_resolved_runtime(data, m) for m in data["models"]]
+    # `hidden: true` on a registry entry omits the model from the catalogue
+    # response. Runner files stay on disk so a manual launch via the API
+    # still works for testing; just nothing surfaces in the UI list.
+    models = [
+        _with_resolved_runtime(data, m)
+        for m in data["models"]
+        if not m.get("hidden")
+    ]
     for m in models:
         m["gpu_compatible"]   = gpu["type"] in m.get("gpu_support", [])
         m["vram_ok"]          = gpu["vram_gb"] >= m.get("min_vram_gb", 0)

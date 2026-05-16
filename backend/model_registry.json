@@ -250,6 +250,7 @@
     },
     {
       "id": "ltx23",
+      "hidden": true,
       "name": "LTX-2.3 — Image to Video",
       "category": "video",
       "description": "Lightricks' LTX-2.3 (22B) image-to-video. Defaults to the pre-quantized FP8 distilled 8-step checkpoint, with heavier distilled checkpoints available for H200-class runs.",
@@ -344,6 +345,7 @@
     },
     {
       "id": "ltx23-t2v",
+      "hidden": true,
       "name": "LTX-2.3 — Text to Video",
       "category": "video",
       "description": "Lightricks' LTX-2.3 (22B) text-to-video. Defaults to the pre-quantized FP8 distilled 8-step checkpoint, without image conditioning.",
