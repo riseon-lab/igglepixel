@@ -31,7 +31,8 @@
         "imageio-ffmpeg",
         "av",
         "cryptography==44.0.0",
-        "xformers>=0.0.30"
+        "xformers>=0.0.30",
+        "bitsandbytes>=0.43"
       ],
       "verify_imports": [
         "fastapi",
@@ -49,7 +50,8 @@
         "imageio",
         "PIL",
         "xformers",
-        "xformers.ops"
+        "xformers.ops",
+        "bitsandbytes"
       ]
     },
     "pocket-tts": {

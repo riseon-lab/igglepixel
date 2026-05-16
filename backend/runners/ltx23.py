@@ -81,6 +81,29 @@ LTX_FP8_MIN_GB = float(os.environ.get("FORGE_LTX_FP8_MIN_GB", "24"))
 # everything 48-96 GB resident in VRAM. xformers attention is the real
 # memory unlock — see _patch_xformers_attention.
 LTX_CPU_OFFLOAD_BELOW_GB = float(os.environ.get("FORGE_LTX_CPU_OFFLOAD_BELOW_GB", "40"))
+# Force CPU offload on the prequantized-FP8 variants regardless of VRAM.
+# The ltx-pipelines docs are explicit: `--offload` and `--quantization` are
+# mutually exclusive, and "prequantized" already means the weights are FP8
+# on disk so the runtime quantization policy is None anyway. So offloading
+# Gemma + idle components for FP8 variants is pure win — Gemma BF16 (~24 GB)
+# was sitting resident the whole session. Default on; env-overridable.
+LTX_FORCE_CPU_OFFLOAD_FP8 = os.environ.get("FORGE_LTX_FORCE_CPU_OFFLOAD_FP8", "1").lower() not in ("0", "false", "no")
+# Quantize the Gemma text encoder via bitsandbytes when loading. Comfy uses
+# a Q4 GGUF (~6 GB); the closest we can get inside ltx-pipelines without
+# a GGUF loader is bitsandbytes 8-bit (~12 GB) or NF4 (~7 GB). 'int8' is
+# the safe default; 'nf4' is the most aggressive; '' or 'off' keeps the
+# original BF16 (~24 GB) for comparison.
+LTX_GEMMA_QUANT = os.environ.get("FORGE_LTX_GEMMA_QUANT", "int8").strip().lower()
+# VAE tile size for the video VAE decode. ltx-pipelines' default is
+# unverified-but-large; smaller tiles cap activation spikes during decode
+# at the cost of marginal extra compute. 256 is conservative; set to 0
+# (or 'default') to fall back to TilingConfig.default().
+LTX_VAE_TILE_SIZE = int(os.environ.get("FORGE_LTX_VAE_TILE_SIZE", "256") or "0")
+# Skip the spatial upscaler entirely for the distilled-only path. The
+# upscaler is a separate ~1-2 GB sub-pipeline that's only used when the
+# pipeline opts into 2× upsampling. Default-off keeps it loaded for
+# back-compat; set to 1 to drop it on distilled variants.
+LTX_SKIP_UPSCALER = os.environ.get("FORGE_LTX_SKIP_UPSCALER", "0").lower() in ("1", "true", "yes")
 
 
 def _normalise_lora_set(loras) -> tuple:
@@ -121,19 +144,29 @@ class Runner(RunnerBase):
         from ltx_core.loader.sd_ops import LTXV_LORA_COMFY_RENAMING_MAP
 
         self._patch_xformers_attention()
-        quantization, offload_mode, policy_label = self._resolve_memory_policy()
 
         token = os.environ.get("HF_TOKEN")
         variant_cfg = self._variant_config()
         weight_repo = variant_cfg.get("repo", HF_REPO)
         weight_name = variant_cfg["weight"]
+        pipeline_name = variant_cfg.get("pipeline", "two_stage")
+
+        quantization, offload_mode, policy_label = self._resolve_memory_policy(variant_cfg)
         if variant_cfg.get("prequantized_fp8"):
             quantization = None
             policy_label = f"{policy_label}, prequantized_fp8"
 
         print(f"[runner] resolving LTX-2.3 weights ({weight_repo}/{weight_name})...", flush=True)
         weight_path = hf_hub_download(repo_id=weight_repo, filename=weight_name, token=token)
-        upscaler_path = hf_hub_download(repo_id=HF_REPO, filename=SPATIAL_UPSCALER, token=token)
+        # Spatial upscaler: skip when explicitly disabled on distilled-only
+        # runs. The upscaler is a separate ~1-2 GB sub-pipeline only used
+        # for 2× output upsampling; the distilled-fp8 path can run without
+        # it. Two-stage variants always need it.
+        upscaler_path = None
+        if not (LTX_SKIP_UPSCALER and pipeline_name == "distilled"):
+            upscaler_path = hf_hub_download(repo_id=HF_REPO, filename=SPATIAL_UPSCALER, token=token)
+        else:
+            print("[runner] LTX spatial upscaler skipped (FORGE_LTX_SKIP_UPSCALER=1)", flush=True)
         gemma_root = self._resolve_gemma_root(token)
 
         loras_dir = Path(os.environ.get("LORAS_DIR", str(WORKSPACE / "loras")))
@@ -148,25 +181,28 @@ class Runner(RunnerBase):
                 p = matches[0]
             ltx_loras.append(LoraPathStrengthAndSDOps(str(p), float(strength), LTXV_LORA_COMFY_RENAMING_MAP))
 
-        pipeline_name = variant_cfg.get("pipeline", "two_stage")
         print(f"[runner] building LTX pipeline (mode={pipeline_name}, variant={self._variant}, loras={len(ltx_loras)}, memory={policy_label})", flush=True)
 
         def construct_pipeline(q_policy, o_mode):
             common_extra = self._pipeline_memory_kwargs(pipeline_cls, q_policy, o_mode)
+            # Pass spatial_upsampler_path only if we have one. Distilled
+            # variants tolerate omission when LTX_SKIP_UPSCALER is on;
+            # two-stage variants always have a path.
+            upscaler_kwargs = {"spatial_upsampler_path": str(upscaler_path)} if upscaler_path else {}
             if pipeline_name == "distilled":
                 return pipeline_cls(
                     distilled_checkpoint_path=str(weight_path),
-                    spatial_upsampler_path=str(upscaler_path),
                     gemma_root=str(gemma_root),
                     loras=ltx_loras,
+                    **upscaler_kwargs,
                     **common_extra,
                 )
             return pipeline_cls(
                 checkpoint_path=str(weight_path),
                 distilled_lora=distilled_lora,
-                spatial_upsampler_path=str(upscaler_path),
                 gemma_root=str(gemma_root),
                 loras=ltx_loras,
+                **upscaler_kwargs,
                 **common_extra,
             )
 
@@ -211,6 +247,14 @@ class Runner(RunnerBase):
             else:
                 raise
 
+        # Try to swap Gemma for a bitsandbytes-quantized version before any
+        # other component is loaded. The default `gemma-3-12b-it-qat-q4_0-
+        # unquantized` is 24 GB BF16 despite the misleading "q4_0" in its
+        # repo name — replacing it with int8/nf4 frees 12-18 GB of VRAM
+        # that previously sat resident the whole session. Failure here is
+        # non-fatal: we keep the default Gemma and just log the reason.
+        self._maybe_inject_quantized_gemma(pipe, gemma_root)
+
         if PRELOAD_COMPONENTS:
             self._preload_pipeline_components(pipe)
         else:
@@ -219,6 +263,91 @@ class Runner(RunnerBase):
         self._loaded_lora_key = lora_set
         self._loaded_weight_key = self._weight_key(variant_cfg)
         print("[runner] ready", flush=True)
+
+    @staticmethod
+    def _maybe_inject_quantized_gemma(pipe, gemma_root: Path) -> None:
+        """Replace the pipeline's Gemma factory with a bitsandbytes-quantized
+        instance so the text encoder costs ~6-12 GB instead of ~24 GB.
+
+        ComfyUI sidesteps this by running the text encoder once and unloading
+        it before the transformer loads. ltx-pipelines doesn't do that out
+        of the box — the text encoder factory under `pipe.model_ledger` is
+        invoked lazily, but the model it returns stays resident afterwards.
+        We pre-build the quantized model and swap the factory so the
+        pipeline picks it up on first use.
+
+        Fails closed: any error here logs a warning and leaves the default
+        Gemma path untouched.
+        """
+        if LTX_GEMMA_QUANT in ("", "off", "none", "0", "false"):
+            print(f"[runner] LTX Gemma quantization disabled (FORGE_LTX_GEMMA_QUANT={LTX_GEMMA_QUANT!r})", flush=True)
+            return
+
+        ledger = getattr(pipe, "model_ledger", None)
+        if ledger is None:
+            print("[runner] LTX pipe has no model_ledger; cannot inject quantized Gemma", flush=True)
+            return
+        factory_name = None
+        for candidate in ("text_encoder", "gemma_embeddings_processor", "gemma"):
+            if callable(getattr(ledger, candidate, None)):
+                factory_name = candidate
+                break
+        if factory_name is None:
+            print("[runner] LTX model_ledger exposes no text-encoder factory; cannot inject quantized Gemma", flush=True)
+            return
+
+        try:
+            import torch
+            from transformers import (
+                AutoConfig,
+                AutoModelForCausalLM,
+                BitsAndBytesConfig,
+            )
+        except Exception as e:
+            print(f"[runner] WARN: quantized Gemma skipped (import failed: {type(e).__name__}: {e})", flush=True)
+            return
+
+        choice = LTX_GEMMA_QUANT
+        if choice == "nf4":
+            qcfg = BitsAndBytesConfig(
+                load_in_4bit=True,
+                bnb_4bit_quant_type="nf4",
+                bnb_4bit_compute_dtype=torch.bfloat16,
+                bnb_4bit_use_double_quant=True,
+            )
+            label = "nf4 (~7 GB)"
+        elif choice in ("int8", "8bit", "fp8"):
+            # fp8 here means "8-bit via bitsandbytes" — distinct from the
+            # transformer's own torch FP8 path.
+            qcfg = BitsAndBytesConfig(load_in_8bit=True)
+            label = "int8 (~12 GB)"
+        else:
+            print(f"[runner] WARN: unknown FORGE_LTX_GEMMA_QUANT={choice!r}; falling back to default Gemma", flush=True)
+            return
+
+        try:
+            # Pick the right model class. Gemma 3 is multimodal; the text-only
+            # path uses `Gemma3ForConditionalGeneration` or its language head.
+            # AutoModelForCausalLM resolves to the correct class via config.
+            print(f"[runner] loading Gemma {label} from {gemma_root}...", flush=True)
+            cfg = AutoConfig.from_pretrained(str(gemma_root))
+            quantized = AutoModelForCausalLM.from_pretrained(
+                str(gemma_root),
+                config=cfg,
+                quantization_config=qcfg,
+                device_map="auto",
+                torch_dtype=torch.bfloat16,
+            )
+            quantized.eval()
+        except Exception as e:
+            print(f"[runner] WARN: quantized Gemma load failed ({type(e).__name__}: {e}); keeping default Gemma", flush=True)
+            return
+
+        try:
+            setattr(ledger, factory_name, lambda obj=quantized: obj)
+            print(f"[runner] LTX Gemma swapped → {label} (replaced ledger.{factory_name})", flush=True)
+        except Exception as e:
+            print(f"[runner] WARN: ledger factory replacement failed ({type(e).__name__}: {e}); default Gemma still in use", flush=True)
 
     def _variant_config(self) -> dict:
         if self._runtime_variant_cfg:
@@ -280,13 +409,22 @@ class Runner(RunnerBase):
         return out
 
     @classmethod
-    def _resolve_memory_policy(cls):
+    def _resolve_memory_policy(cls, variant_cfg: Optional[dict] = None):
         vram = cls._gpu_vram_gb()
         offload_choice = LTX_OFFLOAD_MODE
         quant_choice = LTX_QUANTIZATION
+        is_prequantized_fp8 = bool((variant_cfg or {}).get("prequantized_fp8"))
 
         if offload_choice == "auto":
-            offload_choice = "cpu" if vram and vram < LTX_CPU_OFFLOAD_BELOW_GB else "none"
+            # For prequantized-FP8 variants, ltx-pipelines docs are explicit
+            # that offload + runtime FP8 cast are mutually exclusive. The
+            # weights are *already* FP8 on disk so the runtime cast is moot —
+            # we get pure win from offloading Gemma + idle components to RAM.
+            # Default-on; FORGE_LTX_FORCE_CPU_OFFLOAD_FP8=0 disables.
+            if is_prequantized_fp8 and LTX_FORCE_CPU_OFFLOAD_FP8:
+                offload_choice = "cpu"
+            else:
+                offload_choice = "cpu" if vram and vram < LTX_CPU_OFFLOAD_BELOW_GB else "none"
         if quant_choice == "auto":
             quant_choice = "fp8-cast" if offload_choice == "none" and (not vram or vram >= LTX_FP8_MIN_GB) else "none"
 
@@ -439,7 +577,7 @@ class Runner(RunnerBase):
         stripped = None
         try:
             from ltx_core.components.guiders import MultiModalGuiderParams
-            from ltx_core.model.video_vae import TilingConfig, get_video_chunks_number
+            from ltx_core.model.video_vae import TilingConfig, get_video_chunks_number  # noqa: F401 (TilingConfig used via _make_tiling_config)
             from ltx_pipelines.utils.args import ImageConditioningInput
             from ltx_pipelines.utils.media_io import encode_video
 
@@ -447,7 +585,7 @@ class Runner(RunnerBase):
             self._log_cuda_memory("before LTX pipeline")
             self._cleanup_memory()
             self._progress(1, 10, "prepared inputs")
-            tiling_config = TilingConfig.default()
+            tiling_config = self._make_tiling_config()
             common_kwargs = dict(
                 prompt=prompt,
                 seed=seed,
@@ -559,6 +697,50 @@ class Runner(RunnerBase):
     @staticmethod
     def _progress(step: int, total: int, label: str) -> None:
         print(f"[gen] step {step} / {total} {label}", flush=True)
+
+    @staticmethod
+    def _make_tiling_config():
+        """Build the VAE TilingConfig used at decode time.
+
+        The default `TilingConfig.default()` is unverified-but-large; that
+        contributes to high VRAM spikes during VAE decode of long video.
+        When FORGE_LTX_VAE_TILE_SIZE is set, we try to construct a tighter
+        config by inspecting the dataclass's accepted params and setting
+        any tile_size-shaped knob we can find. Failure is non-fatal —
+        we always fall back to TilingConfig.default().
+        """
+        from ltx_core.model.video_vae import TilingConfig
+        if LTX_VAE_TILE_SIZE <= 0:
+            return TilingConfig.default()
+        try:
+            sig = inspect.signature(TilingConfig.__init__)
+            params = sig.parameters
+            kwargs = {}
+            for tile_arg in ("tile_size", "spatial_tile_size", "tile_height", "tile_width"):
+                if tile_arg in params:
+                    kwargs[tile_arg] = LTX_VAE_TILE_SIZE
+            if not kwargs:
+                # Some versions expose it as a class-level setter rather than a
+                # constructor arg — try setting attributes on the default cfg.
+                cfg = TilingConfig.default()
+                applied = False
+                for attr in ("tile_size", "spatial_tile_size", "tile_height", "tile_width"):
+                    if hasattr(cfg, attr):
+                        try:
+                            setattr(cfg, attr, LTX_VAE_TILE_SIZE)
+                            applied = True
+                        except Exception:
+                            pass
+                if applied:
+                    print(f"[runner] LTX VAE tiling: patched default tile_size={LTX_VAE_TILE_SIZE}", flush=True)
+                    return cfg
+                print("[runner] WARN: TilingConfig accepts no tile_size kwarg; falling back to default", flush=True)
+                return TilingConfig.default()
+            print(f"[runner] LTX VAE tiling: {kwargs}", flush=True)
+            return TilingConfig(**kwargs)
+        except Exception as e:
+            print(f"[runner] WARN: custom TilingConfig failed ({type(e).__name__}: {e}); using default", flush=True)
+            return TilingConfig.default()
 
     @staticmethod
     def _disable_torch_compile() -> None:
