@@ -79,6 +79,7 @@ class Runner(RunnerBase):
     supports_lora = True
     min_vram_gb = 48
     recommended_vram_gb = 80
+    requires_ref = True
 
     def __init__(self) -> None:
         self._pipe = None
@@ -302,7 +303,7 @@ class Runner(RunnerBase):
         if not prompt:
             raise ValueError("`prompt` is required")
         ref_path = params.get("ref_image") or params.get("ref")
-        if not ref_path:
+        if self.requires_ref and not ref_path:
             raise ValueError("`ref_image` is required for LTX-2.3 i2v")
 
         wanted = _normalise_lora_set(loras)
@@ -327,10 +328,12 @@ class Runner(RunnerBase):
         if seed < 0:
             seed = secrets.randbits(31)
 
-        ref_visible = Path(ref_path)
-        if not ref_visible.is_absolute():
-            ref_visible = WORKSPACE / ref_visible
-        ref_tmp = self._decrypt_ref_to_temp(ref_visible)
+        ref_tmp = None
+        if ref_path:
+            ref_visible = Path(ref_path)
+            if not ref_visible.is_absolute():
+                ref_visible = WORKSPACE / ref_visible
+            ref_tmp = self._decrypt_ref_to_temp(ref_visible)
 
         out_tmp = self._temp_file(".mp4")
         stripped = None
@@ -352,7 +355,7 @@ class Runner(RunnerBase):
                 width=width,
                 num_frames=frames,
                 frame_rate=float(fps),
-                images=[ImageConditioningInput(str(ref_tmp), 0, 1.0, DEFAULT_IMAGE_CRF)],
+                images=([ImageConditioningInput(str(ref_tmp), 0, 1.0, DEFAULT_IMAGE_CRF)] if ref_tmp else []),
                 tiling_config=tiling_config,
             )
             self._progress(2, 10, "running pipeline")

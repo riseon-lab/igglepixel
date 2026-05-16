@@ -41,8 +41,8 @@ The live catalogue is registry-driven, so support will keep expanding without ch
 | --- | --- | --- |
 | Text-to-image | Qwen-Image, Qwen-Image-2512, FLUX.2 [klein] 4B/9B, FLUX.1-dev | Qwen + Klein 4B are Apache 2.0; Klein 9B and FLUX.1-dev are non-commercial. |
 | Image edit | Qwen-Image-Edit, Qwen-Image-Edit 2511, FLUX.2 [klein] 4B/9B | Reference and multi-reference editing with LoRA support. |
-| Image-to-video | Wan 2.2 I2V, LTX-2.3 | Wan has 14B Lightning 8-step, 14B, and 5B variants. LTX-2.3 uses the 22B distilled 8-step image-to-video path. |
-| Text / image to video | HunyuanVideo | t2v + i2v variants, NF4 (24 GB) and BF16 (80 GB) quants. |
+| Image-to-video | Wan 2.2 I2V, LTX-2.3 I2V | Wan has 14B Lightning 8-step, 14B, and 5B variants. LTX-2.3 uses the 22B distilled 8-step image-conditioned path. |
+| Text / image to video | Wan 2.2 T2V, LTX-2.3 T2V, HunyuanVideo | LTX-2.3 T2V shares the 22B distilled runtime without a source frame; HunyuanVideo has NF4 (24 GB) and BF16 (80 GB) paths. |
 | Text / chat | Qwen 2.5 Chat | Qwen 7B / 14B / 32B variants with VRAM-aware context defaults. |
 | Audio / TTS | Kyutai Pocket TTS | CPU-first speech generation with built-in voices. |
 
