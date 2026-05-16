@@ -71,8 +71,16 @@ LTX_TMP_DIR = WORKSPACE / "tmp" / "ltx23"
 PRELOAD_COMPONENTS = os.environ.get("FORGE_LTX_PRELOAD_COMPONENTS", "0").lower() in ("1", "true", "yes")
 LTX_OFFLOAD_MODE = os.environ.get("FORGE_LTX_OFFLOAD_MODE", "auto").strip().lower()
 LTX_QUANTIZATION = os.environ.get("FORGE_LTX_QUANTIZATION", "auto").strip().lower()
-LTX_FP8_MIN_GB = float(os.environ.get("FORGE_LTX_FP8_MIN_GB", "80"))
-LTX_CPU_OFFLOAD_BELOW_GB = float(os.environ.get("FORGE_LTX_CPU_OFFLOAD_BELOW_GB", "141"))
+# FP8 runtime cast is cheap and effective even on small cards — the whole
+# point of FP8 is "make the model fit". Default minimum was 80 GB which
+# meant the cast never fired below an H100. Drop to 24 GB so consumer
+# cards with the BF16 variant can opt in.
+LTX_FP8_MIN_GB = float(os.environ.get("FORGE_LTX_FP8_MIN_GB", "24"))
+# CPU offload was forced on for anything under 141 GB (H200/B100 only).
+# Lightricks recommends 48 GB minimum; 40 GB is a safe floor that keeps
+# everything 48-96 GB resident in VRAM. xformers attention is the real
+# memory unlock — see _patch_xformers_attention.
+LTX_CPU_OFFLOAD_BELOW_GB = float(os.environ.get("FORGE_LTX_CPU_OFFLOAD_BELOW_GB", "40"))
 
 
 def _normalise_lora_set(loras) -> tuple:
