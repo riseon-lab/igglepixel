@@ -252,6 +252,14 @@ class Runner(RunnerBase):
             else:
                 raise
 
+        # Re-run the xformers patch now that the pipeline modules are fully
+        # imported. Some attention bindings only resolve after the pipeline
+        # class is constructed (via lazy submodule imports), so the first
+        # patch in this function caught the loader modules but missed the
+        # model layers. Running again is idempotent — already-patched
+        # bindings are detected by identity and skipped.
+        self._patch_xformers_attention()
+
         # Try to swap Gemma for a bitsandbytes-quantized version before any
         # other component is loaded. The default `gemma-3-12b-it-qat-q4_0-
         # unquantized` is 24 GB BF16 despite the misleading "q4_0" in its
@@ -768,14 +776,45 @@ class Runner(RunnerBase):
 
     @staticmethod
     def _patch_xformers_attention() -> None:
-        try:
-            from ltx_core.model.transformer import attention as attn_mod
-            from xformers.ops import memory_efficient_attention
+        """Replace memory_efficient_attention with the xformers version
+        across every loaded ltx_core / ltx_pipelines module.
 
-            attn_mod.memory_efficient_attention = memory_efficient_attention
-            print("[runner] patched LTX attention with xformers", flush=True)
+        The naive patch (`attn_mod.memory_efficient_attention = ...`) only
+        updates the source module. Any submodule that did
+        `from .attention import memory_efficient_attention` at import time
+        holds its own reference and keeps using the old (slow O(N²))
+        function — which is exactly why an FP8 model with the patch
+        "applied" was still allocating 130+ GiB of attention activations
+        on an H200. We have to update every binding, not just the source.
+
+        Safe to call multiple times; idempotent.
+        """
+        try:
+            from xformers.ops import memory_efficient_attention as xformers_attn
         except Exception as e:
             print(f"[runner] xformers attention patch skipped: {type(e).__name__}: {e}", flush=True)
+            return
+
+        import sys
+        patched_modules = []
+        for mod_name, mod in list(sys.modules.items()):
+            if mod is None:
+                continue
+            if not (mod_name.startswith("ltx_core") or mod_name.startswith("ltx_pipelines")):
+                continue
+            current = getattr(mod, "memory_efficient_attention", None)
+            if current is None or current is xformers_attn:
+                continue
+            try:
+                setattr(mod, "memory_efficient_attention", xformers_attn)
+                patched_modules.append(mod_name)
+            except Exception:
+                pass
+
+        if patched_modules:
+            print(f"[runner] patched memory_efficient_attention → xformers in {len(patched_modules)} module(s): {', '.join(sorted(patched_modules))}", flush=True)
+        else:
+            print("[runner] xformers patch ran but found no memory_efficient_attention bindings (yet); will retry after pipeline build", flush=True)
 
     @staticmethod
     def _cleanup_memory() -> None:
