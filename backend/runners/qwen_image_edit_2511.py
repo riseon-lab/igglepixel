@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Optional
 
 from .base import Runner as RunnerBase, WORKSPACE, save_latent_preview
-from .diffusers_quant import pipeline_bnb_quantization_config
+from .diffusers_quant import pipeline_bnb_quantization_config, pipeline_generator
 
 
 class Runner(RunnerBase):
@@ -106,8 +106,7 @@ class Runner(RunnerBase):
         if seed < 0:
             seed = secrets.randbits(31)
 
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-        gen = torch.Generator(device=device).manual_seed(seed)
+        gen = pipeline_generator(self._pipe, torch, seed)
         preview_path = WORKSPACE / "assets" / f".preview_{self.model_id}.jpg"
 
         runner = self
