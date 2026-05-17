@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Optional
 
 from .base import Runner as RunnerBase, WORKSPACE, save_latent_preview
+from .diffusers_quant import pipeline_bnb_quantization_config
 
 
 class Runner(RunnerBase):
@@ -48,15 +49,7 @@ class Runner(RunnerBase):
 
         kwargs = {"torch_dtype": torch.bfloat16, "token": token}
         if quant in ("int8", "nf4"):
-            from diffusers import BitsAndBytesConfig
-            if quant == "int8":
-                kwargs["quantization_config"] = BitsAndBytesConfig(load_in_8bit=True)
-            else:
-                kwargs["quantization_config"] = BitsAndBytesConfig(
-                    load_in_4bit=True,
-                    bnb_4bit_quant_type="nf4",
-                    bnb_4bit_compute_dtype=torch.bfloat16,
-                )
+            kwargs["quantization_config"] = pipeline_bnb_quantization_config(quant, torch)
             print(f"[runner] loading QwenImageEditPlusPipeline 2511 with {quant} quantisation...", flush=True)
         else:
             print("[runner] loading QwenImageEditPlusPipeline 2511 (bf16)...", flush=True)

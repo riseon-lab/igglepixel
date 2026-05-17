@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Optional
 
 from .base import Runner as RunnerBase, WORKSPACE, save_latent_preview
+from .diffusers_quant import pipeline_bnb_quantization_config
 
 
 class Runner(RunnerBase):
@@ -41,15 +42,7 @@ class Runner(RunnerBase):
 
         kwargs = {"torch_dtype": torch.bfloat16, "token": token}
         if quant in ("int8", "nf4"):
-            from diffusers import BitsAndBytesConfig
-            if quant == "int8":
-                kwargs["quantization_config"] = BitsAndBytesConfig(load_in_8bit=True)
-            else:
-                kwargs["quantization_config"] = BitsAndBytesConfig(
-                    load_in_4bit=True,
-                    bnb_4bit_quant_type="nf4",
-                    bnb_4bit_compute_dtype=torch.bfloat16,
-                )
+            kwargs["quantization_config"] = pipeline_bnb_quantization_config(quant, torch)
             print(f"[runner] loading QwenImageEditPipeline with {quant} quantisation…", flush=True)
         else:
             print("[runner] loading QwenImageEditPipeline (bf16)…", flush=True)
@@ -61,7 +54,7 @@ class Runner(RunnerBase):
         # from_pretrained — this lets us run Comfy's exact 2511 weights while
         # keeping diffusers' tokenizer + scheduler config from the base repo.
         # bnb quantisation can't be combined with custom-loaded sub-modules
-        # because the BitsAndBytesConfig only applies to weights pulled by
+        # because pipeline-level quantization only applies to weights pulled by
         # from_pretrained, so we ignore swaps when quant != bf16 and warn.
         component_overrides: dict = {}
         if quant == "bf16":
