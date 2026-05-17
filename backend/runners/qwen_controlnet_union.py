@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Optional
 
 from .base import Runner as RunnerBase, WORKSPACE, save_latent_preview
-from .diffusers_quant import pipeline_bnb_quantization_config, pipeline_generator
+from .diffusers_quant import pipeline_bnb_quantization_config, seed_torch_for_pipeline
 
 
 class Runner(RunnerBase):
@@ -150,7 +150,7 @@ class Runner(RunnerBase):
         if seed < 0:
             seed = secrets.randbits(31)
 
-        gen = pipeline_generator(self._pipe, torch, seed)
+        seed_torch_for_pipeline(torch, seed)
         preview_path = WORKSPACE / "assets" / f".preview_{self.model_id}.jpg"
         runner = self
 
@@ -171,7 +171,6 @@ class Runner(RunnerBase):
             height=height,
             num_inference_steps=steps,
             true_cfg_scale=cfg,
-            generator=gen,
             callback_on_step_end=_on_step,
             callback_on_step_end_tensor_inputs=["latents"],
         )

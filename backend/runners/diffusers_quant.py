@@ -45,18 +45,13 @@ def pipeline_bnb_quantization_config(quant: str, torch, *, components_to_quantiz
     raise ValueError(f"unsupported bitsandbytes quantization mode: {quant}")
 
 
-def pipeline_generator(pipe, torch, seed: int):
-    """Create a generator on the device Diffusers will use for latents.
+def seed_torch_for_pipeline(torch, seed: int) -> None:
+    """Seed PyTorch without passing an explicit generator to Diffusers.
 
     Quantized/offloaded pipelines can keep large modules on CUDA while their
-    pipeline execution device remains CPU. Passing a CUDA generator into a CPU
-    latent allocation raises "can't generate a tensor on a CPU from CUDA".
+    pipeline execution device remains CPU. Passing an explicit generator can
+    trigger CPU/CUDA tensor or stream mismatches inside pipeline internals.
     """
-    device = getattr(pipe, "_execution_device", None) or getattr(pipe, "device", None)
-    if device is None or str(device) == "meta":
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-    try:
-        return torch.Generator(device=device).manual_seed(seed)
-    except Exception as e:
-        print(f"[runner] WARN: generator device {device!r} failed ({type(e).__name__}: {e}); falling back to CPU", flush=True)
-        return torch.Generator(device="cpu").manual_seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
