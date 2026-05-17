@@ -39,6 +39,13 @@
 #   pod images do not have the entrypoint-installed uv binary or a working
 #   `python -m venv` / ensurepip path, so the backend prefers uv and falls
 #   back to virtualenv before giving up.
+#
+# Why bitsandbytes>=0.46:
+#   Blackwell (RTX 5090, sm_120) requires bnb 0.46+ for working int8
+#   kernels. Older versions (<0.45) raise `AttributeError: ... getCurrentStream`
+#   from the int8 functional path because they call into a CUDA stream
+#   context that doesn't exist on sm_120. BF16 doesn't go through bnb so it
+#   masks the issue — only int8/NF4 paths break.
 
 diffusers>=0.38.0
 peft
@@ -47,3 +54,4 @@ imageio
 imageio-ffmpeg
 uv
 virtualenv
+bitsandbytes>=0.46
