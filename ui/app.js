@@ -6421,9 +6421,10 @@ function renderTrainerRunning() {
   const eta = trainerEtaEstimate(j, stepDisplay);
   setRunStat('eta',  eta.minutes != null ? formatRunMinutes(eta.minutes) : 'Calibrating', eta.label);
   const elapsedMin = j.started_at ? Math.max(0, (Date.now() / 1000 - j.started_at) / 60) : 0;
-  const cost      = (elapsedMin / 60) * 3.6;
-  const totalCost = eta.minutes != null ? ((elapsedMin + eta.minutes) / 60) * 3.6 : 0;
-  setRunStat('cost', `$${cost.toFixed(2)}`, totalCost ? `of $${totalCost.toFixed(2)}` : '');
+  const gpuRate = trainerGpuRate(j);
+  const cost      = gpuRate.usdPerHour ? (elapsedMin / 60) * gpuRate.usdPerHour : 0;
+  const totalCost = (gpuRate.usdPerHour && eta.minutes != null) ? ((elapsedMin + eta.minutes) / 60) * gpuRate.usdPerHour : 0;
+  setRunStat('cost', gpuRate.usdPerHour ? `$${cost.toFixed(2)}` : '—', totalCost ? `of $${totalCost.toFixed(2)} · ${gpuRate.label}` : gpuRate.label);
 
   // ── Tab body — render only the active tab to keep DOM cheap.
   if (runTab === 'monitor')  renderTrainerRunningMonitor();
@@ -6478,6 +6479,33 @@ function formatRunMinutes(minutes) {
   const h = Math.floor(m / 60);
   const rem = m % 60;
   return rem ? `${h}h ${rem}m` : `${h}h`;
+}
+
+function trainerGpuRate(job) {
+  const explicit = Number(job?.gpu_usd_per_hour || 0);
+  if (explicit > 0) {
+    const source = job?.gpu_rate_source === 'env' ? 'exact' : 'est.';
+    return { usdPerHour: explicit, label: `${source} $${explicit.toFixed(2)}/hr` };
+  }
+  const name = String(job?.gpu_name || '').toLowerCase();
+  const fallbackRates = [
+    [/b200/, 5.98],
+    [/h200/, 4.31],
+    [/h100.*nvl/, 3.99],
+    [/h100/, 2.99],
+    [/a100/, 1.64],
+    [/rtx pro 6000/, 1.22],
+    [/rtx 6000 ada/, 0.89],
+    [/l40s|l40/, 1.03],
+    [/a40/, 0.79],
+    [/5090/, 0.89],
+    [/4090/, 0.69],
+    [/3090/, 0.43],
+    [/\bl4\b/, 0.43],
+  ];
+  const match = fallbackRates.find(([re]) => re.test(name));
+  if (!match) return { usdPerHour: 0, label: 'rate unknown' };
+  return { usdPerHour: match[1], label: `est. $${match[1].toFixed(2)}/hr` };
 }
 
 // SVG sparkline renderer — no external deps, scales to the viewBox so
@@ -6538,6 +6566,7 @@ function renderTrainerRunningMonitor() {
     const { step, total } = trainerStepDisplay(trainerRunJob);
     const eta = trainerEtaEstimate(trainerRunJob, { step, total });
     const speed = Number(trainerRunJob?.steps_per_min || 0);
+    const gpuRate = trainerGpuRate(trainerRunJob);
     const elapsed = trainerRunJob?.started_at ? Math.max(0, Math.round((Date.now() / 1000 - trainerRunJob.started_at) / 60)) : null;
     const sampleState = trainerRunJob?.generate_samples === false ? 'off' : 'on';
     gpuBars.innerHTML = `
@@ -6546,6 +6575,7 @@ function renderTrainerRunningMonitor() {
       <div class="run-gpu-row"><span>Training steps</span><b>${step.toLocaleString()}${total ? ` / ${total.toLocaleString()}` : ''}</b></div>
       <div class="run-gpu-row"><span>Step speed</span><b>${speed > 0 ? `${speed.toFixed(1)} / min` : eta.label}</b></div>
       <div class="run-gpu-row"><span>ETA basis</span><b>${eta.minutes != null ? formatRunMinutes(eta.minutes) : 'calibrating'}</b></div>
+      <div class="run-gpu-row"><span>GPU rate</span><b>${gpuRate.usdPerHour ? gpuRate.label : 'unknown'}</b></div>
       <div class="run-gpu-row"><span>Elapsed</span><b>${elapsed != null ? `${elapsed}m` : 'starting'}</b></div>
       <div class="run-gpu-row"><span>Samples</span><b>${sampleState}</b></div>
     `;

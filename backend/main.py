@@ -2329,6 +2329,29 @@ TRAINER_MODEL_FAMILIES = [
         "trainer_id": "z-image-character-lora",
     },
 ]
+RUNPOD_GPU_RATE_SOURCE = "RunPod published/market reference, May 2026; override with RUNPOD_GPU_HOURLY_USD for exact pod pricing."
+RUNPOD_GPU_HOURLY_RATES_USD = {
+    # RunPod pod pricing is marketplace-shaped, so these are estimates used
+    # only when the pod does not provide an exact override.
+    "b200": 5.98,
+    "h200": 4.31,
+    "h100 nvl": 3.99,
+    "h100 sxm": 2.99,
+    "h100 pcie": 2.99,
+    "h100": 2.99,
+    "a100 sxm": 1.79,
+    "a100 pcie": 1.64,
+    "a100": 1.64,
+    "rtx pro 6000": 1.22,
+    "rtx 6000 ada": 0.89,
+    "l40s": 1.03,
+    "l40": 1.03,
+    "a40": 0.79,
+    "rtx 5090": 0.89,
+    "rtx 4090": 0.69,
+    "rtx 3090": 0.43,
+    "l4": 0.43,
+}
 TRAINING_IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp"}
 TRAINER_OPTIMIZERS = {"adamw8bit", "adamw", "prodigy", "lion", "adafactor"}
 TRAINER_SCHEDULERS = {"cosine", "constant", "linear", "cosine-restart"}
@@ -2340,6 +2363,45 @@ QWEN_TRAINER_BASE_MODELS = (
     "Qwen/Qwen-Image-Edit-2511",
 )
 train_jobs: dict[str, dict] = {}
+
+
+def _runpod_hourly_rate_for_gpu(gpu: dict) -> Optional[dict]:
+    exact = os.environ.get("RUNPOD_GPU_HOURLY_USD") or os.environ.get("IGGLEPIXEL_GPU_HOURLY_USD")
+    if exact:
+        try:
+            return {
+                "usd_per_hour": round(float(exact), 4),
+                "source": "env",
+                "label": "Exact pod rate from RUNPOD_GPU_HOURLY_USD",
+            }
+        except ValueError:
+            pass
+
+    overrides_raw = os.environ.get("RUNPOD_GPU_HOURLY_RATES_JSON", "").strip()
+    if overrides_raw:
+        try:
+            overrides = json.loads(overrides_raw)
+            if isinstance(overrides, dict):
+                name = str(gpu.get("name") or "").lower()
+                for key, value in overrides.items():
+                    if str(key).lower() in name:
+                        return {
+                            "usd_per_hour": round(float(value), 4),
+                            "source": "env-map",
+                            "label": f"GPU rate matched RUNPOD_GPU_HOURLY_RATES_JSON:{key}",
+                        }
+        except Exception:
+            pass
+
+    name = str(gpu.get("name") or "").lower()
+    for key, value in RUNPOD_GPU_HOURLY_RATES_USD.items():
+        if key in name:
+            return {
+                "usd_per_hour": value,
+                "source": "runpod-estimate",
+                "label": RUNPOD_GPU_RATE_SOURCE,
+            }
+    return None
 
 
 class TrainerDatasetRequest(BaseModel):
@@ -3252,6 +3314,11 @@ def _run_train_job(job_id: str) -> None:
         job["gpu_name"] = gpu.get("name")
         job["gpu_vram_gb"] = gpu.get("vram_gb")
         job["gpu_type"] = gpu.get("type")
+        rate = _runpod_hourly_rate_for_gpu(gpu)
+        if rate:
+            job["gpu_usd_per_hour"] = rate["usd_per_hour"]
+            job["gpu_rate_source"] = rate["source"]
+            job["gpu_rate_label"] = rate["label"]
     except Exception:
         pass
     job["log_tail"].append("Validating dataset")
