@@ -1039,6 +1039,17 @@
             <div class="empty" style="padding:18px">No validation yet.</div>
           </div>
         </div>
+        <div class="trainer-card trainer-model-card">
+          <div class="trainer-card-head">
+            <div>
+              <div class="trainer-title">Model support</div>
+              <div class="trainer-sub">One training workflow, expanding across image model families.</div>
+            </div>
+          </div>
+          <div id="trainerFamilyGrid" class="trainer-family-grid">
+            <div class="empty" style="padding:18px">Loading trainer families…</div>
+          </div>
+        </div>
         <div class="trainer-card trainer-jobs-card">
           <div class="trainer-card-head">
             <div>
@@ -1059,29 +1070,29 @@
     ──────────────────────────────────────────────────────────────────── -->
     <section class="view px-theme" data-view="trainer-running">
       <div class="run-view">
-        <button class="px-btn px-btn-ghost px-btn-sm" id="runBack" style="margin-bottom:14px">← Back to trainers</button>
+        <button class="px-btn px-btn-ghost px-btn-sm run-back-btn" id="runBack">← Back to trainers</button>
 
-        <div class="px-panel" style="padding:20px;margin-bottom:16px">
-          <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin-bottom:16px;flex-wrap:wrap">
-            <div>
-              <div style="display:flex;gap:8px;margin-bottom:8px;align-items:center;flex-wrap:wrap">
+        <div class="px-panel run-hero">
+          <div class="run-hero-top">
+            <div class="run-identity">
+              <div class="run-chip-row">
                 <span class="px-dot pink blink" id="runStatusDot"></span>
                 <span class="bracket-label" id="runIdLabel">Run · —</span>
                 <span class="px-chip pink" id="runStatusChip">QUEUED</span>
                 <span class="px-chip" id="runRecipeChip">RECIPE</span>
                 <span class="px-chip" id="runBaseChip">QWEN-IMAGE</span>
               </div>
-              <h1 class="px-font" id="runName" style="font-size:18px;margin:0;letter-spacing:0.04em">Run name</h1>
-              <div class="px-mute" id="runSub" style="font-family:var(--px-font-mono);font-size:11.5px;margin-top:4px">trigger phrase</div>
+              <h1 class="run-title" id="runName">Run name</h1>
+              <div class="run-subtitle" id="runSub">trigger phrase</div>
             </div>
-            <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <div class="run-actions">
               <button class="px-btn px-btn-sm" id="runPauseBtn" disabled title="Pause is not available for this trainer yet">Pause</button>
               <button class="px-btn px-btn-sm" id="runStopBtn" style="border-color:var(--px-err);color:var(--px-err)">Cancel run</button>
               <button class="px-btn px-btn-sm" id="runAbortBtn" style="border-color:var(--px-border);color:var(--px-text)" hidden>Dismiss</button>
             </div>
           </div>
 
-          <div class="px-bar"><i id="runProgressBar" style="width:0%"></i></div>
+          <div class="px-bar" id="runProgressTrack" role="progressbar" aria-label="Training run progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><i id="runProgressBar" style="width:0%"></i></div>
 
           <div class="run-stat-strip">
             <div class="run-stat"><div class="bracket-label">Step</div><div class="stat-num" data-run-stat="step">—</div><div class="run-stat-sub" data-run-stat-sub="step">/ —</div></div>
@@ -1103,8 +1114,8 @@
 
         <div class="run-tab-body" data-run-pane="monitor">
           <div class="run-monitor-grid">
-            <div style="display:flex;flex-direction:column;gap:12px">
-              <div class="px-panel">
+            <div class="run-monitor-main">
+              <div class="px-panel run-loss-panel">
                 <div class="px-panel-header">
                   <div><div class="px-panel-header-title">Loss curve</div><div class="px-panel-header-sub">Lower is better · smoother is healthier</div></div>
                   <span class="px-mute" id="runLossWindow" style="font-family:var(--px-font-mono);font-size:11px">last 0 steps</span>
@@ -1118,13 +1129,13 @@
                   </div>
                 </div>
               </div>
-              <div class="px-panel">
+              <div class="px-panel run-lr-panel">
                 <div class="px-panel-header"><div><div class="px-panel-header-title">Learning rate · <span id="runSchedName">cosine</span></div></div></div>
                 <div class="px-panel-body"><svg class="run-sparkline" id="runLrSpark" viewBox="0 0 400 90" preserveAspectRatio="none"></svg></div>
               </div>
             </div>
-            <div style="display:flex;flex-direction:column;gap:12px">
-              <div class="px-panel">
+            <div class="run-monitor-side">
+              <div class="px-panel run-gpu-panel">
                 <div class="px-panel-header">
                   <div style="display:flex;align-items:center;gap:8px">
                     <span class="px-dot ok"></span>
@@ -1135,7 +1146,7 @@
                   <div class="px-mute" style="font-family:var(--px-font-mono);font-size:11.5px">GPU live stats land in Phase 3.5 (needs nvidia-smi polling).</div>
                 </div>
               </div>
-              <div class="px-panel">
+              <div class="px-panel run-health-panel">
                 <div class="px-panel-header"><div><div class="px-panel-header-title">Health signals</div></div></div>
                 <div class="px-panel-body">
                   <div class="flag-list" id="runHealthList">

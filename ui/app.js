@@ -351,6 +351,14 @@ function categoryIcon(cat) {
 
 function toast(msg, kind = 'info') {
   const c = $('#toasts');
+  if (!c) return;
+  const duplicate = [...c.querySelectorAll('.toast-message')].find(el => el.textContent === String(msg));
+  if (duplicate) {
+    const parent = duplicate.closest('.toast');
+    parent?.classList.add('show');
+    return;
+  }
+  [...c.querySelectorAll('.toast')].slice(0, Math.max(0, c.children.length - 2)).forEach(el => el.remove());
   const el = document.createElement('div');
   el.className = `toast ${kind}`;
   const close = kind === 'error'
@@ -6393,7 +6401,9 @@ function renderTrainerRunning() {
 
   // Progress bar.
   const bar = $('#runProgressBar');
-  if (bar) bar.style.width = `${Math.max(0, Math.min(100, Number(j.progress || 0)))}%`;
+  const progressValue = Math.max(0, Math.min(100, Number(j.progress || 0)));
+  if (bar) bar.style.width = `${progressValue}%`;
+  $('#runProgressTrack')?.setAttribute('aria-valuenow', String(Math.round(progressValue)));
 
   // 6-cell stat strip.
   const lossSeries = j.metrics?.loss || [];
@@ -6408,14 +6418,11 @@ function renderTrainerRunning() {
   setRunStat('lr',   lastLr != null ? lastLr.toExponential(2) : '—', j.scheduler || 'scheduler');
   setRunStat('phase', j.phase || '—', `${Math.round(Number(j.phase_progress || 0))}%`);
 
-  // ETA + cost — assume ~55 step/min on H100 default.
-  const remaining = (stepDisplay.total && stepDisplay.step) ? Math.max(0, stepDisplay.total - stepDisplay.step) : null;
-  const etaMin = remaining != null ? Math.max(0, Math.round(remaining / 55)) : null;
-  setRunStat('eta',  etaMin != null ? `${etaMin}m` : '—', 'remaining');
-  const stepsDone = Number(stepDisplay.step || 0);
-  const totalSteps = Number(stepDisplay.total || 0);
-  const cost      = (stepsDone / 55 / 60) * 3.6;
-  const totalCost = (totalSteps / 55 / 60) * 3.6;
+  const eta = trainerEtaEstimate(j, stepDisplay);
+  setRunStat('eta',  eta.minutes != null ? formatRunMinutes(eta.minutes) : 'Calibrating', eta.label);
+  const elapsedMin = j.started_at ? Math.max(0, (Date.now() / 1000 - j.started_at) / 60) : 0;
+  const cost      = (elapsedMin / 60) * 3.6;
+  const totalCost = eta.minutes != null ? ((elapsedMin + eta.minutes) / 60) * 3.6 : 0;
   setRunStat('cost', `$${cost.toFixed(2)}`, totalCost ? `of $${totalCost.toFixed(2)}` : '');
 
   // ── Tab body — render only the active tab to keep DOM cheap.
@@ -6439,8 +6446,38 @@ function trainerStepDisplay(job) {
   const plausibleTotal = rawTotal && (!configured || rawTotal <= Math.max(configured + 1000, configured * 1.2));
   const total = plausibleTotal ? rawTotal : configured;
   const rawStep = Number(job?.current_step || 0);
-  const step = total ? Math.min(rawStep, total) : rawStep;
+  const phase = String(job?.phase || '').toLowerCase();
+  const isTraining = phase === 'training' || phase === 'done' || job?.status === 'done';
+  const step = isTraining ? (total ? Math.min(rawStep, total) : rawStep) : 0;
   return { step, total };
+}
+
+function trainerEtaEstimate(job, stepDisplay = trainerStepDisplay(job)) {
+  const step = Number(stepDisplay.step || 0);
+  const total = Number(stepDisplay.total || job?.steps || 0);
+  const remaining = total && step ? Math.max(0, total - step) : null;
+  if (remaining == null) return { minutes: null, label: 'waiting for real steps' };
+
+  const reportedRate = Number(job?.steps_per_min || 0);
+  if (reportedRate > 0) {
+    return { minutes: Math.max(0, Math.round(remaining / reportedRate)), label: `${reportedRate.toFixed(1)} steps/min observed` };
+  }
+
+  const elapsedMin = job?.started_at ? Math.max(0.1, (Date.now() / 1000 - job.started_at) / 60) : 0;
+  if (step >= 10 && elapsedMin > 0) {
+    const elapsedRate = step / elapsedMin;
+    return { minutes: Math.max(0, Math.round(remaining / elapsedRate)), label: `${elapsedRate.toFixed(1)} steps/min from run` };
+  }
+
+  return { minutes: null, label: 'calibrating from step logs' };
+}
+
+function formatRunMinutes(minutes) {
+  const m = Math.max(0, Math.round(Number(minutes) || 0));
+  if (m < 90) return `${m}m`;
+  const h = Math.floor(m / 60);
+  const rem = m % 60;
+  return rem ? `${h}h ${rem}m` : `${h}h`;
 }
 
 // SVG sparkline renderer — no external deps, scales to the viewBox so
@@ -6484,22 +6521,31 @@ function renderTrainerRunningMonitor() {
   const lrValues   = lrSeries.map(([, v]) => v);
   renderSparklinePath($('#runLossSpark'), lossValues, { color: 'var(--px-pink)', fill: 'rgba(255,43,214,0.12)' });
   renderSparklinePath($('#runLrSpark'),   lrValues,   { color: 'var(--px-cyan)', fill: 'rgba(0,229,255,0.08)' });
+  const schedName = $('#runSchedName');
+  if (schedName) schedName.textContent = trainerRunJob?.scheduler || 'scheduler';
 
   const window = $('#runLossWindow');
   if (window) window.textContent = `last ${lossValues.length} steps`;
 
   const gpuTitle = $('#runGpuTitle');
-  if (gpuTitle) gpuTitle.textContent = trainerRunJob?.gpu_name ? `GPU · ${trainerRunJob.gpu_name}` : 'GPU · training host';
+  if (gpuTitle) {
+    const vram = trainerRunJob?.gpu_vram_gb ? ` · ${trainerRunJob.gpu_vram_gb}GB` : '';
+    gpuTitle.textContent = trainerRunJob?.gpu_name ? `GPU · ${trainerRunJob.gpu_name}${vram}` : 'GPU · detecting host';
+  }
   const gpuBars = $('#runGpuBars');
   if (gpuBars) {
     const progress = Math.max(0, Math.min(100, Number(trainerRunJob?.progress || 0)));
     const { step, total } = trainerStepDisplay(trainerRunJob);
+    const eta = trainerEtaEstimate(trainerRunJob, { step, total });
+    const speed = Number(trainerRunJob?.steps_per_min || 0);
     const elapsed = trainerRunJob?.started_at ? Math.max(0, Math.round((Date.now() / 1000 - trainerRunJob.started_at) / 60)) : null;
     const sampleState = trainerRunJob?.generate_samples === false ? 'off' : 'on';
     gpuBars.innerHTML = `
-      <div class="run-gpu-row"><span>Trainer progress</span><b>${progress.toFixed(progress % 1 ? 1 : 0)}%</b></div>
+      <div class="run-gpu-row"><span>Overall progress</span><b>${progress.toFixed(progress % 1 ? 1 : 0)}%</b></div>
       <div class="run-gpu-meter"><i style="width:${progress}%"></i></div>
       <div class="run-gpu-row"><span>Training steps</span><b>${step.toLocaleString()}${total ? ` / ${total.toLocaleString()}` : ''}</b></div>
+      <div class="run-gpu-row"><span>Step speed</span><b>${speed > 0 ? `${speed.toFixed(1)} / min` : eta.label}</b></div>
+      <div class="run-gpu-row"><span>ETA basis</span><b>${eta.minutes != null ? formatRunMinutes(eta.minutes) : 'calibrating'}</b></div>
       <div class="run-gpu-row"><span>Elapsed</span><b>${elapsed != null ? `${elapsed}m` : 'starting'}</b></div>
       <div class="run-gpu-row"><span>Samples</span><b>${sampleState}</b></div>
     `;
@@ -6842,7 +6888,28 @@ function renderTrainers() {
     tag.classList.toggle('solid', configured);
   }
   renderTrainerDatasetSummary(state.trainValidation);
+  renderTrainerModelSupport(trainer);
   renderTrainerJobs();
+}
+
+function renderTrainerModelSupport(trainer) {
+  const root = $('#trainerFamilyGrid');
+  if (!root) return;
+  const families = trainer?.model_families || [];
+  if (!families.length) {
+    root.innerHTML = `<div class="empty" style="padding:18px">No model-family roadmap reported.</div>`;
+    return;
+  }
+  const toneFor = (status) => status === 'live' ? 'ok' : (status === 'next' ? 'pink' : '');
+  root.innerHTML = families.map(f => `
+    <div class="trainer-family ${esc(f.status || 'planned')}">
+      <div class="trainer-family-head">
+        <strong>${esc(f.label || f.id)}</strong>
+        <span class="px-chip ${toneFor(f.status)}">${esc(f.status || 'planned')}</span>
+      </div>
+      <p>${esc(f.description || '')}</p>
+    </div>
+  `).join('');
 }
 
 function renderTrainerDatasetSummary(summary) {
@@ -8188,6 +8255,11 @@ function mockTrainers() {
           { id: 'Qwen/Qwen-Image-2512', label: 'Qwen-Image-2512' },
           { id: 'Qwen/Qwen-Image-Edit', label: 'Qwen-Image-Edit' },
           { id: 'Qwen/Qwen-Image-Edit-2511', label: 'Qwen-Image-Edit 2511' },
+        ],
+        model_families: [
+          { id: 'qwen', label: 'Qwen Image', status: 'live', description: 'Character LoRA training is wired today, including checkpoints and library import.' },
+          { id: 'flux', label: 'Flux family', status: 'next', description: 'Next target for the same guided dataset, config, and monitor workflow.' },
+          { id: 'z-image', label: 'Z Image', status: 'planned', description: 'Planned after Flux once the wrapper and validation path are proven.' },
         ],
       },
     ],

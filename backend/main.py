@@ -2306,6 +2306,29 @@ def update_lora(filename: str, req: LoraTagRequest):
 TRAINER_ID_QWEN_CHARACTER = "qwen-character-lora"
 QWEN_TRAINER_COMMAND_ENV = "IGGLEPIXEL_QWEN_LORA_TRAIN_CMD"
 QWEN_TRAINER_SCRIPT = BASE_DIR / "trainers" / "qwen_lora_train.py"
+TRAINER_MODEL_FAMILIES = [
+    {
+        "id": "qwen",
+        "label": "Qwen Image",
+        "status": "live",
+        "description": "Character LoRA training is wired today, including curated datasets, checkpoints, samples, and library import.",
+        "trainer_id": TRAINER_ID_QWEN_CHARACTER,
+    },
+    {
+        "id": "flux",
+        "label": "Flux family",
+        "status": "next",
+        "description": "Next target: Flux.1 dev/schnell/Kontext-style LoRAs with the same dataset wizard and checkpoint monitor.",
+        "trainer_id": "flux-character-lora",
+    },
+    {
+        "id": "z-image",
+        "label": "Z Image",
+        "status": "planned",
+        "description": "Planned after Flux once the base/adapter training wrapper and sample validation path are pinned down.",
+        "trainer_id": "z-image-character-lora",
+    },
+]
 TRAINING_IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp"}
 TRAINER_OPTIMIZERS = {"adamw8bit", "adamw", "prodigy", "lion", "adafactor"}
 TRAINER_SCHEDULERS = {"cosine", "constant", "linear", "cosine-restart"}
@@ -2523,6 +2546,7 @@ def list_trainers():
                 "default_command": _trainer_command(),
                 "dataset_root": str(WORKSPACE),
                 "output_root": str(TRAINING_DIR),
+                "model_families": TRAINER_MODEL_FAMILIES,
                 "base_models": [
                     {"id": model_id, "label": model_id.replace("Qwen/", "").replace("-2511", " 2511")}
                     for model_id in QWEN_TRAINER_BASE_MODELS
@@ -3163,6 +3187,12 @@ def _update_train_job_from_log(job: dict, req: TrainJobRequest, line: str) -> No
         step_total_min = max(1, int(req.steps * 0.8))
         step_total_max = max(req.steps + 1000, int(req.steps * 1.2))
         if step_total_min <= tot <= step_total_max:
+            now = time.time()
+            first_step = job.setdefault("_first_step_seen", cur)
+            first_step_at = job.setdefault("_first_step_seen_at", now)
+            if cur > first_step and now > first_step_at:
+                job["steps_per_min"] = round((cur - first_step) / ((now - first_step_at) / 60), 2)
+                job["eta_source"] = "observed"
             job["phase"] = "Training"
             job["current_step"] = cur
             job["total_steps"] = req.steps if abs(tot - req.steps) <= max(10, int(req.steps * 0.02)) else tot
@@ -3217,6 +3247,13 @@ def _run_train_job(job_id: str) -> None:
     job["status"] = "running"
     job["phase"] = "Validating dataset"
     job["started_at"] = time.time()
+    try:
+        gpu = detect_gpu()
+        job["gpu_name"] = gpu.get("name")
+        job["gpu_vram_gb"] = gpu.get("vram_gb")
+        job["gpu_type"] = gpu.get("type")
+    except Exception:
+        pass
     job["log_tail"].append("Validating dataset")
 
     source_dataset_dir = Path(job["dataset_path"])
