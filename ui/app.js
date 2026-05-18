@@ -6401,18 +6401,19 @@ function renderTrainerRunning() {
   const lastLoss   = lossSeries.length ? lossSeries[lossSeries.length - 1][1] : null;
   const firstLoss  = lossSeries.length ? lossSeries[0][1] : null;
   const lastLr     = lrSeries.length ? lrSeries[lrSeries.length - 1][1] : null;
-  setRunStat('step', j.current_step ?? '—', j.total_steps ? `/ ${Number(j.total_steps).toLocaleString()}` : '/ —');
+  const stepDisplay = trainerStepDisplay(j);
+  setRunStat('step', stepDisplay.step || '—', stepDisplay.total ? `/ ${stepDisplay.total.toLocaleString()}` : '/ —');
   setRunStat('loss', lastLoss != null ? lastLoss.toFixed(3) : '—',
              (lastLoss != null && firstLoss != null) ? `↓ ${(firstLoss - lastLoss).toFixed(2)}` : 'trend');
   setRunStat('lr',   lastLr != null ? lastLr.toExponential(2) : '—', j.scheduler || 'scheduler');
   setRunStat('phase', j.phase || '—', `${Math.round(Number(j.phase_progress || 0))}%`);
 
   // ETA + cost — assume ~55 step/min on H100 default.
-  const remaining = (j.total_steps && j.current_step) ? Math.max(0, j.total_steps - j.current_step) : null;
+  const remaining = (stepDisplay.total && stepDisplay.step) ? Math.max(0, stepDisplay.total - stepDisplay.step) : null;
   const etaMin = remaining != null ? Math.max(0, Math.round(remaining / 55)) : null;
   setRunStat('eta',  etaMin != null ? `${etaMin}m` : '—', 'remaining');
-  const stepsDone = Number(j.current_step || 0);
-  const totalSteps = Number(j.total_steps || j.steps || 0);
+  const stepsDone = Number(stepDisplay.step || 0);
+  const totalSteps = Number(stepDisplay.total || 0);
   const cost      = (stepsDone / 55 / 60) * 3.6;
   const totalCost = (totalSteps / 55 / 60) * 3.6;
   setRunStat('cost', `$${cost.toFixed(2)}`, totalCost ? `of $${totalCost.toFixed(2)}` : '');
@@ -6430,6 +6431,16 @@ function setRunStat(key, value, sub) {
   const subEl = document.querySelector(`[data-run-stat-sub="${key}"]`);
   if (num)  num.textContent  = String(value);
   if (subEl) subEl.textContent = String(sub || '');
+}
+
+function trainerStepDisplay(job) {
+  const configured = Number(job?.steps || 0);
+  const rawTotal = Number(job?.total_steps || 0);
+  const plausibleTotal = rawTotal && (!configured || rawTotal <= Math.max(configured + 1000, configured * 1.2));
+  const total = plausibleTotal ? rawTotal : configured;
+  const rawStep = Number(job?.current_step || 0);
+  const step = total ? Math.min(rawStep, total) : rawStep;
+  return { step, total };
 }
 
 // SVG sparkline renderer — no external deps, scales to the viewBox so
@@ -6482,14 +6493,13 @@ function renderTrainerRunningMonitor() {
   const gpuBars = $('#runGpuBars');
   if (gpuBars) {
     const progress = Math.max(0, Math.min(100, Number(trainerRunJob?.progress || 0)));
-    const step = Number(trainerRunJob?.current_step || 0);
-    const total = Number(trainerRunJob?.total_steps || trainerRunJob?.steps || 0);
+    const { step, total } = trainerStepDisplay(trainerRunJob);
     const elapsed = trainerRunJob?.started_at ? Math.max(0, Math.round((Date.now() / 1000 - trainerRunJob.started_at) / 60)) : null;
     const sampleState = trainerRunJob?.generate_samples === false ? 'off' : 'on';
     gpuBars.innerHTML = `
       <div class="run-gpu-row"><span>Trainer progress</span><b>${progress.toFixed(progress % 1 ? 1 : 0)}%</b></div>
       <div class="run-gpu-meter"><i style="width:${progress}%"></i></div>
-      <div class="run-gpu-row"><span>Step window</span><b>${step.toLocaleString()}${total ? ` / ${total.toLocaleString()}` : ''}</b></div>
+      <div class="run-gpu-row"><span>Training steps</span><b>${step.toLocaleString()}${total ? ` / ${total.toLocaleString()}` : ''}</b></div>
       <div class="run-gpu-row"><span>Elapsed</span><b>${elapsed != null ? `${elapsed}m` : 'starting'}</b></div>
       <div class="run-gpu-row"><span>Samples</span><b>${sampleState}</b></div>
     `;

@@ -3156,10 +3156,16 @@ def _update_train_job_from_log(job: dict, req: TrainJobRequest, line: str) -> No
         tot = int(total)
         if tot <= 0:
             continue
-        if tot == req.steps or tot >= max(100, int(req.steps * 0.8)):
+        # Trainer logs can contain many tqdm counters: dataset items,
+        # checkpoint shards, token windows, etc. Only treat n/total as
+        # optimizer-step progress when the total is close to the requested
+        # training step count.
+        step_total_min = max(1, int(req.steps * 0.8))
+        step_total_max = max(req.steps + 1000, int(req.steps * 1.2))
+        if step_total_min <= tot <= step_total_max:
             job["phase"] = "Training"
             job["current_step"] = cur
-            job["total_steps"] = tot
+            job["total_steps"] = req.steps if abs(tot - req.steps) <= max(10, int(req.steps * 0.02)) else tot
             job["phase_progress"] = min(100, round((cur / tot) * 100, 1))
             job["progress"] = min(98, round(50 + 48 * (cur / tot), 1))
             # Capture loss + lr on the same line if AI Toolkit emitted them.
