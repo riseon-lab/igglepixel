@@ -5876,10 +5876,10 @@ button.hf-file-row {
 :root {
   --moon-bg: #5f7378;
   --moon-bg-deep: #4e6368;
-  --moon-bg-soft: #6a7f84;
-  --moon-panel: #70858a;
-  --moon-panel-2: #7d9297;
-  --moon-panel-3: #8aa0a5;
+  --moon-bg-soft: #667b80;
+  --moon-panel: #4e6368;
+  --moon-panel-2: #556b70;
+  --moon-panel-3: #60757a;
   --moon-button: #31494f;
   --moon-button-hover: #263d43;
   --moon-button-soft: rgba(49, 73, 79, 0.58);
@@ -5887,9 +5887,9 @@ button.hf-file-row {
   --moon-accent-strong: #7fcfff;
   --moon-accent-soft: rgba(158, 220, 255, 0.18);
   --moon-text: #ffffff;
-  --moon-text-soft: rgba(255, 255, 255, 0.78);
-  --moon-text-muted: rgba(255, 255, 255, 0.66);
-  --moon-text-faint: rgba(255, 255, 255, 0.48);
+  --moon-text-soft: rgba(255, 255, 255, 0.92);
+  --moon-text-muted: rgba(255, 255, 255, 0.84);
+  --moon-text-faint: rgba(255, 255, 255, 0.72);
   --moon-border: rgba(255, 255, 255, 0.22);
   --moon-border-strong: rgba(255, 255, 255, 0.34);
   --moon-shadow: 0 18px 48px rgba(21, 42, 47, 0.18);
@@ -7225,4 +7225,61 @@ select,
   color: var(--moon-text) !important;
   border-color: rgba(255,255,255,0.32) !important;
   background: rgba(49,73,79,0.42) !important;
+}
+
+/* Moonstone contrast sweep: legacy pixel-era muted tokens were too dark on
+   the lighter grey surfaces. Keep hierarchy, but make every helper readable. */
+.px-theme .px-dim,
+.px-theme .px-mute,
+.px-theme .px-faint,
+.px-theme .bracket-label,
+.px-theme .px-panel-header-sub,
+.px-theme .trainer-sub,
+.px-theme .trainer-job-meta,
+.px-theme .trainer-progress-row,
+.px-theme .lora-panel-count,
+.px-theme .lora-row .size,
+.px-theme .asset-meta,
+.px-theme .model-card .mc-desc,
+.px-theme .model-card .mc-sub,
+.px-theme .model-card .mc-meta,
+.px-theme .model-card .mc-vram,
+.px-theme .civ-stats,
+.px-theme .settings-body-copy,
+.px-theme .settings-debug,
+.px-theme .drawer-sub,
+.px-theme .drawer-state .state-sub,
+.px-theme .run-stat-sub,
+.px-theme .run-sparkline-foot,
+.px-theme .config-rows .k,
+.px-theme .sample-grid .row-head,
+.px-theme .sample-grid .col-head,
+.px-theme .sample-cell.empty,
+.px-theme [style*="color:var(--px-text-mute)"],
+.px-theme [style*="color: var(--px-text-mute)"],
+.px-theme [style*="color:var(--px-text-faint)"],
+.px-theme [style*="color: var(--px-text-faint)"],
+.px-theme [style*="color:var(--t-3)"],
+.px-theme [style*="color: var(--t-3)"],
+.px-theme [style*="color:var(--t-4)"],
+.px-theme [style*="color: var(--t-4)"] {
+  color: var(--moon-text-muted) !important;
+}
+.px-theme .bracket-label::before,
+.px-theme .bracket-label::after,
+.px-theme .recipe-meta .sep,
+.px-theme .empty .icon,
+.px-theme .stat-card.empty .stat-num {
+  color: var(--moon-text-faint) !important;
+}
+.px-theme .px-panel-header-title,
+.px-theme .section-title,
+.px-theme .trainer-title,
+.px-theme .trainer-job-name,
+.px-theme .lora-panel-title,
+.px-theme .model-card .mc-name,
+.px-theme .model-card .mc-title,
+.px-theme .drawer-title,
+.px-theme .modal-title {
+  color: var(--moon-text) !important;
 }
