@@ -5157,6 +5157,7 @@ const trainerWizardCfg = {
   saveEvery: 500,
   precision: 'bf16',
   gradCkpt:  'on',
+  hourlyRate: 3.6,
 };
 const trainerWizardSamples = [
   'A woman named Kerry, portrait, natural skin texture, studio lighting',
@@ -5877,6 +5878,11 @@ function bindTrainerConfigure() {
     if (btn) btn.textContent = trainerWizardAdvanced ? 'Hide advanced' : 'Show advanced';
   });
 
+  $('#cfgHourlyRate')?.addEventListener('input', (e) => {
+    trainerWizardCfg.hourlyRate = Math.max(0, Number(e.target.value) || 0);
+    renderTrainerConfigureSummary();
+  });
+
   // Sample prompts list — initial render + add/remove
   renderTrainerSampleList();
   $('#cfgSampleAdd')?.addEventListener('click', () => {
@@ -5959,10 +5965,18 @@ function renderTrainerConfigureSummary() {
   if (etaEl) etaEl.textContent = String(etaMin);
 
   // Cost — assume H100 @ $3.60/hr default; configurable later via Settings.
-  const ratePerHour = 3.6;
+  const ratePerHour = Math.max(0, Number(cfg.hourlyRate || 0));
   const cost = (etaMin / 60) * ratePerHour;
   const costEl = $('#cfgCostNum');
   if (costEl) costEl.textContent = `$${cost.toFixed(2)}`;
+  const rateEl = $('#cfgHourlyRate');
+  if (rateEl && document.activeElement !== rateEl) rateEl.value = ratePerHour ? ratePerHour.toFixed(2) : '';
+  const rateLabel = $('#cfgRateLabel');
+  if (rateLabel) {
+    rateLabel.textContent = ratePerHour
+      ? `Using your all-in instance rate: $${ratePerHour.toFixed(2)}/hr.`
+      : 'Enter your RunPod instance rate including storage.';
+  }
 
   // Check row — basic readiness: rank/steps/res in valid ranges and
   // dataset is ready (from Step 3 state).
@@ -6043,7 +6057,8 @@ function renderTrainerLaunchPreview() {
   const runEl = $('#launchRunName');
   if (runEl) runEl.textContent = safeName;
   const etaMin = Math.max(1, Math.round(cfg.steps / 55));
-  const cost   = (etaMin / 60) * 3.6;
+  const hourlyRate = Math.max(0, Number(cfg.hourlyRate || 0));
+  const cost   = (etaMin / 60) * hourlyRate;
   const setLaunch = (key, value) => {
     const el = document.querySelector(`[data-launch="${key}"]`);
     if (el) el.textContent = value;
@@ -6051,6 +6066,7 @@ function renderTrainerLaunchPreview() {
   setLaunch('cost',      `$${cost.toFixed(2)}`);
   setLaunch('eta',       `${etaMin} minutes`);
   setLaunch('saveevery', String(cfg.saveEvery));
+  setLaunch('rate',      hourlyRate ? `$${hourlyRate.toFixed(2)}/hr` : 'rate not set');
 
   // Generated command — multi-line monospace with coloured spans for
   // arg names. Mirrors the actual trainer wrapper invocation shape
@@ -6069,6 +6085,7 @@ function renderTrainerLaunchPreview() {
     arg('--optimizer',  cfg.opt) + ' ' + arg('--scheduler', cfg.sched) + ' \\',
     arg('--alpha',      cfg.alpha) + ' ' + arg('--save-every', cfg.saveEvery) + ' \\',
     arg('--precision',  cfg.precision) + ' ' + arg('--gradient-checkpointing', cfg.gradCkpt),
+    arg('--instance-usd-per-hour', hourlyRate || 'unset'),
   ];
   if (!trainerLaunchOpts.samples) {
     lines[lines.length - 1] += ' \\';
@@ -6484,7 +6501,7 @@ function formatRunMinutes(minutes) {
 function trainerGpuRate(job) {
   const explicit = Number(job?.gpu_usd_per_hour || 0);
   if (explicit > 0) {
-    const source = job?.gpu_rate_source === 'env' ? 'exact' : 'est.';
+    const source = job?.gpu_rate_source === 'user' ? 'your rate' : (job?.gpu_rate_source === 'env' ? 'exact' : 'est.');
     return { usdPerHour: explicit, label: `${source} $${explicit.toFixed(2)}/hr` };
   }
   const name = String(job?.gpu_name || '').toLowerCase();
@@ -6575,7 +6592,7 @@ function renderTrainerRunningMonitor() {
       <div class="run-gpu-row"><span>Training steps</span><b>${step.toLocaleString()}${total ? ` / ${total.toLocaleString()}` : ''}</b></div>
       <div class="run-gpu-row"><span>Step speed</span><b>${speed > 0 ? `${speed.toFixed(1)} / min` : eta.label}</b></div>
       <div class="run-gpu-row"><span>ETA basis</span><b>${eta.minutes != null ? formatRunMinutes(eta.minutes) : 'calibrating'}</b></div>
-      <div class="run-gpu-row"><span>GPU rate</span><b>${gpuRate.usdPerHour ? gpuRate.label : 'unknown'}</b></div>
+      <div class="run-gpu-row"><span>Instance rate</span><b>${gpuRate.usdPerHour ? gpuRate.label : 'unknown'}</b></div>
       <div class="run-gpu-row"><span>Elapsed</span><b>${elapsed != null ? `${elapsed}m` : 'starting'}</b></div>
       <div class="run-gpu-row"><span>Samples</span><b>${sampleState}</b></div>
     `;
@@ -6652,6 +6669,7 @@ function renderTrainerRunningConfig() {
     ['Scheduler',    trainerRunJob.scheduler],
     ['Precision',    trainerRunJob.precision],
     ['Save every',   trainerRunJob.save_every],
+    ['Instance $/hr', trainerRunJob.instance_usd_per_hour || trainerRunJob.gpu_usd_per_hour],
     ['Generate samples', trainerRunJob.generate_samples === false ? 'no' : 'yes'],
     ['Auto-import LoRA', trainerRunJob.auto_import_lora === false ? 'no' : 'yes'],
     ['Output dir',   trainerRunJob.output_dir],
@@ -6854,6 +6872,7 @@ function trainerPayload() {
     save_every:            Number(trainerWizardCfg.saveEvery) || null,
     precision:             trainerWizardCfg.precision,
     gradient_checkpointing: trainerWizardCfg.gradCkpt === 'on',
+    instance_usd_per_hour: Math.max(0, Number(trainerWizardCfg.hourlyRate || 0)) || null,
     sample_prompts:        samples.length ? samples : null,
     generate_samples:      !!trainerLaunchOpts.samples,
     auto_import_lora:      !!trainerLaunchOpts.autoPublish,
@@ -7035,6 +7054,10 @@ async function startTrainerJob() {
         scheduler: payload.scheduler,
         network_alpha: payload.network_alpha,
         precision: payload.precision,
+        instance_usd_per_hour: payload.instance_usd_per_hour,
+        gpu_usd_per_hour: payload.instance_usd_per_hour,
+        gpu_rate_source: payload.instance_usd_per_hour ? 'user' : '',
+        gpu_rate_label: payload.instance_usd_per_hour ? 'User-entered all-in instance rate' : '',
         batch_size: payload.batch_size,
         repeats: payload.repeats,
         generate_samples: payload.generate_samples,

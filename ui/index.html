@@ -945,7 +945,11 @@
                 <div class="summary-stat">
                   <div class="bracket-label">Est. cost</div>
                   <div><span class="stat-num" id="cfgCostNum" style="color:var(--px-pink)">$3.30</span></div>
-                  <div style="font-family:var(--px-font-mono);font-size:10.5px;color:var(--px-text-mute)" id="cfgRateLabel">@ $3.60/hr · H100</div>
+                  <label class="cost-rate-field" for="cfgHourlyRate">
+                    <span>Instance $/hr incl. storage</span>
+                    <input class="px-field" id="cfgHourlyRate" type="number" min="0" step="0.01" value="3.60" inputmode="decimal">
+                  </label>
+                  <div style="font-family:var(--px-font-mono);font-size:10.5px;color:var(--px-text-mute)" id="cfgRateLabel">Used for cost estimates during this run.</div>
                 </div>
                 <div class="px-divider"></div>
                 <div style="display:flex;align-items:center;gap:8px;font-family:var(--px-font-mono);font-size:11px" id="cfgCheckRow">
@@ -965,7 +969,7 @@
               <h2 class="px-font" style="font-size:16px;margin:0 0 10px;letter-spacing:0.04em" id="launchRunName">kerry_qwen_lora</h2>
               <div class="final-check-prose" id="launchProse">
                 You're about to spend approximately <b style="color:var(--px-pink)" data-launch="cost">$3.30</b>
-                over <b style="color:var(--px-cyan)" data-launch="eta">55 minutes</b> on a single H100.
+                over <b style="color:var(--px-cyan)" data-launch="eta">55 minutes</b> at <b data-launch="rate">$3.60/hr</b>.
                 Iggle will checkpoint every <b data-launch="saveevery">500</b> steps and let you stop early if it looks good.
               </div>
               <div class="px-divider"></div>

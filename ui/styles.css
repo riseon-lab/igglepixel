@@ -4877,6 +4877,18 @@ button.hf-file-row {
   flex-direction: column;
   gap: 4px;
 }
+.px-theme .cost-rate-field {
+  display: grid;
+  gap: 6px;
+  margin-top: 6px;
+  color: var(--moon-text-muted);
+  font-family: var(--font-sans);
+  font-size: 12px;
+  font-weight: 700;
+}
+.px-theme .cost-rate-field .px-field {
+  max-width: 180px;
+}
 
 /* ── Step 5: Launch ── */
 .px-theme .launch-layout {

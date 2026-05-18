@@ -2438,6 +2438,7 @@ class TrainJobRequest(BaseModel):
     save_every: Optional[int] = None      # default 500
     precision: Optional[str] = None       # fp16 | bf16 | fp32
     gradient_checkpointing: Optional[bool] = None
+    instance_usd_per_hour: Optional[float] = None
     sample_prompts: Optional[list[str]] = None
     generate_samples: bool = True
     auto_import_lora: bool = True
@@ -3314,8 +3315,11 @@ def _run_train_job(job_id: str) -> None:
         job["gpu_name"] = gpu.get("name")
         job["gpu_vram_gb"] = gpu.get("vram_gb")
         job["gpu_type"] = gpu.get("type")
-        rate = _runpod_hourly_rate_for_gpu(gpu)
-        if rate:
+        if req.instance_usd_per_hour:
+            job["gpu_usd_per_hour"] = req.instance_usd_per_hour
+            job["gpu_rate_source"] = "user"
+            job["gpu_rate_label"] = "User-entered all-in instance rate"
+        elif rate := _runpod_hourly_rate_for_gpu(gpu):
             job["gpu_usd_per_hour"] = rate["usd_per_hour"]
             job["gpu_rate_source"] = rate["source"]
             job["gpu_rate_label"] = rate["label"]
@@ -3376,6 +3380,7 @@ def _run_train_job(job_id: str) -> None:
         "network_alpha": req.network_alpha or req.rank,
         "precision": req.precision or "bf16",
         "gradient_checkpointing": True if req.gradient_checkpointing is None else req.gradient_checkpointing,
+        "instance_usd_per_hour": req.instance_usd_per_hour,
         "generate_samples": bool(req.generate_samples),
         "sample_prompts": sample_prompts,
         "auto_import_lora": bool(req.auto_import_lora),
@@ -3550,6 +3555,8 @@ def create_train_job(req: TrainJobRequest):
         raise HTTPException(400, "Save every must be between 1 and 100000")
     if req.precision and req.precision not in TRAINER_PRECISIONS:
         raise HTTPException(400, "Unsupported precision")
+    if req.instance_usd_per_hour is not None and (req.instance_usd_per_hour < 0 or req.instance_usd_per_hour > 1000):
+        raise HTTPException(400, "Instance hourly cost must be between 0 and 1000")
     req.sample_prompts = _clean_sample_prompts(req.sample_prompts) or None
 
     job_id = secrets.token_hex(8)
@@ -3577,6 +3584,10 @@ def create_train_job(req: TrainJobRequest):
         "network_alpha": req.network_alpha or req.rank,
         "precision": req.precision or "bf16",
         "gradient_checkpointing": True if req.gradient_checkpointing is None else req.gradient_checkpointing,
+        "instance_usd_per_hour": req.instance_usd_per_hour,
+        "gpu_usd_per_hour": req.instance_usd_per_hour,
+        "gpu_rate_source": "user" if req.instance_usd_per_hour else "",
+        "gpu_rate_label": "User-entered all-in instance rate" if req.instance_usd_per_hour else "",
         "generate_samples": bool(req.generate_samples),
         "sample_prompts": req.sample_prompts or [],
         "auto_import_lora": bool(req.auto_import_lora),
