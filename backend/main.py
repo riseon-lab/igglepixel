@@ -2,6 +2,7 @@ import asyncio
 import copy
 import hmac
 import hashlib
+import importlib.util
 import json
 import os
 import re
@@ -906,6 +907,129 @@ def app_refresh_repo():
         "stderr": pull["stderr"],
         "message": "Pulled latest code." if changed else "Already up to date.",
     }
+
+
+# ── App runtime dependency install ──────────────────────────────────────
+app_runtime_install_jobs: dict[str, dict] = {}
+
+
+def _runtime_deps_requirement_path() -> Path:
+    return BASE_DIR / "requirements-runtime.txt"
+
+
+def _latest_app_runtime_job() -> Optional[dict]:
+    if not app_runtime_install_jobs:
+        return None
+    return max(app_runtime_install_jobs.values(), key=lambda j: j.get("created_at", 0))
+
+
+def _runtime_deps_status_payload() -> dict:
+    req_path = _runtime_deps_requirement_path()
+    latest = _latest_app_runtime_job()
+    return {
+        "available": req_path.exists(),
+        "requirements_path": str(req_path),
+        "python_path": sys.executable,
+        "torchao_available": importlib.util.find_spec("torchao") is not None,
+        "latest_job": latest,
+    }
+
+
+def _run_app_runtime_install_job(job_id: str) -> None:
+    job = app_runtime_install_jobs[job_id]
+    job["status"] = "running"
+    job["started_at"] = time.time()
+    log_lines: list[str] = []
+    job["log"] = log_lines
+
+    def _log(line: str) -> None:
+        line = line.rstrip("\n")
+        log_lines.append(line)
+        if len(log_lines) > 2000:
+            del log_lines[: len(log_lines) - 2000]
+        job["last_line"] = line
+
+    req_path = _runtime_deps_requirement_path()
+    if not req_path.exists():
+        job["status"] = "error"
+        job["error"] = f"requirements file not found: {req_path}"
+        job["finished_at"] = time.time()
+        return
+
+    cmd = [sys.executable, "-m", "pip", "install", "-r", str(req_path)]
+    job["command"] = " ".join(shlex.quote(part) for part in cmd)
+    job["requirements_path"] = str(req_path)
+    job["python_path"] = sys.executable
+
+    env = os.environ.copy()
+    env.setdefault("PIP_CACHE_DIR", str(PIP_CACHE_DIR))
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            cwd=str(BASE_DIR),
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+        )
+        assert proc.stdout is not None
+        for line in proc.stdout:
+            _log(line)
+        return_code = proc.wait()
+        job["returncode"] = return_code
+        if return_code == 0:
+            job["status"] = "done"
+            job["torchao_available"] = importlib.util.find_spec("torchao") is not None
+        else:
+            job["status"] = "error"
+            job["error"] = f"pip install exited with code {return_code}"
+    except Exception as e:
+        job["status"] = "error"
+        job["error"] = f"{type(e).__name__}: {e}"
+    finally:
+        job["finished_at"] = time.time()
+
+
+@app.get("/api/app/runtime-deps/status")
+def app_runtime_deps_status():
+    _require_unlocked()
+    return _runtime_deps_status_payload()
+
+
+@app.post("/api/app/runtime-deps/install")
+def app_runtime_deps_install():
+    _require_unlocked()
+    req_path = _runtime_deps_requirement_path()
+    if not req_path.exists():
+        raise HTTPException(400, f"requirements-runtime.txt not found at {req_path}")
+    for job in app_runtime_install_jobs.values():
+        if job.get("status") in ("queued", "running"):
+            return {"job_id": job["id"], "status": job["status"]}
+
+    job_id = secrets.token_urlsafe(12)
+    app_runtime_install_jobs[job_id] = {
+        "id": job_id,
+        "status": "queued",
+        "created_at": time.time(),
+        "requirements_path": str(req_path),
+        "python_path": sys.executable,
+    }
+    threading.Thread(
+        target=_run_app_runtime_install_job,
+        args=(job_id,),
+        daemon=True,
+    ).start()
+    return {"job_id": job_id, "status": "queued"}
+
+
+@app.get("/api/app/runtime-deps/install-status/{job_id}")
+def app_runtime_deps_install_status(job_id: str):
+    _require_unlocked()
+    job = app_runtime_install_jobs.get(job_id)
+    if not job:
+        raise HTTPException(404, "Runtime dependency install job not found")
+    return job
 
 
 # ── Moderation status + runtime override ────────────────────────────────

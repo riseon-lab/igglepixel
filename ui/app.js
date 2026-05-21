@@ -60,6 +60,7 @@ const state = {
   trainValidation: null,
   components:    [],          // installed split-file components: [{target, filename, size_mb, path}]
   runtimes:      {},          // { model_id -> {state: 'missing'|'installing'|'ready'|'error', last_line?, error?} }
+  runtimeDepsPoll: null,
   // HF browser + active download queue. The browser is a flat list of
   // weight files (safetensors/ckpt/bin/gguf/pth) for a given repo. The
   // queue tracks server-side download jobs so the user can see progress,
@@ -609,6 +610,9 @@ const api = {
   modClear:      ()      => json(apiCall('/api/moderation/override', { method: 'DELETE' })),
   repoStatus:    ()      => json(apiCall('/api/app/repo-status')),
   repoRefresh:   ()      => json(apiCall('/api/app/refresh-repo', { method: 'POST', timeoutMs: 240000 })),
+  runtimeDepsStatus: ()      => json(apiCall('/api/app/runtime-deps/status')),
+  runtimeDepsInstall: ()     => json(apiCall('/api/app/runtime-deps/install', { method: 'POST', timeoutMs: 10000 })),
+  runtimeDepsJob: (jobId)    => json(apiCall(`/api/app/runtime-deps/install-status/${encodeURIComponent(jobId)}`)),
 };
 
 // ── Boot ─────────────────────────────────────────────────────────────────
@@ -1079,6 +1083,7 @@ function bindShell() {
   $('#moderationDisableBtn')?.addEventListener('click', disableModeration);
   $('#moderationEnableBtn')?.addEventListener('click', enableModeration);
   $('#repoRefreshBtn')?.addEventListener('click', refreshRepoFromSettings);
+  $('#runtimeDepsInstallBtn')?.addEventListener('click', installRuntimeDepsFromSettings);
 
   $('#uploadBtn').addEventListener('click', () => $('#uploadInput').click());
   $('#uploadZone').addEventListener('click', () => $('#uploadInput').click());
@@ -1238,6 +1243,111 @@ async function refreshRepoFromSettings() {
   }
 }
 
+function renderRuntimeDepsResult(payload = {}) {
+  const pill = $('#runtimeDepsPill');
+  const line = $('#runtimeDepsStatus');
+  const log = $('#runtimeDepsLog');
+  const btn = $('#runtimeDepsInstallBtn');
+  if (!pill || !line || !log) return;
+
+  const job = payload.latest_job || payload;
+  const status = job?.status || (payload.available ? 'idle' : 'missing');
+  const running = status === 'queued' || status === 'running';
+  const done = status === 'done';
+  const error = status === 'error' || status === 'missing';
+  const torchaoReady = payload.torchao_available ?? job?.torchao_available;
+
+  pill.dataset.state = done || torchaoReady ? 'on' : error ? 'off' : running ? 'loading' : 'unknown';
+  if (running) {
+    pill.textContent = status === 'queued' ? 'Deps: queued' : 'Deps: installing';
+  } else if (done) {
+    pill.textContent = 'Deps: installed';
+  } else if (error) {
+    pill.textContent = 'Deps: attention needed';
+  } else {
+    pill.textContent = torchaoReady ? 'Deps: ready' : 'Deps: available';
+  }
+
+  if (!payload.available && !job?.requirements_path) {
+    line.textContent = 'requirements-runtime.txt was not found on this pod.';
+  } else if (running) {
+    line.textContent = job.last_line || 'Installing packages...';
+  } else if (job?.error) {
+    line.textContent = job.error;
+  } else if (done) {
+    line.textContent = 'Install complete. Stop and relaunch affected models before testing.';
+  } else if (torchaoReady) {
+    line.textContent = 'TorchAO is importable in this Python environment.';
+  } else {
+    line.textContent = 'Ready to install packages added by the latest app update.';
+  }
+
+  const chunks = [];
+  if (job?.command) chunks.push(`command: ${job.command}`);
+  if (job?.python_path || payload.python_path) chunks.push(`python: ${job?.python_path || payload.python_path}`);
+  if (job?.requirements_path || payload.requirements_path) chunks.push(`requirements: ${job?.requirements_path || payload.requirements_path}`);
+  if (job?.log?.length) chunks.push(job.log.slice(-120).join('\n'));
+  log.textContent = chunks.join('\n\n') || 'No install output yet.';
+  log.style.display = chunks.length ? '' : 'none';
+  if (btn) btn.disabled = running || payload.available === false;
+}
+
+async function pollRuntimeDepsInstall(jobId) {
+  if (!jobId) return;
+  if (state.runtimeDepsPoll) clearTimeout(state.runtimeDepsPoll);
+  try {
+    const job = await api.runtimeDepsJob(jobId);
+    renderRuntimeDepsResult(job);
+    if (job.status === 'queued' || job.status === 'running') {
+      state.runtimeDepsPoll = setTimeout(() => pollRuntimeDepsInstall(jobId), 1500);
+    } else {
+      state.runtimeDepsPoll = null;
+      toast(job.status === 'done' ? 'Runtime deps installed' : (job.error || 'Runtime deps install failed'), job.status === 'done' ? 'success' : 'error');
+    }
+  } catch (e) {
+    state.runtimeDepsPoll = null;
+    const line = $('#runtimeDepsStatus');
+    if (line) line.textContent = e.message || 'Runtime deps status failed';
+  }
+}
+
+async function renderRuntimeDepsCard() {
+  const pill = $('#runtimeDepsPill');
+  const line = $('#runtimeDepsStatus');
+  if (!pill || !line) return;
+  pill.dataset.state = 'loading';
+  pill.textContent = 'Deps: checking...';
+  line.textContent = '';
+  try {
+    const res = await api.runtimeDepsStatus();
+    renderRuntimeDepsResult(res);
+    const job = res.latest_job;
+    if (job?.id && (job.status === 'queued' || job.status === 'running')) {
+      pollRuntimeDepsInstall(job.id);
+    }
+  } catch (e) {
+    pill.dataset.state = 'unknown';
+    pill.textContent = 'Deps: status unavailable';
+    line.textContent = e.message || '';
+  }
+}
+
+async function installRuntimeDepsFromSettings() {
+  const btn = $('#runtimeDepsInstallBtn');
+  const line = $('#runtimeDepsStatus');
+  if (btn) btn.disabled = true;
+  if (line) line.textContent = 'Starting install...';
+  try {
+    const res = await api.runtimeDepsInstall();
+    renderRuntimeDepsResult(res);
+    pollRuntimeDepsInstall(res.job_id);
+  } catch (e) {
+    if (line) line.textContent = e.message || 'Runtime deps install failed';
+    toast(`Runtime deps install failed: ${e.message || 'unknown'}`, 'error');
+    if (btn) btn.disabled = false;
+  }
+}
+
 function saveHFToken(value) {
   const token = (value || '').trim();
   state.settings.hf_token = token;
@@ -1294,6 +1404,7 @@ function switchView(name, push = true) {
   if (name === 'settings') {
     renderModerationCard();
     renderRepoUpdateCard();
+    renderRuntimeDepsCard();
   }
   if (name === 'downloads') {
     // Make the queue panel visible (or render the empty state) and wake the

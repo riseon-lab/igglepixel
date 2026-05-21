@@ -1480,6 +1480,24 @@
           </div>
         </div>
         <div class="card settings-full" style="padding:14px">
+          <div class="section-title" style="margin:0 0 10px;border:0;padding:0">Runtime dependencies</div>
+          <div style="display:flex;flex-direction:column;gap:10px">
+            <div class="field" style="margin:0">
+              <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+                <span class="status-pill" id="runtimeDepsPill" data-state="loading">Deps: checking…</span>
+                <span class="px-mute settings-inline-note" id="runtimeDepsStatus"></span>
+              </div>
+            </div>
+            <div class="px-mute settings-body-copy">
+              Installs requirements-runtime.txt into this pod's current Python environment. Use this after pulling an update that adds new packages, then stop and relaunch affected models.
+            </div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap">
+              <button class="btn" id="runtimeDepsInstallBtn">Install runtime deps</button>
+            </div>
+            <pre id="runtimeDepsLog" class="settings-debug" style="display:none;max-height:220px">Waiting…</pre>
+          </div>
+        </div>
+        <div class="card settings-full" style="padding:14px">
           <div class="section-title" style="margin:0 0 10px;border:0;padding:0">GPU</div>
           <pre id="gpuDebug" class="settings-debug">Loading…</pre>
         </div>
