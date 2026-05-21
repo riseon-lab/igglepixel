@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Igglepixel Qwen LoRA trainer wrapper.
+"""Igglepixel AI Toolkit LoRA trainer wrapper.
 
 This script is called by backend/main.py with training settings passed through
 environment variables. It bootstraps Ostris AI Toolkit into /workspace, writes
@@ -122,13 +122,33 @@ def ensure_torchaudio(py: Path) -> None:
     run(cmd)
 
 
+def is_flux_klein(base_model: str) -> bool:
+    return "flux.2-klein" in (base_model or "").lower()
+
+
+def is_flux_klein_base(base_model: str) -> bool:
+    return "flux.2-klein-base" in (base_model or "").lower()
+
+
 def model_arch(base_model: str) -> str:
+    if is_flux_klein(base_model):
+        return "flux2_klein_4b" if "4b" in base_model.lower() else "flux2_klein_9b"
     if "Edit" in base_model:
         return "qwen_image_edit"
     return "qwen_image"
 
 
 def model_quant_block(base_model: str) -> str:
+    if is_flux_klein(base_model):
+        if not py_bool(os.environ.get("TRAIN_QUANTIZE"), False):
+            return "      quantize: false\n      quantize_te: false\n"
+        qtype = os.environ.get("TRAIN_QTYPE", "qfloat8")
+        return (
+            "      quantize: true\n"
+            f'      qtype: "{qtype}"\n'
+            "      quantize_te: false\n"
+            f"      low_vram: {str(py_bool(os.environ.get('TRAIN_LOW_VRAM'), True)).lower()}\n"
+        )
     if not py_bool(os.environ.get("TRAIN_QUANTIZE"), True):
         return "      quantize: false\n      quantize_te: false\n"
     if "Image-2512" in base_model:
@@ -149,6 +169,22 @@ def model_quant_block(base_model: str) -> str:
         f'      qtype_te: "{os.environ.get("TRAIN_QTYPE_TE", "qfloat8")}"\n'
         f"      low_vram: {str(py_bool(os.environ.get('TRAIN_LOW_VRAM'), True)).lower()}\n"
     )
+
+
+def sample_guidance_scale(base_model: str) -> float:
+    if is_flux_klein_base(base_model):
+        return float(os.environ.get("TRAIN_SAMPLE_GUIDANCE", "4.0"))
+    if is_flux_klein(base_model):
+        return float(os.environ.get("TRAIN_SAMPLE_GUIDANCE", "1.0"))
+    return float(os.environ.get("TRAIN_SAMPLE_GUIDANCE", "3.0"))
+
+
+def sample_steps(base_model: str) -> int:
+    if is_flux_klein_base(base_model):
+        return int(float(os.environ.get("TRAIN_SAMPLE_STEPS", "50")))
+    if is_flux_klein(base_model):
+        return int(float(os.environ.get("TRAIN_SAMPLE_STEPS", "4")))
+    return int(float(os.environ.get("TRAIN_SAMPLE_STEPS", "25")))
 
 
 def _read_sample_prompts(trigger: str) -> list[str]:
@@ -205,8 +241,10 @@ def _normalise_precision(name: str) -> str:
 
 
 def write_config(toolkit_dir: Path, dataset_dir: Path, output_dir: Path) -> Path:
-    output_name = safe_name(os.environ.get("OUTPUT_NAME", "qwen_lora"))
     base_model = os.environ.get("BASE_MODEL", "Qwen/Qwen-Image-2512")
+    output_name = safe_name(
+        os.environ.get("OUTPUT_NAME", "flux_klein_lora" if is_flux_klein(base_model) else "qwen_lora")
+    )
     trigger = os.environ.get("TRIGGER_PHRASE", "").strip()
     steps = int(float(os.environ.get("TRAIN_STEPS", "3000")))
     rank = int(float(os.environ.get("TRAIN_RANK", "64")))
@@ -309,8 +347,8 @@ config:
       neg: ""
       seed: 42
       walk_seed: true
-      guidance_scale: 3
-      sample_steps: 25
+      guidance_scale: {sample_guidance_scale(base_model)}
+      sample_steps: {sample_steps(base_model)}
     meta:
       name: "[name]"
       version: "1.0"

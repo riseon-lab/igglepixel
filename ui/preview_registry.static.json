@@ -49,6 +49,51 @@
         "PIL"
       ]
     },
+    "comfy-ltx": {
+      "id": "comfy-ltx",
+      "label": "ComfyUI LTX runtime",
+      "python": "3.12",
+      "git": [
+        {
+          "repo": "https://github.com/comfyanonymous/ComfyUI.git",
+          "ref": "master",
+          "dest": "/workspace/repos/ComfyUI",
+          "required_paths": ["main.py", "requirements.txt"]
+        },
+        {
+          "repo": "https://github.com/Lightricks/ComfyUI-LTXVideo.git",
+          "ref": "master",
+          "dest": "/workspace/repos/ComfyUI/custom_nodes/ComfyUI-LTXVideo",
+          "required_paths": ["example_workflows/2.3"]
+        }
+      ],
+      "pip": [
+        "--extra-index-url", "https://download.pytorch.org/whl/cu128",
+        "torch==2.8.0",
+        "torchaudio==2.8.0",
+        "torchvision==0.23.0",
+        "-r", "/workspace/repos/ComfyUI/requirements.txt",
+        "huggingface_hub",
+        "imageio",
+        "imageio-ffmpeg",
+        "av",
+        "opencv-python-headless",
+        "cryptography==44.0.0"
+      ],
+      "pip_optional": [
+        "-r", "/workspace/repos/ComfyUI/custom_nodes/ComfyUI-LTXVideo/requirements.txt"
+      ],
+      "verify_imports": [
+        "torch",
+        "aiohttp",
+        "PIL",
+        "safetensors",
+        "huggingface_hub",
+        "imageio",
+        "av",
+        "cv2"
+      ]
+    },
     "pocket-tts": {
       "id": "pocket-tts",
       "python": "3.11",
@@ -240,6 +285,167 @@
       ],
       "image_inputs": [
         { "key": "ref", "label": "Source frame", "required": true, "hint": "First frame of the video" }
+      ],
+      "default_loras": []
+    },
+    {
+      "id": "ltx23-comfy-i2v",
+      "name": "LTX-2.3 Comfy — Image to Video",
+      "category": "video",
+      "description": "LTX-2.3 through ComfyUI's native LTX nodes. Default path uses FP8 weights, tiled decode, and Comfy memory management for L40S 48GB-class pods.",
+      "runner_module": "backend.runners.ltx23_comfy",
+      "hf_repo": "Lightricks/LTX-2.3-fp8",
+      "download_snapshot": false,
+      "license": {
+        "type": "non-commercial",
+        "label": "LTX Community License",
+        "url": "https://huggingface.co/Lightricks/LTX-2.3/blob/main/LICENSE"
+      },
+      "min_vram_gb": 48,
+      "recommended_vram_gb": 48,
+      "supports_lora": false,
+      "gpu_support": ["nvidia"],
+      "runtime_profile": "comfy-ltx",
+      "variants": [
+        {
+          "id": "distilled-fp8",
+          "label": "Distilled FP8 — L40S",
+          "description": "Default 8-step Comfy path for 48GB pods. Uses the FP8 dev checkpoint with the official distilled LoRA.",
+          "auto_min_vram_gb": 48,
+          "default_params": { "steps": 8, "cfg": 1.0, "width": 832, "height": 480, "duration": 2.0, "fps": 16 },
+          "download_files": [
+            { "hf_repo": "Lightricks/LTX-2.3-fp8", "filename": "ltx-2.3-22b-dev-fp8.safetensors" },
+            { "hf_repo": "Lightricks/LTX-2.3", "filename": "ltx-2.3-22b-distilled-lora-384-1.1.safetensors" },
+            { "hf_repo": "Lightricks/LTX-2.3", "filename": "ltx-2.3-spatial-upscaler-x2-1.0.safetensors" },
+            { "hf_repo": "Comfy-Org/ltx-2", "filename": "split_files/text_encoders/gemma_3_12B_it_fp4_mixed.safetensors" }
+          ]
+        },
+        {
+          "id": "dev-fp8",
+          "label": "Dev FP8 — control",
+          "description": "FP8 dev checkpoint without the distilled LoRA. Slower, more flexible, and still intended for L40S-class pods.",
+          "auto_min_vram_gb": 48,
+          "default_params": { "steps": 30, "cfg": 3.0, "width": 832, "height": 480, "duration": 2.0, "fps": 16 },
+          "download_files": [
+            { "hf_repo": "Lightricks/LTX-2.3-fp8", "filename": "ltx-2.3-22b-dev-fp8.safetensors" },
+            { "hf_repo": "Lightricks/LTX-2.3", "filename": "ltx-2.3-spatial-upscaler-x2-1.0.safetensors" },
+            { "hf_repo": "Comfy-Org/ltx-2", "filename": "split_files/text_encoders/gemma_3_12B_it_fp4_mixed.safetensors" }
+          ]
+        },
+        {
+          "id": "dev-bf16",
+          "label": "Dev BF16 — experimental",
+          "description": "Full BF16 checkpoint. Kept visible for L40S/H100 testing, but FP8 is the safer default.",
+          "auto_min_vram_gb": 48,
+          "default_params": { "steps": 30, "cfg": 3.0, "width": 768, "height": 512, "duration": 2.0, "fps": 16 },
+          "download_files": [
+            { "hf_repo": "Lightricks/LTX-2.3", "filename": "ltx-2.3-22b-dev.safetensors" },
+            { "hf_repo": "Lightricks/LTX-2.3", "filename": "ltx-2.3-spatial-upscaler-x2-1.0.safetensors" },
+            { "hf_repo": "Comfy-Org/ltx-2", "filename": "split_files/text_encoders/gemma_3_12B_it_fp4_mixed.safetensors" }
+          ]
+        }
+      ],
+      "default_size_by_vram": [
+        { "min_gb": 48, "w": 832, "h": 480 },
+        { "min_gb": 0,  "w": 768, "h": 512 }
+      ],
+      "param_groups": ["prompt", "generation", "dimensions", "video"],
+      "param_keys": ["prompt", "negative_prompt", "seed", "steps", "cfg", "width", "height", "duration", "fps"],
+      "param_overrides": {
+        "steps": { "default": 8, "min": 1, "max": 50, "step": 1 },
+        "cfg": { "default": 1.0, "min": 0, "max": 8, "step": 0.1 },
+        "width": { "default": 832, "step": 32, "min": 512, "max": 1280 },
+        "height": { "default": 480, "step": 32, "min": 320, "max": 1024 },
+        "duration": { "default": 2.0, "step": 0.1, "min": 1, "max": 6, "label": "Seconds" },
+        "fps": { "default": 16, "step": 1, "min": 8, "max": 30 }
+      },
+      "aspect_presets": [
+        { "label": "16:9 480p", "w": 832, "h": 480 },
+        { "label": "Portrait 9:16", "w": 480, "h": 832 },
+        { "label": "Square", "w": 640, "h": 640 },
+        { "label": "Wide 576p", "w": 1024, "h": 576 }
+      ],
+      "image_inputs": [
+        { "key": "ref", "label": "Source frame", "required": true, "hint": "First frame of the video" }
+      ],
+      "default_loras": []
+    },
+    {
+      "id": "ltx23-comfy-t2v",
+      "name": "LTX-2.3 Comfy — Text to Video",
+      "category": "video",
+      "description": "LTX-2.3 text-to-video through ComfyUI's native LTX nodes. Uses the same L40S-friendly FP8 runtime as the I2V path.",
+      "runner_module": "backend.runners.ltx23_comfy_t2v",
+      "hf_repo": "Lightricks/LTX-2.3-fp8",
+      "download_snapshot": false,
+      "license": {
+        "type": "non-commercial",
+        "label": "LTX Community License",
+        "url": "https://huggingface.co/Lightricks/LTX-2.3/blob/main/LICENSE"
+      },
+      "min_vram_gb": 48,
+      "recommended_vram_gb": 48,
+      "supports_lora": false,
+      "gpu_support": ["nvidia"],
+      "runtime_profile": "comfy-ltx",
+      "variants": [
+        {
+          "id": "distilled-fp8",
+          "label": "Distilled FP8 — L40S",
+          "description": "Default 8-step Comfy path for 48GB pods.",
+          "auto_min_vram_gb": 48,
+          "default_params": { "steps": 8, "cfg": 1.0, "width": 832, "height": 480, "duration": 2.0, "fps": 16 },
+          "download_files": [
+            { "hf_repo": "Lightricks/LTX-2.3-fp8", "filename": "ltx-2.3-22b-dev-fp8.safetensors" },
+            { "hf_repo": "Lightricks/LTX-2.3", "filename": "ltx-2.3-22b-distilled-lora-384-1.1.safetensors" },
+            { "hf_repo": "Lightricks/LTX-2.3", "filename": "ltx-2.3-spatial-upscaler-x2-1.0.safetensors" },
+            { "hf_repo": "Comfy-Org/ltx-2", "filename": "split_files/text_encoders/gemma_3_12B_it_fp4_mixed.safetensors" }
+          ]
+        },
+        {
+          "id": "dev-fp8",
+          "label": "Dev FP8 — control",
+          "description": "FP8 dev checkpoint without the distilled LoRA.",
+          "auto_min_vram_gb": 48,
+          "default_params": { "steps": 30, "cfg": 3.0, "width": 832, "height": 480, "duration": 2.0, "fps": 16 },
+          "download_files": [
+            { "hf_repo": "Lightricks/LTX-2.3-fp8", "filename": "ltx-2.3-22b-dev-fp8.safetensors" },
+            { "hf_repo": "Lightricks/LTX-2.3", "filename": "ltx-2.3-spatial-upscaler-x2-1.0.safetensors" },
+            { "hf_repo": "Comfy-Org/ltx-2", "filename": "split_files/text_encoders/gemma_3_12B_it_fp4_mixed.safetensors" }
+          ]
+        },
+        {
+          "id": "dev-bf16",
+          "label": "Dev BF16 — experimental",
+          "description": "Full BF16 checkpoint for high-headroom or validation runs.",
+          "auto_min_vram_gb": 48,
+          "default_params": { "steps": 30, "cfg": 3.0, "width": 768, "height": 512, "duration": 2.0, "fps": 16 },
+          "download_files": [
+            { "hf_repo": "Lightricks/LTX-2.3", "filename": "ltx-2.3-22b-dev.safetensors" },
+            { "hf_repo": "Lightricks/LTX-2.3", "filename": "ltx-2.3-spatial-upscaler-x2-1.0.safetensors" },
+            { "hf_repo": "Comfy-Org/ltx-2", "filename": "split_files/text_encoders/gemma_3_12B_it_fp4_mixed.safetensors" }
+          ]
+        }
+      ],
+      "default_size_by_vram": [
+        { "min_gb": 48, "w": 832, "h": 480 },
+        { "min_gb": 0,  "w": 768, "h": 512 }
+      ],
+      "param_groups": ["prompt", "generation", "dimensions", "video"],
+      "param_keys": ["prompt", "negative_prompt", "seed", "steps", "cfg", "width", "height", "duration", "fps"],
+      "param_overrides": {
+        "steps": { "default": 8, "min": 1, "max": 50, "step": 1 },
+        "cfg": { "default": 1.0, "min": 0, "max": 8, "step": 0.1 },
+        "width": { "default": 832, "step": 32, "min": 512, "max": 1280 },
+        "height": { "default": 480, "step": 32, "min": 320, "max": 1024 },
+        "duration": { "default": 2.0, "step": 0.1, "min": 1, "max": 6, "label": "Seconds" },
+        "fps": { "default": 16, "step": 1, "min": 8, "max": 30 }
+      },
+      "aspect_presets": [
+        { "label": "16:9 480p", "w": 832, "h": 480 },
+        { "label": "Portrait 9:16", "w": 480, "h": 832 },
+        { "label": "Square", "w": 640, "h": 640 },
+        { "label": "Wide 576p", "w": 1024, "h": 576 }
       ],
       "default_loras": []
     },
@@ -827,6 +1033,66 @@
       "param_overrides": {
         "steps":  { "default": 4,   "min": 1, "max": 12, "step": 1 },
         "cfg":    { "default": 1.0, "min": 0, "max": 6,  "step": 0.1, "label": "Guidance" },
+        "width":  { "default": 1024, "step": 16, "min": 256, "max": 2048 },
+        "height": { "default": 1024, "step": 16, "min": 256, "max": 2048 }
+      },
+      "aspect_presets": [
+        { "label": "Square",          "w": 1024, "h": 1024 },
+        { "label": "Landscape 16:9",  "w": 1344, "h": 768  },
+        { "label": "Portrait 9:16",   "w": 768,  "h": 1344 },
+        { "label": "3:4",             "w": 896,  "h": 1152 },
+        { "label": "4:3",             "w": 1152, "h": 896  }
+      ],
+      "default_loras": []
+    },
+    {
+      "id": "flux2-klein-base-9b",
+      "name": "FLUX.2 [klein] 9B Base",
+      "category": "image",
+      "description": "Black Forest Labs' FLUX.2 [klein] 9B base model for higher-control text-to-image and LoRA work. Slower than the distilled 4-step Klein 9B and gated under the FLUX Non-Commercial License.",
+      "runner_module": "backend.runners.flux2_klein_base_9b",
+      "hf_repo": "black-forest-labs/FLUX.2-klein-base-9B",
+      "access": {
+        "gated": true,
+        "requires_hf_token": true,
+        "note": "FLUX.2 [klein] 9B Base is gated under the FLUX Non-Commercial License.",
+        "repos": [
+          {
+            "repo": "black-forest-labs/FLUX.2-klein-base-9B",
+            "label": "FLUX.2 [klein] 9B Base terms",
+            "url": "https://huggingface.co/black-forest-labs/FLUX.2-klein-base-9B"
+          }
+        ]
+      },
+      "license": {
+        "type": "non-commercial",
+        "label": "FLUX Non-Commercial",
+        "url": "https://huggingface.co/black-forest-labs/FLUX.2-klein-base-9B/blob/main/LICENSE.md"
+      },
+      "min_vram_gb": 24,
+      "recommended_vram_gb": 36,
+      "supports_lora": true,
+      "gpu_support": ["nvidia"],
+      "default_size_by_vram": [
+        { "min_gb": 36, "w": 1024, "h": 1024 },
+        { "min_gb": 0,  "w": 768,  "h": 768  }
+      ],
+      "quants": [
+        { "id": "bf16", "label": "BF16", "description": "Best quality",        "vram_gb": 29, "auto_min_vram_gb": 36 },
+        { "id": "int8", "label": "INT8", "description": "Faster, lower VRAM",  "vram_gb": 18, "auto_min_vram_gb": 24 },
+        { "id": "nf4",  "label": "NF4",  "description": "Smallest",           "vram_gb": 12, "auto_min_vram_gb": 0  }
+      ],
+      "image_inputs": [
+        { "key": "ref",  "label": "Reference 1", "required": false, "hint": "Optional subject, style, or scene reference" },
+        { "key": "ref2", "label": "Reference 2", "required": false, "hint": "Optional second reference" },
+        { "key": "ref3", "label": "Reference 3", "required": false, "hint": "Optional third reference" },
+        { "key": "ref4", "label": "Reference 4", "required": false, "hint": "Optional fourth reference" }
+      ],
+      "param_groups": ["prompt", "generation", "dimensions"],
+      "param_keys":   ["prompt", "seed", "steps", "cfg", "width", "height"],
+      "param_overrides": {
+        "steps":  { "default": 50,  "min": 1, "max": 80, "step": 1 },
+        "cfg":    { "default": 4.0, "min": 0, "max": 10, "step": 0.1, "label": "Guidance" },
         "width":  { "default": 1024, "step": 16, "min": 256, "max": 2048 },
         "height": { "default": 1024, "step": 16, "min": 256, "max": 2048 }
       },

@@ -2304,8 +2304,11 @@ def update_lora(filename: str, req: LoraTagRequest):
 
 # ── Trainers ─────────────────────────────────────────────────────────────
 TRAINER_ID_QWEN_CHARACTER = "qwen-character-lora"
+TRAINER_ID_FLUX_KLEIN_CHARACTER = "flux-klein-character-lora"
 QWEN_TRAINER_COMMAND_ENV = "IGGLEPIXEL_QWEN_LORA_TRAIN_CMD"
+FLUX_TRAINER_COMMAND_ENV = "IGGLEPIXEL_FLUX_LORA_TRAIN_CMD"
 QWEN_TRAINER_SCRIPT = BASE_DIR / "trainers" / "qwen_lora_train.py"
+FLUX_TRAINER_SCRIPT = BASE_DIR / "trainers" / "qwen_lora_train.py"
 TRAINER_MODEL_FAMILIES = [
     {
         "id": "qwen",
@@ -2316,10 +2319,10 @@ TRAINER_MODEL_FAMILIES = [
     },
     {
         "id": "flux",
-        "label": "Flux family",
-        "status": "next",
-        "description": "Next target: Flux.1 dev/schnell/Kontext-style LoRAs with the same dataset wizard and checkpoint monitor.",
-        "trainer_id": "flux-character-lora",
+        "label": "Flux Klein",
+        "status": "beta",
+        "description": "Flux.2 [klein] 9B turbo/base LoRA training using the same dataset wizard, checkpoints, samples, and library import.",
+        "trainer_id": TRAINER_ID_FLUX_KLEIN_CHARACTER,
     },
     {
         "id": "z-image",
@@ -2362,6 +2365,14 @@ QWEN_TRAINER_BASE_MODELS = (
     "Qwen/Qwen-Image-Edit",
     "Qwen/Qwen-Image-Edit-2511",
 )
+FLUX_TRAINER_BASE_MODELS = (
+    "black-forest-labs/FLUX.2-klein-9B",
+    "black-forest-labs/FLUX.2-klein-base-9B",
+)
+TRAINER_BASE_MODELS = {
+    TRAINER_ID_QWEN_CHARACTER: QWEN_TRAINER_BASE_MODELS,
+    TRAINER_ID_FLUX_KLEIN_CHARACTER: FLUX_TRAINER_BASE_MODELS,
+}
 train_jobs: dict[str, dict] = {}
 
 
@@ -2580,19 +2591,44 @@ def _scan_training_dataset(dataset_dir: Path) -> dict:
     }
 
 
-def _trainer_command() -> str:
-    if QWEN_TRAINER_SCRIPT.exists() and not _truthy_env("IGGLEPIXEL_USE_CUSTOM_QWEN_LORA_TRAIN_CMD"):
-        return f"{shlex.quote(sys.executable)} {shlex.quote(str(QWEN_TRAINER_SCRIPT))}"
-    command = os.environ.get(QWEN_TRAINER_COMMAND_ENV, "").strip()
+def _trainer_command_meta(trainer_id: str) -> tuple[Path, str, str]:
+    if trainer_id == TRAINER_ID_FLUX_KLEIN_CHARACTER:
+        return (
+            FLUX_TRAINER_SCRIPT,
+            FLUX_TRAINER_COMMAND_ENV,
+            "IGGLEPIXEL_USE_CUSTOM_FLUX_LORA_TRAIN_CMD",
+        )
+    return (
+        QWEN_TRAINER_SCRIPT,
+        QWEN_TRAINER_COMMAND_ENV,
+        "IGGLEPIXEL_USE_CUSTOM_QWEN_LORA_TRAIN_CMD",
+    )
+
+
+def _trainer_command(trainer_id: str = TRAINER_ID_QWEN_CHARACTER) -> str:
+    script, command_env, custom_env = _trainer_command_meta(trainer_id)
+    if script.exists() and not _truthy_env(custom_env):
+        return f"{shlex.quote(sys.executable)} {shlex.quote(str(script))}"
+    command = os.environ.get(command_env, "").strip()
     if command:
         return command
-    if QWEN_TRAINER_SCRIPT.exists():
-        return f"{shlex.quote(sys.executable)} {shlex.quote(str(QWEN_TRAINER_SCRIPT))}"
+    if script.exists():
+        return f"{shlex.quote(sys.executable)} {shlex.quote(str(script))}"
     return ""
 
 
-def _trainer_command_configured() -> bool:
-    return bool(_trainer_command())
+def _trainer_command_configured(trainer_id: str = TRAINER_ID_QWEN_CHARACTER) -> bool:
+    return bool(_trainer_command(trainer_id))
+
+
+def _trainer_base_models(trainer_id: str) -> tuple[str, ...]:
+    return TRAINER_BASE_MODELS.get(trainer_id, ())
+
+
+def _trainer_output_fallback(req: TrainJobRequest) -> str:
+    if req.trainer_id == TRAINER_ID_FLUX_KLEIN_CHARACTER:
+        return "flux_klein_lora"
+    return "qwen_lora"
 
 
 @app.get("/api/trainers")
@@ -2604,9 +2640,9 @@ def list_trainers():
                 "name": "Qwen Character LoRA",
                 "category": "lora",
                 "description": "Train a Qwen-compatible character LoRA from a curated image/caption folder.",
-                "configured": _trainer_command_configured(),
+                "configured": _trainer_command_configured(TRAINER_ID_QWEN_CHARACTER),
                 "command_env": QWEN_TRAINER_COMMAND_ENV,
-                "default_command": _trainer_command(),
+                "default_command": _trainer_command(TRAINER_ID_QWEN_CHARACTER),
                 "dataset_root": str(WORKSPACE),
                 "output_root": str(TRAINING_DIR),
                 "model_families": TRAINER_MODEL_FAMILIES,
@@ -2614,7 +2650,23 @@ def list_trainers():
                     {"id": model_id, "label": model_id.replace("Qwen/", "").replace("-2511", " 2511")}
                     for model_id in QWEN_TRAINER_BASE_MODELS
                 ],
-            }
+            },
+            {
+                "id": TRAINER_ID_FLUX_KLEIN_CHARACTER,
+                "name": "Flux Klein Character LoRA",
+                "category": "lora",
+                "description": "Train a Flux.2 [klein] 9B LoRA from a curated image/caption folder. Turbo is fast/distilled; Base is the flexible fine-tuning target.",
+                "configured": _trainer_command_configured(TRAINER_ID_FLUX_KLEIN_CHARACTER),
+                "command_env": FLUX_TRAINER_COMMAND_ENV,
+                "default_command": _trainer_command(TRAINER_ID_FLUX_KLEIN_CHARACTER),
+                "dataset_root": str(WORKSPACE),
+                "output_root": str(TRAINING_DIR),
+                "model_families": TRAINER_MODEL_FAMILIES,
+                "base_models": [
+                    {"id": "black-forest-labs/FLUX.2-klein-9B", "label": "FLUX.2 [klein] 9B Turbo"},
+                    {"id": "black-forest-labs/FLUX.2-klein-base-9B", "label": "FLUX.2 [klein] 9B Base"},
+                ],
+            },
         ],
         "jobs": [_public_train_job(j) for j in sorted(train_jobs.values(), key=lambda x: x.get("created_at", 0), reverse=True)],
     }
@@ -3134,6 +3186,8 @@ def _import_trainer_outputs(job: dict, req: TrainJobRequest, output_dir: Path) -
     if not candidates:
         return []
 
+    family_tag = "flux" if req.trainer_id == TRAINER_ID_FLUX_KLEIN_CHARACTER else "qwen"
+    model_tag = "flux-klein" if family_tag == "flux" else "qwen-image"
     width = max(4, len(str(req.steps)))
     multi = len(candidates) > 1
     imported = []
@@ -3148,7 +3202,7 @@ def _import_trainer_outputs(job: dict, req: TrainJobRequest, output_dir: Path) -
         shutil.copy2(src, dest)
         meta_path = dest.with_suffix(dest.suffix + ".meta.json")
         meta = {
-            "tags": ["trained", "qwen", "character"],
+            "tags": ["trained", family_tag, model_tag, "character"],
             "model_id": "",
             "trainer_id": req.trainer_id,
             "base_model": req.base_model,
@@ -3337,11 +3391,12 @@ def _run_train_job(job_id: str) -> None:
         _mark_train_job_cancelled(job)
         return
 
-    command = _trainer_command()
+    command = _trainer_command(req.trainer_id)
     if not command:
+        _, command_env, _ = _trainer_command_meta(req.trainer_id)
         _set_train_job_error(
             job,
-            f"Trainer command is not configured. Set {QWEN_TRAINER_COMMAND_ENV} on the pod to enable training.",
+            f"Trainer command is not configured. Set {command_env} on the pod to enable training.",
         )
         return
 
@@ -3525,7 +3580,7 @@ def _run_train_job(job_id: str) -> None:
 @app.post("/api/train-jobs")
 def create_train_job(req: TrainJobRequest):
     _require_unlocked()
-    if req.trainer_id != TRAINER_ID_QWEN_CHARACTER:
+    if req.trainer_id not in TRAINER_BASE_MODELS:
         raise HTTPException(404, "Trainer not found")
     dataset_dir = _resolve_training_path(req.dataset_path)
     scan = _scan_training_dataset(dataset_dir)
@@ -3535,8 +3590,8 @@ def create_train_job(req: TrainJobRequest):
         raise HTTPException(400, "Steps must be between 1 and 100000")
     if req.rank not in (4, 8, 16, 32, 64, 128):
         raise HTTPException(400, "Rank must be one of 4, 8, 16, 32, 64, 128")
-    if req.base_model not in QWEN_TRAINER_BASE_MODELS:
-        raise HTTPException(400, "Unsupported Qwen base model")
+    if req.base_model not in _trainer_base_models(req.trainer_id):
+        raise HTTPException(400, "Unsupported base model for selected trainer")
     if req.learning_rate <= 0 or req.learning_rate > 1:
         raise HTTPException(400, "Learning rate must be greater than 0 and at most 1")
     if req.resolution not in (512, 768, 1024, 1328):
@@ -3560,7 +3615,7 @@ def create_train_job(req: TrainJobRequest):
     req.sample_prompts = _clean_sample_prompts(req.sample_prompts) or None
 
     job_id = secrets.token_hex(8)
-    output_name = _safe_name(req.output_name, "qwen_lora")
+    output_name = _safe_name(req.output_name, _trainer_output_fallback(req))
     save_every = _trainer_save_every(req.steps, req.save_every)
     job = {
         "id": job_id,

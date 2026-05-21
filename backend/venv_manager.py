@@ -343,6 +343,23 @@ def _pip_install(runtime_id: str, packages: list[str], log: Callable[[str], None
         raise RuntimeError(f"pip install failed for runtime '{runtime_id}'")
 
 
+def _pip_install_optional(runtime_id: str, packages: list[str], log: Callable[[str], None]) -> None:
+    """Install optional packages only when referenced local requirement files exist."""
+    if not packages:
+        return
+    i = 0
+    while i < len(packages):
+        if packages[i] == "-r" and i + 1 < len(packages):
+            req_path = Path(packages[i + 1])
+            if not req_path.exists():
+                log(f"WARN: optional requirements file missing, skipping: {req_path}")
+                return
+            i += 2
+            continue
+        i += 1
+    _pip_install(runtime_id, packages, log)
+
+
 def _verify_imports(runtime_id: str, imports: list[str], log: Callable[[str], None]) -> None:
     """Fail fast if the prepared venv cannot import the runtime's essentials."""
     if not imports:
@@ -383,12 +400,23 @@ def ensure_runtime(spec: dict, log: Callable[[str], None] = print) -> Path:
     if not runtime_id:
         raise ValueError("runtime spec missing 'id'")
 
-    # Step 1: optional git clone (must run before pip so `-e <local>`
-    # references resolve to a real directory).
+    # Step 1: optional git clone(s) (must run before pip so `-e <local>`
+    # references resolve to a real directory). Older profiles use a single
+    # `git` dict; Comfy-style profiles can use a list or `extra_git`.
+    git_entries = []
     git = spec.get("git")
-    if git:
-        log(f"== git: {git.get('repo')}@{git.get('ref', 'main')} ==")
-        _ensure_git_clone(git, log)
+    if isinstance(git, list):
+        git_entries.extend(git)
+    elif git:
+        git_entries.append(git)
+    extra_git = spec.get("extra_git") or []
+    if isinstance(extra_git, dict):
+        git_entries.append(extra_git)
+    else:
+        git_entries.extend(extra_git)
+    for git_spec in git_entries:
+        log(f"== git: {git_spec.get('repo')}@{git_spec.get('ref', 'main')} ==")
+        _ensure_git_clone(git_spec, log)
 
     # Step 2: venv. We always recreate when the venv isn't already ready
     # (caller checks is_runtime_ready before invoking ensure_runtime when
@@ -401,6 +429,11 @@ def ensure_runtime(spec: dict, log: Callable[[str], None] = print) -> Path:
     if pip_packages:
         log(f"== pip: {len(pip_packages)} package(s) ==")
         _pip_install(runtime_id, pip_packages, log)
+
+    optional_pip_packages = spec.get("pip_optional") or []
+    if optional_pip_packages:
+        log(f"== optional pip: {len(optional_pip_packages)} package(s) ==")
+        _pip_install_optional(runtime_id, optional_pip_packages, log)
 
     verify_imports = spec.get("verify_imports") or []
     if verify_imports:

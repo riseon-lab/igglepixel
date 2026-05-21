@@ -5111,7 +5111,8 @@ async function loadTrainers() {
 }
 
 function activeTrainer() {
-  return state.trainers.find(t => t.id === 'qwen-character-lora') || state.trainers[0] || null;
+  const wanted = trainerWizardCfg?.trainerId || 'qwen-character-lora';
+  return state.trainers.find(t => t.id === wanted) || state.trainers.find(t => t.id === 'qwen-character-lora') || state.trainers[0] || null;
 }
 
 // ── Trainer wizard (Phase 1) ────────────────────────────────────────────
@@ -5143,6 +5144,7 @@ let trainerCuratePendingSaves = 0;           // caption/exclude writes still in 
 // Advanced knobs are written into the backend job manifest and trainer wrapper
 // environment so the generated command and real training run stay aligned.
 const trainerWizardCfg = {
+  trainerId: 'qwen-character-lora',
   trigger:   'A woman named Kerry',
   base:      'Qwen/Qwen-Image-2512',
   steps:     3000,
@@ -5828,6 +5830,7 @@ function bindTrainerConfigure() {
     card.addEventListener('click', () => {
       const id = card.dataset.base;
       trainerWizardCfg.base = id;
+      trainerWizardCfg.trainerId = card.dataset.trainer || 'qwen-character-lora';
       $$('#cfgBaseGrid .base-card').forEach(c => c.classList.toggle('selected', c === card));
       renderTrainerConfigureSummary();
     });
@@ -6854,7 +6857,7 @@ function trainerPayload() {
   const name = ($('#trainerRunName')?.value || '').trim();
   const safeName = name.replace(/[^A-Za-z0-9._-]+/g, '_').replace(/^_+|_+$/g, '') || 'kerry_qwen_lora';
   return {
-    trainer_id: 'qwen-character-lora',
+    trainer_id: trainerWizardCfg.trainerId || 'qwen-character-lora',
     dataset_path: currentTrainerDatasetPath(),
     output_name: safeName,
     trigger_phrase: trainerWizardCfg.trigger || 'A woman named Kerry',
@@ -8311,7 +8314,22 @@ function mockTrainers() {
         ],
         model_families: [
           { id: 'qwen', label: 'Qwen Image', status: 'live', description: 'Character LoRA training is wired today, including checkpoints and library import.' },
-          { id: 'flux', label: 'Flux family', status: 'next', description: 'Next target for the same guided dataset, config, and monitor workflow.' },
+          { id: 'flux', label: 'Flux Klein', status: 'beta', description: 'Flux.2 Klein 9B turbo/base LoRA training uses the same guided dataset, config, and monitor workflow.' },
+          { id: 'z-image', label: 'Z Image', status: 'planned', description: 'Planned after Flux once the wrapper and validation path are proven.' },
+        ],
+      },
+      {
+        id: 'flux-klein-character-lora',
+        name: 'Flux Klein Character LoRA',
+        configured: true,
+        command_env: 'IGGLEPIXEL_FLUX_LORA_TRAIN_CMD',
+        base_models: [
+          { id: 'black-forest-labs/FLUX.2-klein-9B', label: 'FLUX.2 [klein] 9B Turbo' },
+          { id: 'black-forest-labs/FLUX.2-klein-base-9B', label: 'FLUX.2 [klein] 9B Base' },
+        ],
+        model_families: [
+          { id: 'qwen', label: 'Qwen Image', status: 'live', description: 'Character LoRA training is wired today, including checkpoints and library import.' },
+          { id: 'flux', label: 'Flux Klein', status: 'beta', description: 'Flux.2 Klein 9B turbo/base LoRA training uses the same guided dataset, config, and monitor workflow.' },
           { id: 'z-image', label: 'Z Image', status: 'planned', description: 'Planned after Flux once the wrapper and validation path are proven.' },
         ],
       },
