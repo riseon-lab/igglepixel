@@ -581,6 +581,7 @@ class ComfyLTXRunner(RunnerBase):
 
     def _node_inputs(self, node: dict, links: dict[int, list], reachable: set[int]) -> dict:
         out = {}
+        class_type = str(node.get("type") or "")
         widget_names = []
         for inp in node.get("inputs") or []:
             name = inp.get("name")
@@ -598,13 +599,30 @@ class ComfyLTXRunner(RunnerBase):
                 widget_names.append(widget_name)
 
         widgets = list(node.get("widgets_values") or [])
+        if class_type == "ResizeImageMaskNode":
+            resize_type = str(widgets[0]) if len(widgets) > 0 else "scale longer dimension"
+            size_value = widgets[1] if len(widgets) > 1 else 1536
+            scale_method = widgets[2] if len(widgets) > 2 else "lanczos"
+            out["resize_type"] = resize_type
+            resize_key = {
+                "scale longer dimension": "resize_type.longer_size",
+                "scale shorter dimension": "resize_type.shorter_size",
+                "scale width": "resize_type.width",
+                "scale height": "resize_type.height",
+                "scale total pixels": "resize_type.megapixels",
+                "scale by": "resize_type.multiplier",
+            }.get(resize_type.lower())
+            if resize_key:
+                out[resize_key] = size_value
+            out["scale_method"] = scale_method
+            return out
+
         consumed = 0
         for name in widget_names:
             if consumed < len(widgets) and name not in out:
                 out[name] = widgets[consumed]
                 consumed += 1
 
-        class_type = str(node.get("type") or "")
         schema_inputs = self._schema_input_names(class_type)
         for name in schema_inputs:
             if consumed >= len(widgets):
