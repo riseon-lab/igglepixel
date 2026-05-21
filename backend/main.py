@@ -783,6 +783,131 @@ def get_gpu():
     return detect_gpu()
 
 
+# ── App repo maintenance ────────────────────────────────────────────────
+def _git_capture(args: list[str], timeout: int = 90) -> dict:
+    proc = subprocess.run(
+        ["git", *args],
+        cwd=str(BASE_DIR),
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+    )
+    return {
+        "returncode": proc.returncode,
+        "stdout": (proc.stdout or "")[-6000:],
+        "stderr": (proc.stderr or "")[-6000:],
+    }
+
+
+def _git_value(args: list[str]) -> str:
+    res = _git_capture(args, timeout=20)
+    if res["returncode"] != 0:
+        raise RuntimeError((res["stderr"] or res["stdout"] or "git command failed").strip())
+    return (res["stdout"] or "").strip()
+
+
+def _repo_status_payload() -> dict:
+    if not (BASE_DIR / ".git").exists():
+        return {
+            "available": False,
+            "status": "unavailable",
+            "message": "This app directory is not a git checkout.",
+        }
+    try:
+        branch = _git_value(["rev-parse", "--abbrev-ref", "HEAD"])
+        commit = _git_value(["rev-parse", "--short", "HEAD"])
+        dirty = _git_capture(["status", "--porcelain"], timeout=20)
+    except Exception as e:
+        return {
+            "available": False,
+            "status": "error",
+            "message": f"Could not inspect git repo: {e}",
+        }
+    dirty_lines = [line for line in (dirty.get("stdout") or "").splitlines() if line.strip()]
+    return {
+        "available": True,
+        "status": "dirty" if dirty_lines else "clean",
+        "branch": branch,
+        "commit": commit,
+        "dirty": bool(dirty_lines),
+        "dirty_lines": dirty_lines[:80],
+        "message": "Local changes present" if dirty_lines else "Repo checkout is clean",
+    }
+
+
+@app.get("/api/app/repo-status")
+def app_repo_status():
+    _require_unlocked()
+    return _repo_status_payload()
+
+
+@app.post("/api/app/refresh-repo")
+def app_refresh_repo():
+    """Pull the latest app code into the current checkout.
+
+    This intentionally refuses to run on a dirty tree. Pods should normally
+    be clean, and skipping the pull is safer than masking generated/local
+    changes with a merge attempt.
+    """
+    _require_unlocked()
+    status = _repo_status_payload()
+    if not status.get("available"):
+        return status
+    if status.get("dirty"):
+        status["message"] = "Repo has local changes; pull skipped."
+        return status
+
+    branch = status.get("branch") or "main"
+    if branch == "HEAD":
+        branch = os.environ.get("FORGE_BRANCH", "main")
+    before = status.get("commit") or ""
+
+    try:
+        pull = _git_capture(["pull", "--ff-only", "origin", branch], timeout=180)
+        after = _git_value(["rev-parse", "--short", "HEAD"])
+    except subprocess.TimeoutExpired:
+        return {
+            "available": True,
+            "status": "error",
+            "branch": branch,
+            "before": before,
+            "message": "git pull timed out.",
+        }
+    except Exception as e:
+        return {
+            "available": True,
+            "status": "error",
+            "branch": branch,
+            "before": before,
+            "message": f"git pull failed: {e}",
+        }
+
+    if pull["returncode"] != 0:
+        return {
+            "available": True,
+            "status": "error",
+            "branch": branch,
+            "before": before,
+            "after": after,
+            "stdout": pull["stdout"],
+            "stderr": pull["stderr"],
+            "message": "git pull failed.",
+        }
+
+    changed = bool(before and after and before != after)
+    return {
+        "available": True,
+        "status": "updated" if changed else "up_to_date",
+        "branch": branch,
+        "before": before,
+        "after": after,
+        "changed": changed,
+        "stdout": pull["stdout"],
+        "stderr": pull["stderr"],
+        "message": "Pulled latest code." if changed else "Already up to date.",
+    }
+
+
 # ── Moderation status + runtime override ────────────────────────────────
 class ModerationOverrideRequest(BaseModel):
     token: str

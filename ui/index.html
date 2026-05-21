@@ -1462,6 +1462,24 @@
           </div>
         </div>
         <div class="card settings-full" style="padding:14px">
+          <div class="section-title" style="margin:0 0 10px;border:0;padding:0">App updates</div>
+          <div style="display:flex;flex-direction:column;gap:10px">
+            <div class="field" style="margin:0">
+              <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+                <span class="status-pill" id="repoStatusPill" data-state="loading">Repo: checking…</span>
+                <span class="px-mute settings-inline-note" id="repoRefreshStatus"></span>
+              </div>
+            </div>
+            <div class="px-mute settings-body-copy">
+              Pulls the latest code from the configured Git remote on this pod. UI files are available after a browser refresh; backend Python changes still need a backend process restart to be loaded.
+            </div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap">
+              <button class="btn" id="repoRefreshBtn">Pull latest from repo</button>
+            </div>
+            <pre id="repoRefreshLog" class="settings-debug" style="display:none;max-height:220px">Waiting…</pre>
+          </div>
+        </div>
+        <div class="card settings-full" style="padding:14px">
           <div class="section-title" style="margin:0 0 10px;border:0;padding:0">GPU</div>
           <pre id="gpuDebug" class="settings-debug">Loading…</pre>
         </div>

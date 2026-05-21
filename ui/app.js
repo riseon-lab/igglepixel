@@ -607,6 +607,8 @@ const api = {
   modStatus:     ()      => json(apiCall('/api/moderation/status')),
   modOverride:   (token) => json(apiCall('/api/moderation/override', jsonBody({ token }))),
   modClear:      ()      => json(apiCall('/api/moderation/override', { method: 'DELETE' })),
+  repoStatus:    ()      => json(apiCall('/api/app/repo-status')),
+  repoRefresh:   ()      => json(apiCall('/api/app/refresh-repo', { method: 'POST', timeoutMs: 240000 })),
 };
 
 // ── Boot ─────────────────────────────────────────────────────────────────
@@ -1076,6 +1078,7 @@ function bindShell() {
 
   $('#moderationDisableBtn')?.addEventListener('click', disableModeration);
   $('#moderationEnableBtn')?.addEventListener('click', enableModeration);
+  $('#repoRefreshBtn')?.addEventListener('click', refreshRepoFromSettings);
 
   $('#uploadBtn').addEventListener('click', () => $('#uploadInput').click());
   $('#uploadZone').addEventListener('click', () => $('#uploadInput').click());
@@ -1167,6 +1170,74 @@ async function enableModeration() {
   }
 }
 
+function renderRepoUpdateResult(res) {
+  const pill = $('#repoStatusPill');
+  const line = $('#repoRefreshStatus');
+  const log = $('#repoRefreshLog');
+  if (!pill || !line || !log) return;
+
+  const branch = res.branch && res.branch !== 'HEAD' ? res.branch : 'repo';
+  const commit = res.after || res.commit || res.before || '';
+  const shortCommit = commit ? ` @ ${commit}` : '';
+  const status = res.status || 'unknown';
+  const state = status === 'updated' || status === 'up_to_date' || status === 'clean' ? 'on'
+    : status === 'dirty' || status === 'error' ? 'off'
+      : 'unknown';
+
+  pill.dataset.state = state;
+  pill.textContent = `Repo: ${branch}${shortCommit}`;
+  line.textContent = res.message || '';
+
+  const chunks = [];
+  if (res.before || res.after) chunks.push(`commit: ${res.before || '?'} -> ${res.after || '?'}`);
+  if (res.dirty_lines?.length) chunks.push(`local changes:\n${res.dirty_lines.join('\n')}`);
+  if (res.stdout) chunks.push(res.stdout.trim());
+  if (res.stderr) chunks.push(res.stderr.trim());
+  log.textContent = chunks.filter(Boolean).join('\n\n') || (res.message || 'No repo output yet.');
+  log.style.display = chunks.length ? '' : 'none';
+}
+
+async function renderRepoUpdateCard() {
+  const pill = $('#repoStatusPill');
+  const line = $('#repoRefreshStatus');
+  if (!pill || !line) return;
+  pill.dataset.state = 'loading';
+  pill.textContent = 'Repo: checking…';
+  line.textContent = '';
+  try {
+    renderRepoUpdateResult(await api.repoStatus());
+  } catch (e) {
+    pill.dataset.state = 'unknown';
+    pill.textContent = 'Repo: status unavailable';
+    line.textContent = e.message || '';
+  }
+}
+
+async function refreshRepoFromSettings() {
+  const btn = $('#repoRefreshBtn');
+  const line = $('#repoRefreshStatus');
+  if (btn) btn.disabled = true;
+  if (line) line.textContent = 'Pulling latest code…';
+  try {
+    const res = await api.repoRefresh();
+    renderRepoUpdateResult(res);
+    if (res.status === 'updated') {
+      toast('Pulled latest code. Refresh the browser to pick up UI changes.', 'success');
+    } else if (res.status === 'up_to_date') {
+      toast('Repo already up to date', 'info');
+    } else if (res.status === 'dirty') {
+      toast('Repo has local changes; pull skipped', 'error');
+    } else {
+      toast(res.message || 'Repo refresh did not complete', 'error');
+    }
+  } catch (e) {
+    if (line) line.textContent = e.message || 'Repo refresh failed';
+    toast(`Repo refresh failed: ${e.message || 'unknown'}`, 'error');
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
 function saveHFToken(value) {
   const token = (value || '').trim();
   state.settings.hf_token = token;
@@ -1220,7 +1291,10 @@ function switchView(name, push = true) {
     loadTrainers();
     pokeTrainerPoll();
   }
-  if (name === 'settings') renderModerationCard();
+  if (name === 'settings') {
+    renderModerationCard();
+    renderRepoUpdateCard();
+  }
   if (name === 'downloads') {
     // Make the queue panel visible (or render the empty state) and wake the
     // poller so freshly-queued jobs appear right away when the user lands
