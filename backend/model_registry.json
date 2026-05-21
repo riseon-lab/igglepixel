@@ -70,6 +70,12 @@
           "ref": "master",
           "dest": "/workspace/repos/ComfyUI/custom_nodes/ComfyUI-LTXVideo",
           "required_paths": ["__init__.py", "latents.py", "requirements.txt", "example_workflows/2.3"]
+        },
+        {
+          "repo": "https://github.com/ClownsharkBatwing/RES4LYF.git",
+          "ref": "main",
+          "dest": "/workspace/repos/ComfyUI/custom_nodes/RES4LYF",
+          "required_paths": ["__init__.py", "beta/__init__.py", "requirements.txt"]
         }
       ],
       "pip": [
@@ -83,6 +89,8 @@
         "fastapi",
         "uvicorn[standard]",
         "pydantic",
+        "matplotlib",
+        "pywavelets",
         "imageio",
         "imageio-ffmpeg",
         "av",

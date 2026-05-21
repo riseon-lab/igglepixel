@@ -74,6 +74,7 @@ LATENT_UPSCALER = {
     "filename": "ltx-2.3-spatial-upscaler-x2-1.0.safetensors",
 }
 REQUIRED_LTX_NODE_TYPES = {
+    "ClownSampler_Beta",
     "LTXVImgToVideoConditionOnly",
     "LTXVPreprocess",
     "LTXVTiledVAEDecode",
