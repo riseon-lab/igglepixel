@@ -86,6 +86,30 @@ def pipeline_bnb_quantization_config(quant: str, torch, *, components_to_quantiz
     raise ValueError(f"unsupported bitsandbytes quantization mode: {quant}")
 
 
+def pipeline_torchao_int8_quantization_config(*, components_to_quantize="transformer"):
+    """Return a Diffusers pipeline-level TorchAO int8 config.
+
+    bitsandbytes int8 is useful, but it can fail deep in CUDA stream handling
+    on some pod images. TorchAO's weight-only int8 path avoids bnb entirely
+    and is the preferred Qwen text-to-image INT8 backend.
+    """
+    try:
+        from diffusers import TorchAoConfig
+        from diffusers.quantizers import PipelineQuantizationConfig
+        from torchao.quantization import Int8WeightOnlyConfig
+    except Exception as e:
+        raise RuntimeError(
+            "TorchAO INT8 is not installed. Run the runtime dependency install "
+            "or `python -m pip install 'torchao>=0.15'`, then restart the runner."
+        ) from e
+
+    return PipelineQuantizationConfig(
+        quant_mapping={
+            components_to_quantize: TorchAoConfig(Int8WeightOnlyConfig()),
+        }
+    )
+
+
 def seed_torch_for_pipeline(torch, seed: int) -> None:
     """Seed PyTorch without passing an explicit generator to Diffusers.
 

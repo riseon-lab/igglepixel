@@ -46,6 +46,11 @@
 #   from the int8 functional path because they call into a CUDA stream
 #   context that doesn't exist on sm_120. BF16 doesn't go through bnb so it
 #   masks the issue — only int8/NF4 paths break.
+#
+# Why torchao>=0.15:
+#   Qwen text-to-image INT8 uses Diffusers' TorchAO quantization backend by
+#   default. It avoids bitsandbytes CUDA stream failures seen on some L40S pod
+#   images while preserving the lower-VRAM INT8 path.
 
 diffusers>=0.38.0
 peft
@@ -55,3 +60,4 @@ imageio-ffmpeg
 uv
 virtualenv
 bitsandbytes>=0.46
+torchao>=0.15

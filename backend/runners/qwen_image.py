@@ -15,7 +15,11 @@ from __future__ import annotations
 from typing import Optional
 
 from .base import Runner as RunnerBase, WORKSPACE, save_latent_preview
-from .diffusers_quant import pipeline_bnb_quantization_config, seed_torch_for_pipeline
+from .diffusers_quant import (
+    pipeline_bnb_quantization_config,
+    pipeline_torchao_int8_quantization_config,
+    seed_torch_for_pipeline,
+)
 
 
 class Runner(RunnerBase):
@@ -45,9 +49,17 @@ class Runner(RunnerBase):
         # quantised model on GPU during from_pretrained, so we skip the
         # post-load .to("cuda") / offload dance below for int8 and nf4.
         kwargs = {"torch_dtype": torch.bfloat16, "token": token}
-        if quant in ("int8", "nf4"):
+        if quant == "int8":
+            backend = os.environ.get("FORGE_QWEN_INT8_BACKEND", "torchao").strip().lower()
+            if backend in ("torchao", "ao"):
+                kwargs["quantization_config"] = pipeline_torchao_int8_quantization_config()
+                print("[runner] loading QwenImagePipeline with int8 TorchAO quantisation…", flush=True)
+            else:
+                kwargs["quantization_config"] = pipeline_bnb_quantization_config(quant, torch)
+                print("[runner] loading QwenImagePipeline with int8 bitsandbytes quantisation…", flush=True)
+        elif quant == "nf4":
             kwargs["quantization_config"] = pipeline_bnb_quantization_config(quant, torch)
-            print(f"[runner] loading QwenImagePipeline with {quant} quantisation…", flush=True)
+            print("[runner] loading QwenImagePipeline with nf4 bitsandbytes quantisation…", flush=True)
         else:
             print("[runner] loading QwenImagePipeline (bf16)…", flush=True)
 
