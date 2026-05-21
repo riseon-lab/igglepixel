@@ -73,6 +73,17 @@ LATENT_UPSCALER = {
     "repo": "Lightricks/LTX-2.3",
     "filename": "ltx-2.3-spatial-upscaler-x2-1.0.safetensors",
 }
+REQUIRED_LTX_NODE_TYPES = {
+    "LTXVImgToVideoConditionOnly",
+    "LTXVPreprocess",
+    "LTXVTiledVAEDecode",
+    "LTXVAudioVAEDecode",
+    "LTXVConditioning",
+    "LTXVScheduler",
+    "MultimodalGuider",
+    "GuiderParameters",
+    "LTXFloatToInt",
+}
 
 
 def _json_request(method: str, url: str, payload: Optional[dict] = None, timeout: float = 30) -> dict:
@@ -135,6 +146,7 @@ class ComfyLTXRunner(RunnerBase):
         self._comfy_url = ""
         self._comfy_proc: Optional[subprocess.Popen] = None
         self._object_info: dict = {}
+        self._comfy_log_tail: list[str] = []
         self._cancel = False
 
     def load(self) -> None:
@@ -143,6 +155,7 @@ class ComfyLTXRunner(RunnerBase):
         self._prepare_variant(VARIANTS["distilled-fp8"])
         self._comfy_url = self._start_or_reuse_comfy()
         self._object_info = self._get_json("/object_info", timeout=20)
+        self._validate_ltx_nodes()
         print(f"[runner] Comfy LTX ready at {self._comfy_url}", flush=True)
 
     def generate(self, params: dict, loras: Optional[list] = None) -> dict:
@@ -158,6 +171,7 @@ class ComfyLTXRunner(RunnerBase):
         # object_info asks Comfy to rebuild its current node schemas/choices
         # before prompt validation, which avoids stale checkpoint/LoRA lists.
         self._object_info = self._get_json("/object_info", timeout=20)
+        self._validate_ltx_nodes()
 
         width = _round_multiple(int(params.get("width", 832)))
         height = _round_multiple(int(params.get("height", 480)))
@@ -259,6 +273,7 @@ class ComfyLTXRunner(RunnerBase):
                     line = self._read_available_line()
                     if line is None:
                         break
+                    self._remember_comfy_log(line)
                     tail.append(line.rstrip())
                     tail = tail[-20:]
                     print("[comfy] " + line.rstrip(), flush=True)
@@ -284,6 +299,18 @@ class ComfyLTXRunner(RunnerBase):
             return None
         return self._comfy_proc.stdout.readline()
 
+    def _remember_comfy_log(self, line: str) -> None:
+        self._comfy_log_tail.append(line.rstrip())
+        self._comfy_log_tail = self._comfy_log_tail[-60:]
+
+    def _drain_comfy_logs(self) -> None:
+        while True:
+            line = self._read_available_line()
+            if line is None:
+                break
+            self._remember_comfy_log(line)
+            print("[comfy] " + line.rstrip(), flush=True)
+
     @staticmethod
     def _probe_comfy(url: str) -> None:
         _json_request("GET", f"{url}/system_stats", timeout=5)
@@ -293,6 +320,30 @@ class ComfyLTXRunner(RunnerBase):
 
     def _post_json(self, path: str, payload: dict, timeout: float = 30) -> dict:
         return _json_request("POST", self._comfy_url + path, payload, timeout=timeout)
+
+    def _validate_ltx_nodes(self) -> None:
+        missing = sorted(REQUIRED_LTX_NODE_TYPES.difference(self._object_info.keys()))
+        if not missing:
+            return
+        self._drain_comfy_logs()
+        install_hint = (
+            f"Expected Lightricks ComfyUI-LTXVideo under {COMFY_LTX_NODES}. "
+            "Install or reinstall the ComfyUI LTX runtime profile, then stop and relaunch the LTX Comfy model."
+        )
+        if os.environ.get("FORGE_COMFY_URL", "").strip():
+            install_hint = (
+                "The external ComfyUI server in FORGE_COMFY_URL is missing the Lightricks "
+                "ComfyUI-LTXVideo custom nodes. Install ComfyUI-LTXVideo into that ComfyUI instance "
+                "and restart it."
+            )
+        exists = COMFY_LTX_NODES.exists()
+        tail = "\n".join(self._comfy_log_tail[-20:])
+        raise RuntimeError(
+            "ComfyUI started without required LTXVideo custom nodes: "
+            + ", ".join(missing)
+            + f". Custom node folder exists: {exists}. {install_hint}"
+            + (f"\nComfy log tail:\n{tail}" if tail else "")
+        )
 
     def _queue_prompt(self, prompt: dict, workflow: dict) -> str:
         client_id = str(uuid.uuid4())

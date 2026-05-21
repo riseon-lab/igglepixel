@@ -69,7 +69,7 @@
           "repo": "https://github.com/Lightricks/ComfyUI-LTXVideo.git",
           "ref": "master",
           "dest": "/workspace/repos/ComfyUI/custom_nodes/ComfyUI-LTXVideo",
-          "required_paths": ["example_workflows/2.3"]
+          "required_paths": ["__init__.py", "latents.py", "requirements.txt", "example_workflows/2.3"]
         }
       ],
       "pip": [
@@ -97,9 +97,15 @@
         "PIL",
         "safetensors",
         "huggingface_hub",
+        "diffusers",
+        "einops",
         "imageio",
         "av",
-        "cv2"
+        "cv2",
+        "kornia",
+        "ninja",
+        "timm",
+        "transformers"
       ]
     },
     "pocket-tts": {
