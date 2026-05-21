@@ -133,6 +133,11 @@ def _frame_count(duration: float, fps: int) -> int:
     return frames
 
 
+def _estimate_runtime_seconds(width: int, height: int, frames: int, steps: int) -> float:
+    px_scale = max(0.5, (width * height) / (832 * 480))
+    return max(90.0, min(900.0, float(frames) * float(steps) * px_scale * 0.45))
+
+
 class ComfyLTXRunner(RunnerBase):
     model_id = "ltx23-comfy-i2v"
     model_name = "LTX-2.3 Comfy"
@@ -209,7 +214,8 @@ class ComfyLTXRunner(RunnerBase):
             f"(mode={self.mode}, variant={variant_id}, {width}x{height}, frames={frames}, steps={steps})",
             flush=True,
         )
-        outputs = self._wait_for_outputs(prompt_id)
+        estimate_seconds = _estimate_runtime_seconds(width, height, frames, steps)
+        outputs = self._wait_for_outputs(prompt_id, estimate_seconds=estimate_seconds)
         print("[gen] step 100/100", flush=True)
         out_path = self._import_first_video(outputs, seed)
         return self.asset_response([out_path], meta={
@@ -359,14 +365,15 @@ class ComfyLTXRunner(RunnerBase):
             raise RuntimeError(f"ComfyUI did not return a prompt_id: {response}")
         return prompt_id
 
-    def _wait_for_outputs(self, prompt_id: str) -> dict:
+    def _wait_for_outputs(self, prompt_id: str, estimate_seconds: float) -> dict:
         deadline = time.time() + float(os.environ.get("FORGE_COMFY_TIMEOUT_SECONDS", "1800"))
+        started_at = time.time()
         last_status = ""
         last_progress = -1
         while time.time() < deadline:
             if self._cancel:
                 raise RuntimeError("Generation cancelled")
-            progress = self._comfy_progress(prompt_id)
+            progress = self._comfy_progress(prompt_id, started_at=started_at, estimate_seconds=estimate_seconds)
             if progress is not None and progress != last_progress:
                 last_progress = progress
                 print(f"[gen] step {progress}/100", flush=True)
@@ -386,7 +393,7 @@ class ComfyLTXRunner(RunnerBase):
             time.sleep(1.5)
         raise RuntimeError("Timed out waiting for ComfyUI generation to finish")
 
-    def _comfy_progress(self, prompt_id: str) -> Optional[int]:
+    def _comfy_progress(self, prompt_id: str, *, started_at: float, estimate_seconds: float) -> Optional[int]:
         try:
             queue = self._get_json("/queue", timeout=5)
         except Exception:
@@ -403,7 +410,9 @@ class ComfyLTXRunner(RunnerBase):
             extra = item[3] if isinstance(item[3], dict) else {}
             executing = extra.get("current_node")
             if executing is None:
-                return 6
+                elapsed = max(0.0, time.time() - started_at)
+                fallback = 6 + round(min(1.0, elapsed / max(1.0, estimate_seconds)) * 86)
+                return max(6, min(92, fallback))
             node_ids = sorted(api_prompt.keys(), key=lambda x: int(x) if str(x).isdigit() else str(x))
             try:
                 idx = node_ids.index(str(executing)) + 1
