@@ -210,6 +210,7 @@ class ComfyLTXRunner(RunnerBase):
             flush=True,
         )
         outputs = self._wait_for_outputs(prompt_id)
+        print("[gen] step 100/100", flush=True)
         out_path = self._import_first_video(outputs, seed)
         return self.asset_response([out_path], meta={
             "model": self.model_id,
@@ -361,9 +362,14 @@ class ComfyLTXRunner(RunnerBase):
     def _wait_for_outputs(self, prompt_id: str) -> dict:
         deadline = time.time() + float(os.environ.get("FORGE_COMFY_TIMEOUT_SECONDS", "1800"))
         last_status = ""
+        last_progress = -1
         while time.time() < deadline:
             if self._cancel:
                 raise RuntimeError("Generation cancelled")
+            progress = self._comfy_progress(prompt_id)
+            if progress is not None and progress != last_progress:
+                last_progress = progress
+                print(f"[gen] step {progress}/100", flush=True)
             hist = self._get_json(f"/history/{prompt_id}", timeout=20)
             item = hist.get(prompt_id)
             if item:
@@ -379,6 +385,32 @@ class ComfyLTXRunner(RunnerBase):
                     return outputs
             time.sleep(1.5)
         raise RuntimeError("Timed out waiting for ComfyUI generation to finish")
+
+    def _comfy_progress(self, prompt_id: str) -> Optional[int]:
+        try:
+            queue = self._get_json("/queue", timeout=5)
+        except Exception:
+            return None
+        running = queue.get("queue_running") or []
+        pending = queue.get("queue_pending") or []
+        if any(isinstance(item, list) and item and item[1] == prompt_id for item in pending):
+            return 3
+        for item in running:
+            if not (isinstance(item, list) and len(item) > 3 and item[1] == prompt_id):
+                continue
+            api_prompt = item[2] if isinstance(item[2], dict) else {}
+            node_count = max(1, len(api_prompt))
+            extra = item[3] if isinstance(item[3], dict) else {}
+            executing = extra.get("current_node")
+            if executing is None:
+                return 6
+            node_ids = sorted(api_prompt.keys(), key=lambda x: int(x) if str(x).isdigit() else str(x))
+            try:
+                idx = node_ids.index(str(executing)) + 1
+            except ValueError:
+                idx = 1
+            return max(6, min(96, round((idx / node_count) * 96)))
+        return None
 
     def _import_first_video(self, outputs: dict, seed: int) -> Path:
         candidates = []
