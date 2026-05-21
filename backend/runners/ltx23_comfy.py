@@ -82,8 +82,17 @@ def _json_request(method: str, url: str, payload: Optional[dict] = None, timeout
         data = json.dumps(payload).encode("utf-8")
         headers["Content-Type"] = "application/json"
     req = urllib.request.Request(url, data=data, headers=headers, method=method)
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        body = resp.read()
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            body = resp.read()
+    except urllib.error.HTTPError as e:
+        body = e.read().decode("utf-8", errors="replace")
+        try:
+            parsed = json.loads(body)
+            detail = json.dumps(parsed, ensure_ascii=False)[:4000]
+        except Exception:
+            detail = body[:4000]
+        raise RuntimeError(f"ComfyUI {method} {url} failed with HTTP {e.code}: {detail}") from e
     if not body:
         return {}
     return json.loads(body.decode("utf-8"))
@@ -145,6 +154,10 @@ class ComfyLTXRunner(RunnerBase):
         variant_id = str(params.get("variant") or os.environ.get("FORGE_VARIANT") or "distilled-fp8")
         variant = VARIANTS.get(variant_id, VARIANTS["distilled-fp8"])
         self._prepare_variant(variant)
+        # Variant files can be linked after Comfy has started. Refreshing
+        # object_info asks Comfy to rebuild its current node schemas/choices
+        # before prompt validation, which avoids stale checkpoint/LoRA lists.
+        self._object_info = self._get_json("/object_info", timeout=20)
 
         width = _round_multiple(int(params.get("width", 832)))
         height = _round_multiple(int(params.get("height", 480)))
@@ -433,6 +446,12 @@ class ComfyLTXRunner(RunnerBase):
                 widgets[0] = seed
             elif ntype == "LoadImage" and widgets:
                 widgets[0] = input_name
+            elif ntype == "PrimitiveBoolean" and "bypass_i2v" in lower_title and widgets:
+                widgets[0] = mode != "i2v"
+            elif ntype == "PrimitiveFloat" and "fps" in lower_title and widgets:
+                widgets[0] = fps
+            elif ntype == "PrimitiveInt" and "number of frames" in lower_title and widgets:
+                widgets[0] = frames
             elif ntype == "EmptyLTXVLatentVideo" and len(widgets) >= 3:
                 widgets[0], widgets[1], widgets[2] = width, height, frames
                 if len(widgets) >= 4:
