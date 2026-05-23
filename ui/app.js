@@ -6405,23 +6405,29 @@ function renderDatasetVisionRuntime(payload = {}) {
   const isOllama = provider === 'ollama';
   const managedOllama = isOllama && payload.running;
   const stateName = payload.state || (payload.ready ? 'ready' : payload.running ? 'starting' : 'stopped');
-  const loading = stateName === 'starting' || payload.status === 'starting';
+  const installing = stateName === 'installing' || payload.status === 'installing';
+  const loading = installing || stateName === 'starting' || payload.status === 'starting';
   pill.dataset.state = payload.ready ? 'on' : loading ? 'loading' : stateName === 'exited' ? 'off' : 'unknown';
   pill.textContent = payload.ready
     ? (isOllama ? 'Ollama: ready' : (stateName === 'external' ? 'Vision: external ready' : 'Vision: ready'))
-    : loading ? (isOllama ? 'Ollama: checking' : 'Vision: starting')
-      : stateName === 'exited' ? 'Vision: exited'
-        : isOllama ? 'Ollama: stopped' : 'Vision: stopped';
+    : installing ? 'Vision: installing'
+      : loading ? (isOllama ? 'Ollama: checking' : 'Vision: starting')
+        : stateName === 'exited' ? 'Vision: exited'
+          : isOllama ? 'Ollama: stopped' : 'Vision: stopped';
   if (payload.ready) {
     status.textContent = isOllama
       ? managedOllama
         ? `${payload.model || 'Ollama vision model'} is reachable. Stop will shut down the IgglePixel-started Ollama server.`
         : `${payload.model || 'Ollama vision model'} is reachable. Unload releases it from memory without closing Ollama.`
       : `${payload.model || 'vision model'} is reachable at ${payload.endpoint || 'endpoint'}.`;
+  } else if (installing) {
+    status.textContent = 'Preparing the vLLM runtime (~5 min, one-time). It will auto-launch when the venv is ready.';
   } else if (loading) {
     status.textContent = isOllama
       ? 'Checking the Ollama server. First caption may still load the model.'
       : 'Starting the pod vision server. First load can take a few minutes.';
+  } else if (payload.error) {
+    status.textContent = payload.error;
   } else if (payload.probe?.error) {
     status.textContent = payload.probe.error;
   } else if (payload.returncode != null) {
@@ -6512,9 +6518,16 @@ function pollDatasetVisionRuntime() {
   clearTimeout(state.datasetVisionPoll);
   state.datasetVisionPoll = setTimeout(async () => {
     const payload = await checkDatasetVisionRuntime({ quiet: true });
-    if (payload && !payload.ready && (payload.running || payload.state === 'starting')) {
-      pollDatasetVisionRuntime();
-    }
+    // Keep polling through `installing` too — the venv prep auto-chains
+    // into a launcher.launch when it finishes, and we want the UI to
+    // pick that up without the user clicking Start again.
+    const inFlight = payload && !payload.ready && (
+      payload.running ||
+      payload.state === 'starting' ||
+      payload.state === 'installing' ||
+      payload.status === 'installing'
+    );
+    if (inFlight) pollDatasetVisionRuntime();
   }, 2500);
 }
 

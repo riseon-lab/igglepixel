@@ -2507,6 +2507,93 @@ def _run_runtime_install_job(job_id: str, spec: dict) -> None:
         job["finished_at"] = time.time()
 
 
+def _ensure_managed_captioner_install_job(model_entry: dict) -> tuple[str, dict]:
+    """Idempotently start a runtime-install job for the managed Qwen
+    captioner, with a follow-up that auto-launches the runner once the
+    venv is ready. Without this, Dataset Studio's Start button would
+    just throw `needs_runtime` and force the operator to manually
+    discover the runtime install endpoint somewhere else in the UI —
+    every other runner gets prepped automatically, this one shouldn't
+    be a special case."""
+    runtime = model_entry.get("runtime") or {}
+    runtime_id = runtime.get("id")
+    if not runtime_id:
+        raise HTTPException(500, "Managed captioner has no runtime spec")
+    model_id = model_entry["id"]
+    for existing in runtime_install_jobs.values():
+        if (
+            existing.get("model_id") == model_id
+            and existing.get("runtime") == runtime_id
+            and existing.get("status") in ("queued", "running")
+        ):
+            return existing["id"], existing
+    job_id = secrets.token_urlsafe(12)
+    job = {
+        "id":         job_id,
+        "model_id":   model_id,
+        "runtime":    runtime_id,
+        "status":     "queued",
+        "created_at": time.time(),
+    }
+    runtime_install_jobs[job_id] = job
+    threading.Thread(
+        target=_install_then_launch_managed_captioner,
+        args=(job_id, runtime, model_entry["id"]),
+        daemon=True,
+    ).start()
+    return job_id, job
+
+
+def _install_then_launch_managed_captioner(job_id: str, spec: dict, model_id: str) -> None:
+    """Prepares the runtime profile, then chain-launches the vLLM runner
+    so the operator doesn't have to click Start a second time. Runs on a
+    daemon thread spawned by `_ensure_managed_captioner_install_job`."""
+    _run_runtime_install_job(job_id, spec)
+    job = runtime_install_jobs.get(job_id) or {}
+    if job.get("status") != "done":
+        return
+    try:
+        with open(REGISTRY_PATH, "r") as f:
+            registry = json.load(f)
+        entry = next((m for m in registry.get("models", []) if m.get("id") == model_id), None)
+        if not entry:
+            job["auto_launch_error"] = f"model '{model_id}' missing from registry"
+            return
+        entry = _with_resolved_runtime(registry, entry)
+        hf_token = os.environ.get("HF_TOKEN")
+        loop = asyncio.new_event_loop()
+        try:
+            res = loop.run_until_complete(launcher.launch(entry, loras=[], hf_token=hf_token))
+        finally:
+            loop.close()
+        job["auto_launch"] = res
+    except Exception as e:
+        job["auto_launch_error"] = f"{type(e).__name__}: {e}"
+
+
+def _find_active_install_job(model_id: str) -> Optional[dict]:
+    """Returns the most recent queued/running install job for a model,
+    or None. Used by the vision-runtime status endpoint to surface
+    install progress while the venv is being prepared."""
+    candidates = [
+        j for j in runtime_install_jobs.values()
+        if j.get("model_id") == model_id and j.get("status") in ("queued", "running")
+    ]
+    if not candidates:
+        return None
+    return max(candidates, key=lambda j: j.get("created_at") or 0)
+
+
+def _find_recent_install_job(model_id: str) -> Optional[dict]:
+    """Returns the most recent install job for a model regardless of
+    status — used to surface an `error` state to the UI after a failed
+    install attempt, instead of silently snapping back to `stopped`."""
+    candidates = [j for j in runtime_install_jobs.values() if j.get("model_id") == model_id]
+    if not candidates:
+        return None
+    return max(candidates, key=lambda j: j.get("created_at") or 0)
+
+
 @app.post("/api/runtime/{model_id}/install")
 async def install_runtime(model_id: str):
     """Kick off runtime-profile preparation for a model.
@@ -4032,6 +4119,45 @@ async def vision_runtime_status(
                 "state": state,
             }
         else:
+            # No runner registered yet — surface in-flight install progress
+            # so the UI panel stays informative during the (one-time)
+            # 3-5 minute venv prep. Recently failed installs are also
+            # exposed so the operator sees the failure, not a silent
+            # snap back to "stopped".
+            active_install = _find_active_install_job("qwen25-vl-captioner")
+            if active_install:
+                return {
+                    "managed": True,
+                    "running": False,
+                    "ready": False,
+                    "pid": None,
+                    "returncode": None,
+                    "provider": "openai",
+                    "endpoint": "",
+                    "model": "qwen25-vl-captioner",
+                    "command": f"installing runtime profile {active_install.get('runtime')}",
+                    "log": list(active_install.get("log") or [])[-80:],
+                    "state": "installing",
+                    "install_job_id": active_install["id"],
+                }
+            recent_install = _find_recent_install_job("qwen25-vl-captioner")
+            if recent_install and recent_install.get("status") == "error":
+                err = recent_install.get("error") or "runtime install failed"
+                return {
+                    "managed": True,
+                    "running": False,
+                    "ready": False,
+                    "pid": None,
+                    "returncode": None,
+                    "provider": "openai",
+                    "endpoint": "",
+                    "model": "qwen25-vl-captioner",
+                    "command": f"runtime profile {recent_install.get('runtime')} install failed",
+                    "log": list(recent_install.get("log") or [])[-80:] + [err],
+                    "state": "exited",
+                    "install_job_id": recent_install["id"],
+                    "error": err,
+                }
             return {
                 "managed": True,
                 "running": False,
@@ -4118,6 +4244,17 @@ async def start_vision_runtime(req: TrainerVisionRuntimeRequest):
         hf_token = os.environ.get("HF_TOKEN")
         res = await launcher.launch(model_entry, loras=[], hf_token=hf_token)
         if res.get("status") == "needs_runtime":
+            # Auto-prepare the runtime profile and chain-launch the runner
+            # when it finishes. Without this the operator would have to
+            # discover the runtime-install endpoint and click Start twice.
+            install_job_id, install_job = _ensure_managed_captioner_install_job(model_entry)
+            install_log = list(install_job.get("log") or [])
+            log_lines = [
+                f"Preparing runtime profile '{install_job['runtime']}' (one-time, ~5 min).",
+                "Captioner will auto-launch when the venv is ready — keep this panel open.",
+            ]
+            if install_log:
+                log_lines.extend(install_log[-20:])
             return {
                 "managed": True,
                 "running": False,
@@ -4127,10 +4264,11 @@ async def start_vision_runtime(req: TrainerVisionRuntimeRequest):
                 "provider": "openai",
                 "endpoint": "",
                 "model": "qwen25-vl-captioner",
-                "command": None,
-                "log": [res.get("message", "")],
-                "status": "needs_runtime",
-                "state": "stopped",
+                "command": f"installing runtime profile {install_job['runtime']}",
+                "log": log_lines,
+                "status": "installing",
+                "state": "installing",
+                "install_job_id": install_job_id,
             }
         elif res.get("status") == "error":
             raise HTTPException(500, f"Failed to launch captioner: {res.get('message')}")
