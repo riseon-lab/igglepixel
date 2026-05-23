@@ -1062,11 +1062,7 @@ function bindShell() {
   $('#wsEnhancePrompt')?.addEventListener('click', enhanceWorkspacePrompt);
   $('#wsPromptModeBuilder')?.addEventListener('click', () => setPromptMode('builder'));
   $('#wsPromptModeRaw')?.addEventListener('click', () => setPromptMode('raw'));
-  ['#wsLoraAdd', '#wsLoraAddTop'].forEach(sel => {
-    $(sel)?.addEventListener('click', () => {
-      if (state.selected) openLoraPicker(state.selected);
-    });
-  });
+  bindWorkspaceLoraAddButtons();
   $('#llmSend').addEventListener('click', sendLLMMessage);
   $('#llmPrompt').addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -3885,17 +3881,17 @@ function componentRequirementStatus(modelId, entry) {
 }
 
 function renderWorkspaceLoras(m) {
-  const pane = $('#wsLoraPane');
+  const pane = ensureWorkspaceLoraPane();
   const supported = modelSupportsLora(m);
   if (!pane) return;
-  if (pane) pane.dataset.model = m?.id || '';
-  if (pane) pane.dataset.supported = supported ? 'true' : 'false';
+  pane.dataset.model = m?.id || '';
+  pane.dataset.supported = supported ? 'true' : 'false';
   if (!supported) {
     pane.style.display = 'none';
     return;
   }
   pane.hidden = false;
-  pane.style.removeProperty('display');
+  pane.style.setProperty('display', 'block', 'important');
 
   // Filter bundled LoRAs by applies_to vs the currently resolved variant.
   // Wan I2V Lightning only applies to the 14B variant, so it's hidden when
@@ -3975,8 +3971,47 @@ function renderWorkspaceLoras(m) {
       : `<div class="lora-empty-note">No LoRAs assigned yet. Use Add to attach a downloaded LoRA to this model.</div>`);
 
   $('#wsLoraCount').textContent = `${defaults.length + assigned.length}`;
+  bindWorkspaceLoraAddButtons(m);
 
   bindLoraCards(m);
+}
+
+function ensureWorkspaceLoraPane() {
+  let pane = $('#wsLoraPane');
+  if (!pane) {
+    pane = document.createElement('div');
+    pane.className = 'ws-section lora-pane';
+    pane.id = 'wsLoraPane';
+    pane.innerHTML = `
+      <div class="ws-section-title lora-title">
+        <span>LoRAs <span class="meta" id="wsLoraCount">0</span></span>
+        <button class="lora-title-add" id="wsLoraAddTop" type="button">+ Add</button>
+      </div>
+      <div class="lora-group" id="wsLoraDefaults" style="display:none">
+        <div class="lora-group-head">Bundled with model</div>
+      </div>
+      <div class="lora-group" id="wsLoraAssigned">
+        <div class="lora-group-head">Assigned to this model</div>
+      </div>
+      <div class="lora-add" id="wsLoraAdd">+ Add LoRA from library</div>`;
+  }
+
+  const authSection = $('#wsHFToken')?.closest('.ws-section');
+  if (authSection && pane.nextElementSibling !== authSection) {
+    authSection.parentNode.insertBefore(pane, authSection);
+  }
+  return pane;
+}
+
+function bindWorkspaceLoraAddButtons(model = state.selected) {
+  ['#wsLoraAdd', '#wsLoraAddTop'].forEach(sel => {
+    const btn = $(sel);
+    if (!btn) return;
+    btn.onclick = () => {
+      const m = model || state.selected;
+      if (m) openLoraPicker(m);
+    };
+  });
 }
 
 function loraDetailedHtml(modelId, key, opts = {}) {
