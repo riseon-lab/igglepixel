@@ -3651,13 +3651,46 @@ def _vision_runtime_command(req: TrainerVisionRuntimeRequest) -> list[str]:
     )
 
 
+def _ollama_binary_candidates() -> list[str]:
+    candidates: list[str] = []
+    for value in (
+        os.environ.get("IGGLEPIXEL_OLLAMA_BIN"),
+        shutil.which("ollama"),
+        "/opt/homebrew/bin/ollama",
+        "/usr/local/bin/ollama",
+        "/usr/bin/ollama",
+        "/bin/ollama",
+        "/Applications/Ollama.app/Contents/Resources/ollama",
+    ):
+        if value and value not in candidates:
+            candidates.append(value)
+    return candidates
+
+
+def _resolve_ollama_binary() -> Optional[str]:
+    for candidate in _ollama_binary_candidates():
+        resolved = shutil.which(candidate) if os.sep not in candidate else candidate
+        if resolved and Path(resolved).exists() and os.access(resolved, os.X_OK):
+            return resolved
+    return None
+
+
 def _ollama_runtime_command(req: TrainerVisionRuntimeRequest) -> list[str]:
     host, port = _vision_runtime_host_port(req.endpoint)
     raw = (req.command or os.environ.get("IGGLEPIXEL_OLLAMA_SERVER_CMD") or "").strip()
     if raw:
         rendered = raw.format(model=req.model, endpoint=req.endpoint, host=host, port=port)
         return shlex.split(rendered)
-    return ["ollama", "serve"]
+    ollama_bin = _resolve_ollama_binary()
+    if not ollama_bin:
+        checked = ", ".join(_ollama_binary_candidates()) or "none"
+        raise HTTPException(
+            400,
+            "Ollama is not installed on this backend host, or the backend cannot see it. "
+            "Install Ollama on the machine running IgglePixel, set IGGLEPIXEL_OLLAMA_BIN, "
+            "or set IGGLEPIXEL_OLLAMA_SERVER_CMD. Checked: " + checked,
+        )
+    return [ollama_bin, "serve"]
 
 
 def _read_vision_runtime(proc: subprocess.Popen) -> None:
