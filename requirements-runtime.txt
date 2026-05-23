@@ -55,7 +55,9 @@
 # Why vllm + qwen-vl-utils:
 #   Dataset Studio's pod captioner starts an OpenAI-compatible local vision
 #   server for Qwen2.5-VL. The UI already has a runtime deps button, so these
-#   live here instead of requiring terminal access on the pod.
+#   live here instead of requiring terminal access on the pod. The backend
+#   installer uses `uv pip install --torch-backend=auto` so vLLM picks a CUDA
+#   wheel that matches the pod instead of accidentally pulling a CUDA 13 build.
 
 diffusers>=0.38.0
 peft

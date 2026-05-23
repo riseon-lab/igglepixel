@@ -961,16 +961,19 @@ def _run_app_runtime_install_job(job_id: str) -> None:
         job["finished_at"] = time.time()
         return
 
-    cmd = [sys.executable, "-m", "pip", "install", "-r", str(req_path)]
-    job["command"] = " ".join(shlex.quote(part) for part in cmd)
     job["requirements_path"] = str(req_path)
     job["python_path"] = sys.executable
 
     env = os.environ.copy()
     env.setdefault("PIP_CACHE_DIR", str(PIP_CACHE_DIR))
-    try:
+    env.setdefault("UV_CACHE_DIR", str(UV_CACHE_DIR))
+
+    bootstrap_cmd = [sys.executable, "-m", "pip", "install", "-U", "uv"]
+    job["bootstrap_command"] = " ".join(shlex.quote(part) for part in bootstrap_cmd)
+
+    def _run_and_log(cmd_to_run: list[str]) -> int:
         proc = subprocess.Popen(
-            cmd,
+            cmd_to_run,
             cwd=str(BASE_DIR),
             env=env,
             stdout=subprocess.PIPE,
@@ -981,7 +984,29 @@ def _run_app_runtime_install_job(job_id: str) -> None:
         assert proc.stdout is not None
         for line in proc.stdout:
             _log(line)
-        return_code = proc.wait()
+        return proc.wait()
+
+    try:
+        _log("== ensuring uv installer ==")
+        bootstrap_code = _run_and_log(bootstrap_cmd)
+        job["bootstrap_returncode"] = bootstrap_code
+        if bootstrap_code != 0:
+            job["status"] = "error"
+            job["error"] = f"uv bootstrap exited with code {bootstrap_code}"
+            return
+        uv_bin = shutil.which("uv") or str(Path(sys.executable).resolve().parent / "uv")
+        cmd = [
+            uv_bin,
+            "pip",
+            "install",
+            "--python", sys.executable,
+            "--torch-backend=auto",
+            "--upgrade",
+            "-r", str(req_path),
+        ]
+        job["command"] = " ".join(shlex.quote(part) for part in cmd)
+        _log("== installing runtime deps with uv --torch-backend=auto ==")
+        return_code = _run_and_log(cmd)
         job["returncode"] = return_code
         if return_code == 0:
             job["status"] = "done"
@@ -3523,6 +3548,19 @@ def _python_can_import(module: str, python_bin: str) -> bool:
         return False
 
 
+def _command_succeeds(cmd: list[str]) -> bool:
+    try:
+        res = subprocess.run(
+            cmd,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=8,
+        )
+        return res.returncode == 0
+    except Exception:
+        return False
+
+
 def _vision_python_candidates() -> list[str]:
     candidates: list[str] = []
     for value in (
@@ -3554,7 +3592,7 @@ def _vision_runtime_command(req: TrainerVisionRuntimeRequest) -> list[str]:
         "--max-model-len", os.environ.get("IGGLEPIXEL_VISION_MAX_MODEL_LEN", "8192"),
     ]
     vllm_bin = shutil.which("vllm")
-    if vllm_bin:
+    if vllm_bin and _command_succeeds([vllm_bin, "--version"]):
         return [vllm_bin, "serve", req.model, *common_args]
     for python_bin in _vision_python_candidates():
         if _python_can_import("vllm", python_bin):
