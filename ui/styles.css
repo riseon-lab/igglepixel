@@ -3112,6 +3112,33 @@ body::before {
 .lightbox-audio audio {
   width: min(420px, 100%);
 }
+.lightbox-error {
+  width: min(420px, calc(100vw - 48px));
+  display: grid;
+  place-items: center;
+  gap: 12px;
+  padding: 28px;
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-lg);
+  background: rgba(12, 14, 22, 0.82);
+  color: var(--t-2);
+  text-align: center;
+}
+.lightbox-error svg {
+  width: 46px;
+  height: 46px;
+  color: var(--t-3);
+}
+.lightbox-error strong {
+  color: var(--t-1);
+  font-size: 15px;
+}
+.lightbox-error span {
+  max-width: 320px;
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--t-3);
+}
 
 /* Prev / Next nav arrows — overlay on the stage, only render when there's
    more than one asset in the list. */
@@ -7765,11 +7792,13 @@ select,
 }
 
 .ws-viewport-canvas.is-generating::before {
-  opacity: 0.88 !important;
+  opacity: 0.46 !important;
+  animation-duration: 18s !important;
 }
 
 .ws-viewport-canvas.is-generating::after {
-  opacity: 0.66 !important;
+  opacity: 0.30 !important;
+  animation-duration: 24s !important;
 }
 
 .viewport-stage {
@@ -7780,7 +7809,7 @@ select,
   min-height: inherit !important;
   display: grid !important;
   place-items: center !important;
-  padding: 28px !important;
+  padding: clamp(14px, 2.4vw, 28px) !important;
 }
 
 .viewport-stage > * {
@@ -7849,27 +7878,19 @@ select,
 
 .viewport-idle,
 .viewport-generating {
-  position: relative !important;
-  width: min(520px, 100%) !important;
-  min-height: 320px !important;
-  display: flex !important;
-  flex-direction: column !important;
-  align-items: center !important;
-  justify-content: center !important;
-  gap: 20px !important;
-  color: var(--t-2) !important;
-  text-align: center !important;
-  padding: 32px !important;
+  width: min(560px, 100%) !important;
+  min-height: 0 !important;
+  max-height: 100% !important;
+  gap: clamp(8px, 1.8vh, 16px) !important;
+  padding: clamp(12px, 2vh, 24px) clamp(12px, 2.5vw, 32px) !important;
+  box-sizing: border-box !important;
+  overflow: hidden !important;
 }
 
 .idle-core,
 .generating-aura {
-  position: relative !important;
-  width: 172px !important;
-  height: 172px !important;
-  display: grid !important;
-  place-items: center !important;
-  isolation: isolate !important;
+  width: clamp(92px, 17vh, 148px) !important;
+  height: clamp(92px, 17vh, 148px) !important;
 }
 
 .idle-core::before,
@@ -7930,10 +7951,7 @@ select,
 
 .idle-copy strong,
 .generating-copy strong {
-  color: var(--t-1) !important;
-  font-size: 15px !important;
-  font-weight: 750 !important;
-  letter-spacing: 0.01em !important;
+  font-size: clamp(14px, 1.8vw, 22px) !important;
 }
 
 .idle-copy span {
@@ -7944,7 +7962,7 @@ select,
 /* Floating Viewport HUD */
 .viewport-hud {
   position: absolute !important;
-  bottom: 20px !important;
+  bottom: clamp(12px, 2vh, 20px) !important;
   left: 50% !important;
   transform: translateX(-50%) !important;
   display: flex !important;
@@ -7959,7 +7977,8 @@ select,
   z-index: 5 !important;
   box-shadow: 0 12px 40px rgba(0, 0, 0, 0.6) !important;
   pointer-events: auto !important;
-  min-width: 320px !important;
+  min-width: 0 !important;
+  width: min(520px, calc(100% - 32px)) !important;
   justify-content: space-between !important;
 }
 
@@ -7998,9 +8017,9 @@ select,
 
 /* Real-time Viewport Progress Overlay */
 .viewport-generating .generating-prompt {
-  font-size: 13.5px !important;
+  font-size: clamp(11.5px, 1.45vw, 15px) !important;
   font-style: italic !important;
-  max-width: 440px !important;
+  max-width: min(440px, 88%) !important;
   color: var(--t-3) !important;
   white-space: nowrap !important;
   overflow: hidden !important;
@@ -8008,7 +8027,7 @@ select,
 }
 
 .generating-progress {
-  width: min(360px, 78%) !important;
+  width: min(360px, 80%) !important;
   height: 4px !important;
   overflow: hidden !important;
   border-radius: 999px !important;
@@ -8034,10 +8053,11 @@ select,
 }
 
 .viewport-generating .generating-status {
-  font-size: 12px !important;
+  font-size: clamp(11px, 1.35vw, 14px) !important;
   font-family: var(--font-mono) !important;
   color: var(--t-1) !important;
   letter-spacing: 0.05em !important;
+  line-height: 1.2 !important;
 }
 
 #wsRecentSection {

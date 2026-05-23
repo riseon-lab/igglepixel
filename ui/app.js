@@ -791,6 +791,20 @@ async function primeBrowserKey() {
   } catch {}
 }
 
+async function ensureAssetDecryptorReady() {
+  if (state.preview) return true;
+  await ensureServiceWorker();
+  if (!state.dataKey) {
+    try { state.dataKey = await loadKey(); } catch {}
+  }
+  if (state.dataKey) {
+    await postKeyToServiceWorker(state.dataKey);
+    return true;
+  }
+  openAuthGate('unlock', 'Unlock encrypted assets to view this file.');
+  return false;
+}
+
 async function postKeyToServiceWorker(key) {
   const ctl = navigator.serviceWorker?.controller;
   if (!ctl) return;
@@ -1050,10 +1064,10 @@ function bindShell() {
   });
   $('#wsGenerate').addEventListener('click', onGenerate);
   $('#wsCancel').addEventListener('click', cancelGenerate);
-  $('#wsViewportLightbox')?.addEventListener('click', () => {
+  $('#wsViewportLightbox')?.addEventListener('click', async () => {
     const asset = activePreviewAsset(state.workspace);
     if (!asset) return;
-    openLightbox(asset, { list: state.recents[state.workspace] || [asset], index: Math.max(0, (state.recents[state.workspace] || []).indexOf(asset)) });
+    await openAssetLightbox(asset, { list: state.recents[state.workspace] || [asset], index: Math.max(0, (state.recents[state.workspace] || []).indexOf(asset)) });
   });
   $('#wsViewportDownload')?.addEventListener('click', () => {
     const asset = activePreviewAsset(state.workspace);
@@ -3647,9 +3661,9 @@ function bindImgStrip(m) {
     renderImgStrip(m);
   }));
   // Zoom on the generated cell
-  $$('[data-zoom]', $('#wsImgStrip')).forEach(c => c.addEventListener('click', () => {
+  $$('[data-zoom]', $('#wsImgStrip')).forEach(c => c.addEventListener('click', async () => {
     const recents = state.recents[m.id] || [];
-    if (recents.length) openLightbox(recents[recents.length - 1], { list: recents, index: recents.length - 1 });
+    if (recents.length) await openAssetLightbox(recents[recents.length - 1], { list: recents, index: recents.length - 1 });
   }));
 }
 
@@ -4173,6 +4187,42 @@ function assetKey(asset) {
   return asset ? (asset.path || asset.url || asset.name || '') : '';
 }
 
+function sameAsset(a, b) {
+  if (!a || !b) return false;
+  if (a.path && b.path) return a.path === b.path;
+  return !!a.name && a.name === b.name && (!a.kind || !b.kind || a.kind === b.kind);
+}
+
+function mergeFreshAsset(asset, fresh) {
+  if (!asset || !fresh) return asset || fresh || null;
+  Object.assign(asset, fresh);
+  for (const list of Object.values(state.recents)) {
+    if (!Array.isArray(list)) continue;
+    list.forEach(item => {
+      if (sameAsset(item, fresh)) Object.assign(item, fresh);
+    });
+  }
+  for (const [modelId, active] of Object.entries(state.activePreviews)) {
+    if (sameAsset(active, fresh)) state.activePreviews[modelId] = { ...active, ...fresh };
+  }
+  return asset;
+}
+
+async function refreshAssetReference(asset) {
+  if (state.preview || !asset?.path) return asset;
+  if (!await ensureAssetDecryptorReady()) return asset;
+  try {
+    const data = await api.assets();
+    const freshAssets = data.assets || [];
+    state.assets = freshAssets;
+    const countEl = $('#assetNavCount');
+    if (countEl) countEl.textContent = state.assets.length;
+    const fresh = freshAssets.find(a => sameAsset(a, asset));
+    if (fresh) return mergeFreshAsset(asset, fresh);
+  } catch {}
+  return asset;
+}
+
 function activePreviewAsset(modelId) {
   if (!modelId) return null;
   const items = state.recents[modelId] || [];
@@ -4221,6 +4271,20 @@ function heroAssetHtml(asset) {
   return `<img class="viewport-media" src="${u}" alt="${n}">`;
 }
 
+function bindHeroMediaRecovery(modelId, asset) {
+  const media = $('#wsViewportStage')?.querySelector('.viewport-media');
+  if (!media || !asset?.path) return;
+  media.addEventListener('error', async () => {
+    if (media.dataset.retried === '1') return;
+    media.dataset.retried = '1';
+    const before = asset.url;
+    await refreshAssetReference(asset);
+    if (asset.url && asset.url !== before) {
+      renderHeroPreview(modelId, { asset });
+    }
+  }, { once: true });
+}
+
 function heroMetaText(asset) {
   if (!asset) return 'Dimensions: - · Seed: -';
   const bits = [];
@@ -4239,7 +4303,7 @@ function generationStatusText(job) {
 
 function generationHeroHtml(job) {
   const pct = Math.max(0, Math.min(100, Math.round((job?.progress || 0) * 100)));
-  const prompt = esc((job?.params?.prompt || currentWorkspacePrompt() || 'Rendering generation').replace(/\s+/g, ' ').slice(0, 180));
+  const prompt = esc((job?.params?.prompt || currentWorkspacePrompt() || 'Rendering generation').replace(/\s+/g, ' ').slice(0, 120));
   return `<div class="viewport-generating">
     <div class="generating-aura" aria-hidden="true">
       <span></span><span></span><span></span>
@@ -4251,6 +4315,22 @@ function generationHeroHtml(job) {
     <div class="generating-progress" aria-hidden="true"><span style="width:${pct}%"></span></div>
     <div class="generating-status">${esc(generationStatusText(job))}</div>
   </div>`;
+}
+
+function updateGenerationHero(stage, job) {
+  const root = stage?.querySelector('.viewport-generating');
+  if (!root) {
+    stage.innerHTML = generationHeroHtml(job);
+    return;
+  }
+  const pct = Math.max(0, Math.min(100, Math.round((job?.progress || 0) * 100)));
+  const prompt = (job?.params?.prompt || currentWorkspacePrompt() || 'Rendering generation').replace(/\s+/g, ' ').slice(0, 120);
+  const promptEl = root.querySelector('.generating-prompt');
+  const bar = root.querySelector('.generating-progress span');
+  const status = root.querySelector('.generating-status');
+  if (promptEl) promptEl.textContent = prompt;
+  if (bar) bar.style.width = `${pct}%`;
+  if (status) status.textContent = generationStatusText(job);
 }
 
 function renderHeroPreview(modelId, opts = {}) {
@@ -4267,20 +4347,21 @@ function renderHeroPreview(modelId, opts = {}) {
   canvas.classList.toggle('is-idle', !runningJob && !asset);
 
   if (runningJob) {
-    stage.innerHTML = generationHeroHtml(runningJob);
-    if (hud) hud.style.display = 'none';
+    updateGenerationHero(stage, runningJob);
+    if (hud) hud.style.setProperty('display', 'none', 'important');
     return;
   }
 
   if (asset) {
     stage.innerHTML = `<div class="viewport-asset-wrap">${heroAssetHtml(asset)}</div>`;
+    bindHeroMediaRecovery(modelId, asset);
     if (meta) meta.textContent = heroMetaText(asset);
-    if (hud) hud.style.display = '';
+    if (hud) hud.style.removeProperty('display');
     return;
   }
 
   stage.innerHTML = viewportIdleHtml();
-  if (hud) hud.style.display = 'none';
+  if (hud) hud.style.setProperty('display', 'none', 'important');
 }
 
 function updateHeroProgress(job) {
@@ -4320,11 +4401,12 @@ function renderRecents(modelId) {
   grid.innerHTML = queuedHtml + recentHtml;
 
   // Recent tile click → focus the hero preview; 3-dot → asset menu.
-  $$('.asset[data-recent-idx]', grid).forEach(el => el.addEventListener('click', (e) => {
+  $$('.asset[data-recent-idx]', grid).forEach(el => el.addEventListener('click', async (e) => {
     if (e.target.closest('[data-asset-menu]')) return;
     if (e.target.closest('audio')) return;
     const idx = Number(el.dataset.recentIdx);
-    setActivePreview(modelId, items[idx]);
+    const asset = await refreshAssetReference(items[idx]);
+    setActivePreview(modelId, asset);
   }));
   $$('[data-asset-menu]', grid).forEach(b => b.addEventListener('click', (e) => {
     e.stopPropagation();
@@ -4531,7 +4613,9 @@ function closeAssetMenu() {
 async function downloadAsset(asset) {
   if (!asset?.url) return;
   try {
+    if (!state.preview && asset.path && !await ensureAssetDecryptorReady()) return;
     toast(`Preparing ${asset.name || 'download'}…`, 'info');
+    await refreshAssetReference(asset);
     const res = await fetch(asset.url, { credentials: 'same-origin' });
     if (!res.ok) throw new Error(`Download failed (${res.status})`);
     const blob = await res.blob();
@@ -5431,6 +5515,13 @@ async function cancelQueueJob(jobId) {
 let _lightboxList = null;
 let _lightboxIdx = 0;
 
+async function openAssetLightbox(asset, opts = {}) {
+  if (!asset) return;
+  if (!state.preview && asset.path && !await ensureAssetDecryptorReady()) return;
+  const fresh = await refreshAssetReference(asset);
+  openLightbox(fresh || asset, opts);
+}
+
 function openLightbox(asset, opts = {}) {
   if (!asset) return;
   // Backward-compat: callers can still pass just an asset. New callers can
@@ -5448,6 +5539,18 @@ function openLightbox(asset, opts = {}) {
   lb.setAttribute('aria-hidden', 'false');
 }
 
+function lightboxNavHtml() {
+  return (_lightboxList && _lightboxList.length > 1) ? `
+    <button class="lightbox-nav prev" id="lightboxPrev" aria-label="Previous">‹</button>
+    <button class="lightbox-nav next" id="lightboxNext" aria-label="Next">›</button>
+  ` : '';
+}
+
+function bindLightboxNav() {
+  $('#lightboxPrev')?.addEventListener('click', (e) => { e.stopPropagation(); _lightboxStep(-1); });
+  $('#lightboxNext')?.addEventListener('click', (e) => { e.stopPropagation(); _lightboxStep(1);  });
+}
+
 function _renderLightbox() {
   const asset = _lightboxList ? _lightboxList[_lightboxIdx] : _lightboxCurrentAsset;
   if (!asset) return;
@@ -5459,10 +5562,7 @@ function _renderLightbox() {
   stage.classList.remove('portrait-media', 'landscape-media');
   stage.style.removeProperty('--asset-ratio');
   const u = esc(asset.url);
-  const navArrows = (_lightboxList && _lightboxList.length > 1) ? `
-    <button class="lightbox-nav prev" id="lightboxPrev" aria-label="Previous">‹</button>
-    <button class="lightbox-nav next" id="lightboxNext" aria-label="Next">›</button>
-  ` : '';
+  const navArrows = lightboxNavHtml();
   stage.innerHTML = (asset.kind === 'video'
     ? `<video src="${u}" controls autoplay loop playsinline preload="metadata"></video>`
     : asset.kind === 'audio'
@@ -5489,12 +5589,42 @@ function _renderLightbox() {
     };
     applyRatio();
     media.addEventListener(media.tagName === 'VIDEO' ? 'loadedmetadata' : 'load', applyRatio, { once: true });
+    media.addEventListener('error', async () => {
+      if (media.dataset.retried !== '1') {
+        media.dataset.retried = '1';
+        const before = asset.url;
+        await refreshAssetReference(asset);
+        if (asset.url && asset.url !== before) {
+          _renderLightbox();
+          return;
+        }
+      }
+      showLightboxLoadError(asset);
+    }, { once: true });
   }
   $('#lightboxDownload').onclick = () => {
     downloadAsset(asset);
   };
-  $('#lightboxPrev')?.addEventListener('click', (e) => { e.stopPropagation(); _lightboxStep(-1); });
-  $('#lightboxNext')?.addEventListener('click', (e) => { e.stopPropagation(); _lightboxStep(1);  });
+  bindLightboxNav();
+}
+
+function showLightboxLoadError(asset) {
+  const stage = $('#lightboxStage');
+  stage.classList.remove('portrait-media', 'landscape-media');
+  stage.innerHTML = `
+    <div class="lightbox-error">
+      <svg aria-hidden="true"><use href="#i-image"/></svg>
+      <strong>Could not load this asset</strong>
+      <span>The signed view link may have expired, or the encrypted asset key needs unlocking.</span>
+      <button class="btn" id="lightboxRetry" type="button">Retry</button>
+    </div>
+    ${lightboxNavHtml()}`;
+  $('#lightboxRetry')?.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    await refreshAssetReference(asset);
+    _renderLightbox();
+  });
+  bindLightboxNav();
 }
 
 let _lightboxCurrentAsset = null;
@@ -9095,11 +9225,11 @@ function renderAssets() {
   grid.innerHTML = queueHtml + assetHtml;
   bindQueueCardMenus(grid);
   // Click an asset → lightbox; click the 3-dot → menu
-  $$('.asset[data-asset-idx]', grid).forEach(el => el.addEventListener('click', (e) => {
+  $$('.asset[data-asset-idx]', grid).forEach(el => el.addEventListener('click', async (e) => {
     if (e.target.closest('[data-asset-menu]')) return;
     if (e.target.closest('audio')) return;
     const idx = Number(el.dataset.assetIdx);
-    openLightbox(items[idx], { list: items, index: idx });
+    await openAssetLightbox(items[idx], { list: items, index: idx });
   }));
   $$('[data-asset-menu]', grid).forEach(b => b.addEventListener('click', (e) => {
     e.stopPropagation();

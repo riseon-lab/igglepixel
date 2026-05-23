@@ -281,7 +281,7 @@ class _Auth:
 #
 # Signature = first 32 hex chars of HMAC-SHA256(signing_key, "{path}|{exp}").
 # `path` is the asset's path relative to WORKSPACE.
-def _sign_url(rel_path: str, ttl_seconds: int = 3600) -> str:
+def _sign_url(rel_path: str, ttl_seconds: int = 86400) -> str:
     exp = int(time.time()) + ttl_seconds
     msg = f"{rel_path}|{exp}".encode("utf-8")
     sig = hmac.new(auth.signing_key, msg, hashlib.sha256).hexdigest()[:32]
