@@ -331,6 +331,21 @@ def _pip_install(runtime_id: str, packages: list[str], log: Callable[[str], None
     """
     if not packages:
         return
+
+    # macOS developer bypass: Filter out packages that require CUDA/Nvidia compilation
+    import sys as host_sys
+    if host_sys.platform == "darwin":
+        filtered_packages = []
+        for pkg in packages:
+            # Check if package is vllm or related CUDA extension
+            if "vllm" in pkg.lower():
+                log(f"[venv_manager] macOS developer bypass: skipping installation of CUDA dependency '{pkg}'")
+                continue
+            filtered_packages.append(pkg)
+        packages = filtered_packages
+        if not packages:
+            return
+
     py = _venv_python(runtime_id)
     if _has_uv():
         # uv pip install --python <venv_py> uses the venv as the install
@@ -364,6 +379,16 @@ def _verify_imports(runtime_id: str, imports: list[str], log: Callable[[str], No
     """Fail fast if the prepared venv cannot import the runtime's essentials."""
     if not imports:
         return
+
+    # macOS developer bypass: skip verifying CUDA imports since vllm is not installed
+    import sys as host_sys
+    if host_sys.platform == "darwin":
+        filtered_imports = [imp for imp in imports if "vllm" not in imp.lower()]
+        if not filtered_imports:
+            log("[venv_manager] macOS developer bypass: skipping vllm import check")
+            return
+        imports = filtered_imports
+
     py = _venv_python(runtime_id)
     code = (
         "import importlib\n"
