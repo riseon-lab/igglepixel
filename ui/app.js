@@ -3533,11 +3533,18 @@ function renderImgStrip(m) {
   const recents = state.recents[m.id] || [];
   const latest  = recents[recents.length - 1] || null;
   hasMedia = hasMedia || !!latest;
-  cells.push(generatedCellHtml(latest));
 
   const strip = $('#wsImgStrip');
   strip.classList.toggle('has-media', hasMedia);
-  strip.innerHTML = cells.join('');
+  strip.innerHTML = `${generatedCellHtml(latest)}
+    <details class="img-ref-panel"${hasMedia ? '' : ' open'}>
+      <summary>
+        <span>References</span>
+        <em>${cells.length} optional input${cells.length === 1 ? '' : 's'}</em>
+        <svg aria-hidden="true"><use href="#i-down"/></svg>
+      </summary>
+      <div class="img-ref-grid">${cells.join('')}</div>
+    </details>`;
   updateImageCellRatios(strip);
   bindImgStrip(m);
 }

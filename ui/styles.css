@@ -2490,12 +2490,57 @@ body::before {
 /* ── Image-input strip (Ref / Pose / Style / Generated) ───────────────── */
 .img-strip {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(220px, 100%), 1fr));
-  gap: 10px;
+  grid-template-columns: minmax(160px, 0.72fr) minmax(0, 1.28fr);
+  gap: 12px;
   margin-bottom: 12px;
   align-items: start;
 }
-@media (max-width: 1100px) { .img-strip { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 1100px) { .img-strip { grid-template-columns: minmax(0, 1fr); } }
+
+.img-ref-panel {
+  min-width: 0;
+  border: 1px solid var(--line-1);
+  border-radius: var(--r-md);
+  background: rgba(255,255,255,0.02);
+  overflow: hidden;
+}
+.img-ref-panel > summary {
+  min-height: 42px;
+  padding: 10px 12px;
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+  color: var(--t-1);
+  list-style: none;
+  user-select: none;
+}
+.img-ref-panel > summary::-webkit-details-marker { display: none; }
+.img-ref-panel > summary span {
+  font-size: 11.5px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.img-ref-panel > summary em {
+  color: var(--t-3);
+  font-size: 11px;
+  font-style: normal;
+}
+.img-ref-panel > summary svg {
+  width: 14px;
+  height: 14px;
+  color: var(--t-3);
+  transition: transform 160ms var(--ease);
+}
+.img-ref-panel[open] > summary svg { transform: rotate(180deg); }
+.img-ref-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(128px, 1fr));
+  gap: 8px;
+  padding: 0 10px 10px;
+}
 
 .img-cell {
   position: relative;
@@ -2519,12 +2564,11 @@ body::before {
   min-height: 0;
   background: rgba(0, 0, 0, 0.32);
 }
-.img-cell.has-media.landscape-media {
+.img-ref-grid .img-cell.has-media.landscape-media {
   grid-column: span 2;
 }
-.img-strip.has-media .img-cell[data-input="ref"] { order: 1; }
-.img-strip.has-media .img-cell.generated { order: 2; }
-.img-strip.has-media .img-cell:not([data-input="ref"]):not(.generated) { order: 3; }
+.img-strip > .img-cell.generated { order: 1; }
+.img-strip > .img-ref-panel { order: 2; }
 .img-cell.empty {
   border-style: dashed;
   border-color: var(--line-2);
@@ -3648,25 +3692,23 @@ body::before {
 
   /* ── Workspace: img strip 2 cells max ── */
   .img-strip {
-    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
-  }
-  .img-strip.has-media {
     grid-template-columns: minmax(0, 1fr) !important;
   }
+  .img-ref-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .img-cell {
     min-height: 132px;
     max-height: none;
   }
   .img-cell.has-media,
   .img-cell.has-media.landscape-media,
-  .img-strip.has-media .img-cell.empty {
+  .img-strip.has-media > .img-cell.empty {
     grid-column: 1 / -1;
   }
   .img-cell.has-media {
     min-height: 0;
     max-height: calc(100dvh - 170px);
   }
-  .img-strip.has-media .img-cell.empty {
+  .img-strip.has-media > .img-cell.empty {
     aspect-ratio: 16 / 9;
     min-height: 150px;
   }
@@ -7692,11 +7734,20 @@ select,
 /* Workspace split deck & Viewport HUD */
 .ws-grid {
   display: grid !important;
-  grid-template-columns: 380px 1fr !important;
-  gap: 16px !important;
+  grid-template-columns: minmax(440px, 560px) minmax(0, 1fr) !important;
+  gap: clamp(16px, 1.4vw, 26px) !important;
   align-items: start !important;
+  width: 100% !important;
+  max-width: 1880px !important;
+  margin: 0 auto !important;
   height: auto !important;
   min-height: 0 !important;
+}
+
+@media (min-width: 1680px) {
+  .ws-grid {
+    grid-template-columns: minmax(520px, 660px) minmax(780px, 1fr) !important;
+  }
 }
 
 @media (max-width: 1100px) {
@@ -7713,7 +7764,7 @@ select,
   height: auto !important;
   min-height: 0 !important;
   overflow: visible !important;
-  padding: 0 8px 28px 0 !important;
+  padding: 0 4px 28px 0 !important;
   scroll-padding-bottom: 28px !important;
 }
 
@@ -7737,6 +7788,8 @@ select,
   gap: 14px !important;
   min-width: 0 !important;
   height: auto !important;
+  max-width: 1320px !important;
+  width: 100% !important;
 }
 
 .ws-viewport-canvas {
@@ -7752,8 +7805,8 @@ select,
   align-items: center !important;
   justify-content: center !important;
   overflow: hidden !important;
-  min-height: min(620px, calc(100dvh - var(--topbar-h) - 150px)) !important;
-  height: min(720px, calc(100dvh - var(--topbar-h) - 150px)) !important;
+  min-height: clamp(460px, 58dvh, 680px) !important;
+  height: clamp(520px, calc(100dvh - var(--topbar-h) - 150px), 760px) !important;
 }
 
 .ws-viewport-canvas::before,
