@@ -1194,14 +1194,59 @@ async def launch_model(req: LaunchRequest):
     return await launcher.launch(model, req.loras, req.hf_token, req.quant, req.variant, req.components)
 
 
+# Synthetic model_id for the Ollama serve subprocess so it can flow
+# through the generic /api/status, /api/stop, and /api/logs endpoints
+# without going through the ModelLauncher (Ollama is a Go binary, not
+# a RunnerBase subclass — the launcher's lifecycle doesn't fit it).
+VISION_OLLAMA_RUNTIME_ID = "dataset-vision-ollama"
+
+
+def _vision_ollama_status_entry() -> Optional[dict]:
+    """Synthesise a launcher-shaped status entry for the Ollama serve
+    process so it appears in the Running tab alongside real runners."""
+    with vision_runtime_lock:
+        proc = vision_runtime_proc
+        cfg = dict(vision_runtime_cfg)
+    if proc is None or proc.poll() is not None:
+        return None
+    if (cfg.get("provider") or "").strip().lower() != "ollama":
+        return None
+    try:
+        port = _vision_runtime_host_port(cfg.get("endpoint") or "")[1]
+    except Exception:
+        port = 0
+    model_label = cfg.get("model") or "ollama vision"
+    return {
+        "model_id": VISION_OLLAMA_RUNTIME_ID,
+        "name":     f"Dataset Studio · Ollama ({model_label})",
+        "pid":      proc.pid,
+        "port":     port,
+        "status":   "running",
+        "log_path": "",
+        "kind":     "vision-runtime",
+    }
+
+
 @app.post("/api/stop/{model_id}")
 async def stop_model(model_id: str):
+    if model_id == VISION_OLLAMA_RUNTIME_ID:
+        with vision_runtime_lock:
+            cfg = dict(vision_runtime_cfg)
+        return await stop_vision_runtime(
+            provider=cfg.get("provider") or "ollama",
+            endpoint=cfg.get("endpoint") or "",
+            model=cfg.get("model") or "",
+        )
     return await launcher.stop(model_id)
 
 
 @app.get("/api/status")
 def get_status():
-    return launcher.status()
+    status = launcher.status()
+    ollama_entry = _vision_ollama_status_entry()
+    if ollama_entry:
+        status[VISION_OLLAMA_RUNTIME_ID] = ollama_entry
+    return status
 
 
 # ── Inference (proxies to the runner subprocess) ─────────────────────────
@@ -1403,6 +1448,35 @@ async def cancel_generate(model_id: str):
 
 @app.get("/api/logs/{model_id}")
 async def stream_logs(model_id: str, tail: bool = False):
+    if model_id == VISION_OLLAMA_RUNTIME_ID:
+        # The Ollama subprocess writes its log into `vision_runtime_log`
+        # rather than a file, so we tail the in-memory buffer instead of
+        # going through launcher.stream_logs (which reads from disk).
+        async def gen_vision():
+            seen = 0
+            if not tail:
+                with vision_runtime_lock:
+                    snapshot = list(vision_runtime_log)
+                for line in snapshot:
+                    yield f"data: {line}\n\n"
+                seen = len(snapshot)
+            for _ in range(10_000):
+                await asyncio.sleep(1)
+                with vision_runtime_lock:
+                    cur = len(vision_runtime_log)
+                    new_lines = list(vision_runtime_log[seen:cur]) if cur > seen else []
+                seen = cur
+                for line in new_lines:
+                    yield f"data: {line}\n\n"
+                # Stop streaming once the process has exited and no fresh
+                # lines remain — keeps the SSE connection from looping
+                # forever after a clean stop.
+                with vision_runtime_lock:
+                    alive = vision_runtime_proc is not None and vision_runtime_proc.poll() is None
+                if not alive and not new_lines:
+                    yield "data: [stream end]\n\n"
+                    return
+        return StreamingResponse(gen_vision(), media_type="text/event-stream")
     async def gen():
         async for line in launcher.stream_logs(model_id, tail=tail):
             yield f"data: {line}\n\n"
