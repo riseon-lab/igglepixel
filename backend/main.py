@@ -3698,48 +3698,130 @@ def _ollama_download_url() -> str:
     return "https://ollama.com/download/ollama-linux-amd64.tgz"
 
 
-def _install_ollama_runtime() -> Optional[str]:
+def _install_ollama_runtime() -> tuple[Optional[str], str]:
     """Self-heal install of the Ollama static tarball onto the persistent
     /workspace volume. Idempotent — returns the existing binary path if a
     prior install left one behind. Progress lines are tee'd into
-    `vision_runtime_log` so they surface in the Dataset Studio UI panel."""
+    `vision_runtime_log` so they surface in the Dataset Studio UI panel.
+
+    Returns (binary_path, reason). On success `binary_path` is set; on
+    failure it's None and `reason` explains why so the HTTP error toast
+    can surface the actual cause without forcing the user to open the
+    runtime log panel.
+    """
     persistent_bin = OLLAMA_INSTALL_ROOT / "bin" / "ollama"
     if persistent_bin.exists() and os.access(persistent_bin, os.X_OK):
-        return str(persistent_bin)
-    OLLAMA_INSTALL_ROOT.mkdir(parents=True, exist_ok=True)
+        return str(persistent_bin), "already installed"
+    try:
+        OLLAMA_INSTALL_ROOT.mkdir(parents=True, exist_ok=True)
+    except Exception as e:
+        msg = f"cannot create install dir {OLLAMA_INSTALL_ROOT}: {e}"
+        _vision_runtime_append(f"ollama install failed: {msg}")
+        return None, msg
+
     url = _ollama_download_url()
     _vision_runtime_append(f"installing Ollama runtime (self-heal) from {url}")
-    try:
-        import io
-        import tarfile
 
-        buf = io.BytesIO()
-        with httpx.stream("GET", url, follow_redirects=True, timeout=600.0) as r:
+    tmp_tarball = OLLAMA_INSTALL_ROOT / ".ollama-install.tgz"
+    httpx_error = ""
+    # Attempt 1: streaming download via httpx into a temp file (avoids
+    # holding ~300 MB in memory).
+    try:
+        with httpx.stream(
+            "GET", url,
+            follow_redirects=True,
+            timeout=httpx.Timeout(60.0, read=600.0),
+        ) as r:
             r.raise_for_status()
             total = int(r.headers.get("content-length", "0") or "0")
             seen = 0
             next_pct = 5
-            for chunk in r.iter_bytes(chunk_size=1 << 20):
-                buf.write(chunk)
-                seen += len(chunk)
-                if total and (seen * 100) // total >= next_pct:
-                    _vision_runtime_append(f"ollama download {next_pct}%")
-                    next_pct += 5
-        buf.seek(0)
-        with tarfile.open(fileobj=buf, mode="r:gz") as tar:
+            with open(tmp_tarball, "wb") as fp:
+                for chunk in r.iter_bytes(chunk_size=1 << 20):
+                    fp.write(chunk)
+                    seen += len(chunk)
+                    if total and (seen * 100) // total >= next_pct:
+                        _vision_runtime_append(f"ollama download {next_pct}%")
+                        next_pct += 5
+    except Exception as e:
+        httpx_error = f"httpx: {e}"
+        _vision_runtime_append(f"ollama download via httpx failed: {e}; retrying with curl")
+        # Attempt 2: curl is in the base image and uses a different TLS
+        # stack (libcurl vs Python ssl), so it often succeeds in
+        # containers where httpx fails on TLS/CDN quirks.
+        try:
+            tmp_tarball.unlink(missing_ok=True)
+        except Exception:
+            pass
+        try:
+            subprocess.run(
+                ["curl", "-fSL", "--retry", "3", "--retry-delay", "2",
+                 "-o", str(tmp_tarball), url],
+                check=True, timeout=900,
+            )
+        except FileNotFoundError:
+            msg = f"{httpx_error} | curl: binary not found in PATH"
+            _vision_runtime_append(f"ollama install failed: {msg}")
+            return None, msg
+        except subprocess.TimeoutExpired:
+            msg = f"{httpx_error} | curl: timed out after 900s downloading {url}"
+            _vision_runtime_append(f"ollama install failed: {msg}")
+            return None, msg
+        except subprocess.CalledProcessError as ce:
+            msg = f"{httpx_error} | curl: exit {ce.returncode} downloading {url}"
+            _vision_runtime_append(f"ollama install failed: {msg}")
+            return None, msg
+        except Exception as ce:
+            msg = f"{httpx_error} | curl: {ce}"
+            _vision_runtime_append(f"ollama install failed: {msg}")
+            return None, msg
+
+    # Extract the tarball into OLLAMA_INSTALL_ROOT.
+    try:
+        import tarfile
+        with tarfile.open(str(tmp_tarball), mode="r:gz") as tar:
             tar.extractall(OLLAMA_INSTALL_ROOT)
     except Exception as e:
-        _vision_runtime_append(f"ollama install failed: {e}")
-        return None
+        msg = f"extract {tmp_tarball}: {e}"
+        _vision_runtime_append(f"ollama install failed: {msg}")
+        return None, msg
+    finally:
+        try:
+            tmp_tarball.unlink(missing_ok=True)
+        except Exception:
+            pass
+
     if persistent_bin.exists():
         try:
             persistent_bin.chmod(persistent_bin.stat().st_mode | 0o111)
         except Exception:
             pass
+        # Catch /workspace mounted with noexec — chmod will succeed but
+        # execve still refuses. Probe via `ollama --version` so we fail
+        # loud here rather than in the start subprocess.
+        try:
+            subprocess.run(
+                [str(persistent_bin), "--version"],
+                check=True, timeout=10,
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+        except PermissionError as e:
+            msg = f"{persistent_bin} cannot be executed (volume mounted noexec?): {e}"
+            _vision_runtime_append(f"ollama install failed: {msg}")
+            return None, msg
+        except subprocess.CalledProcessError as e:
+            msg = f"{persistent_bin} runs but `ollama --version` exited {e.returncode}"
+            _vision_runtime_append(f"ollama install failed: {msg}")
+            return None, msg
+        except Exception as e:
+            msg = f"{persistent_bin} version probe failed: {e}"
+            _vision_runtime_append(f"ollama install failed: {msg}")
+            return None, msg
         _vision_runtime_append(f"ollama installed at {persistent_bin}")
-        return str(persistent_bin)
-    _vision_runtime_append("ollama install completed but binary not found at expected path")
-    return None
+        return str(persistent_bin), "ok"
+    msg = "tarball extracted but bin/ollama not present in archive"
+    _vision_runtime_append(f"ollama install failed: {msg}")
+    return None, msg
 
 
 def _ollama_runtime_command(req: TrainerVisionRuntimeRequest) -> list[str]:
@@ -3748,13 +3830,18 @@ def _ollama_runtime_command(req: TrainerVisionRuntimeRequest) -> list[str]:
     if raw:
         rendered = raw.format(model=req.model, endpoint=req.endpoint, host=host, port=port)
         return shlex.split(rendered)
-    ollama_bin = _resolve_ollama_binary() or _install_ollama_runtime()
+    ollama_bin = _resolve_ollama_binary()
+    install_reason = ""
+    if not ollama_bin:
+        ollama_bin, install_reason = _install_ollama_runtime()
     if not ollama_bin:
         checked = ", ".join(_ollama_binary_candidates()) or "none"
+        detail = f" Reason: {install_reason}." if install_reason else ""
         raise HTTPException(
             400,
-            "Ollama is not installed and the self-heal download failed. "
-            "Set IGGLEPIXEL_OLLAMA_BIN or IGGLEPIXEL_OLLAMA_SERVER_CMD. "
+            "Ollama is not installed and the self-heal download failed."
+            + detail +
+            " Set IGGLEPIXEL_OLLAMA_BIN or IGGLEPIXEL_OLLAMA_SERVER_CMD. "
             "Checked: " + checked,
         )
     return [ollama_bin, "serve"]
