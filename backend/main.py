@@ -5,6 +5,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import platform
 import re
 import secrets
 import signal
@@ -3677,22 +3678,157 @@ def _resolve_ollama_binary() -> Optional[str]:
     return None
 
 
+# Self-heal install target. WORKSPACE is the RunPod persistent volume, so one
+# download survives container restarts (~300 MB tarball + multi-GB model
+# weights). The tarball ships `bin/ollama` + `lib/ollama/*` side-by-side;
+# Ollama loads its bundled CUDA libs relative to the binary, so extracting
+# the whole tree under WORKSPACE keeps them paired and matches the existing
+# `${WORKSPACE}/bin/ollama` candidate in _ollama_binary_candidates.
+OLLAMA_INSTALL_ROOT = WORKSPACE
+OLLAMA_MODELS_DIR = WORKSPACE / ".cache" / "ollama" / "models"
+
+
+def _ollama_download_url() -> str:
+    override = os.environ.get("IGGLEPIXEL_OLLAMA_TARBALL_URL", "").strip()
+    if override:
+        return override
+    machine = platform.machine().lower()
+    if machine in ("aarch64", "arm64"):
+        return "https://ollama.com/download/ollama-linux-arm64.tgz"
+    return "https://ollama.com/download/ollama-linux-amd64.tgz"
+
+
+def _install_ollama_runtime() -> Optional[str]:
+    """Self-heal install of the Ollama static tarball onto the persistent
+    /workspace volume. Idempotent — returns the existing binary path if a
+    prior install left one behind. Progress lines are tee'd into
+    `vision_runtime_log` so they surface in the Dataset Studio UI panel."""
+    persistent_bin = OLLAMA_INSTALL_ROOT / "bin" / "ollama"
+    if persistent_bin.exists() and os.access(persistent_bin, os.X_OK):
+        return str(persistent_bin)
+    OLLAMA_INSTALL_ROOT.mkdir(parents=True, exist_ok=True)
+    url = _ollama_download_url()
+    _vision_runtime_append(f"installing Ollama runtime (self-heal) from {url}")
+    try:
+        import io
+        import tarfile
+
+        buf = io.BytesIO()
+        with httpx.stream("GET", url, follow_redirects=True, timeout=600.0) as r:
+            r.raise_for_status()
+            total = int(r.headers.get("content-length", "0") or "0")
+            seen = 0
+            next_pct = 5
+            for chunk in r.iter_bytes(chunk_size=1 << 20):
+                buf.write(chunk)
+                seen += len(chunk)
+                if total and (seen * 100) // total >= next_pct:
+                    _vision_runtime_append(f"ollama download {next_pct}%")
+                    next_pct += 5
+        buf.seek(0)
+        with tarfile.open(fileobj=buf, mode="r:gz") as tar:
+            tar.extractall(OLLAMA_INSTALL_ROOT)
+    except Exception as e:
+        _vision_runtime_append(f"ollama install failed: {e}")
+        return None
+    if persistent_bin.exists():
+        try:
+            persistent_bin.chmod(persistent_bin.stat().st_mode | 0o111)
+        except Exception:
+            pass
+        _vision_runtime_append(f"ollama installed at {persistent_bin}")
+        return str(persistent_bin)
+    _vision_runtime_append("ollama install completed but binary not found at expected path")
+    return None
+
+
 def _ollama_runtime_command(req: TrainerVisionRuntimeRequest) -> list[str]:
     host, port = _vision_runtime_host_port(req.endpoint)
     raw = (req.command or os.environ.get("IGGLEPIXEL_OLLAMA_SERVER_CMD") or "").strip()
     if raw:
         rendered = raw.format(model=req.model, endpoint=req.endpoint, host=host, port=port)
         return shlex.split(rendered)
-    ollama_bin = _resolve_ollama_binary()
+    ollama_bin = _resolve_ollama_binary() or _install_ollama_runtime()
     if not ollama_bin:
         checked = ", ".join(_ollama_binary_candidates()) or "none"
         raise HTTPException(
             400,
-            "Ollama is not installed or is not visible to the backend process. "
-            "Install Ollama on the machine running IgglePixel, set IGGLEPIXEL_OLLAMA_BIN, "
-            "or set IGGLEPIXEL_OLLAMA_SERVER_CMD. Checked: " + checked,
+            "Ollama is not installed and the self-heal download failed. "
+            "Set IGGLEPIXEL_OLLAMA_BIN or IGGLEPIXEL_OLLAMA_SERVER_CMD. "
+            "Checked: " + checked,
         )
     return [ollama_bin, "serve"]
+
+
+def _ollama_pull_model_blocking(endpoint: str, model: str) -> None:
+    """Stream Ollama's `/api/pull` and tee progress into the runtime log so
+    the UI panel reflects download % during the (one-time) model fetch."""
+    pull_url = _ollama_url(endpoint, "pull")
+    try:
+        with httpx.stream("POST", pull_url, json={"model": model, "stream": True}, timeout=None) as r:
+            if r.status_code >= 400:
+                body = r.read()[:240].decode("utf-8", "replace")
+                _vision_runtime_append(f"ollama pull HTTP {r.status_code}: {body}")
+                return
+            last_status = ""
+            last_pct = -1
+            for line in r.iter_lines():
+                if not line:
+                    continue
+                try:
+                    payload = json.loads(line)
+                except Exception:
+                    continue
+                if payload.get("error"):
+                    _vision_runtime_append(f"ollama pull error: {payload['error']}")
+                    return
+                status = payload.get("status") or ""
+                completed = payload.get("completed")
+                total = payload.get("total")
+                if status and status != last_status:
+                    _vision_runtime_append(f"ollama pull: {status}")
+                    last_status = status
+                    last_pct = -1
+                if isinstance(completed, int) and isinstance(total, int) and total > 0:
+                    pct = int(completed * 100 / total)
+                    if pct >= last_pct + 5:
+                        _vision_runtime_append(f"ollama pull progress: {pct}%")
+                        last_pct = pct
+        _vision_runtime_append(f"ollama pull complete: {model}")
+    except Exception as e:
+        _vision_runtime_append(f"ollama pull failed: {e}")
+
+
+def _ollama_ensure_model_thread(endpoint: str, model: str, server_proc: subprocess.Popen) -> None:
+    """Background watcher: wait for `ollama serve` to start answering on
+    `/api/tags`, then pull the requested model if it isn't already cached.
+    Without this, captioning fails with a confusing 'model not found' the
+    first time a fresh pod tries Ollama."""
+    tags_url = _ollama_url(endpoint, "tags")
+    deadline = time.time() + 120.0
+    while time.time() < deadline:
+        if server_proc.poll() is not None:
+            _vision_runtime_append("ollama serve exited before model check could run")
+            return
+        try:
+            r = httpx.get(tags_url, timeout=2.5)
+            if r.status_code < 400:
+                names: set[str] = set()
+                for entry in r.json().get("models", []) or []:
+                    for key in ("name", "model"):
+                        v = entry.get(key)
+                        if v:
+                            names.add(v)
+                if model in names:
+                    _vision_runtime_append(f"ollama model {model} already cached")
+                    return
+                _vision_runtime_append(f"ollama model {model} not cached; pulling (one-time, multi-GB)")
+                _ollama_pull_model_blocking(endpoint, model)
+                return
+        except Exception:
+            pass
+        time.sleep(1.5)
+    _vision_runtime_append("ollama serve did not become reachable within 120s; skipping auto-pull")
 
 
 def _read_vision_runtime(proc: subprocess.Popen) -> None:
@@ -3960,6 +4096,10 @@ async def start_vision_runtime(req: TrainerVisionRuntimeRequest):
         if provider == "ollama":
             host, port = _vision_runtime_host_port(req.endpoint)
             env["OLLAMA_HOST"] = f"http://{host}:{port}"
+            # Persist model blobs on the /workspace volume so a pod restart
+            # doesn't re-download multi-GB weights.
+            env.setdefault("OLLAMA_MODELS", str(OLLAMA_MODELS_DIR))
+            OLLAMA_MODELS_DIR.mkdir(parents=True, exist_ok=True)
         try:
             proc = subprocess.Popen(
                 cmd,
@@ -3986,6 +4126,12 @@ async def start_vision_runtime(req: TrainerVisionRuntimeRequest):
                 "started_at": time.time(),
             }
         threading.Thread(target=_read_vision_runtime, args=(proc,), daemon=True).start()
+        if provider == "ollama":
+            threading.Thread(
+                target=_ollama_ensure_model_thread,
+                args=(req.endpoint, req.model, proc),
+                daemon=True,
+            ).start()
         return {**_vision_runtime_public(req.provider, req.endpoint, req.model), "status": "starting", "state": "starting"}
 
 
