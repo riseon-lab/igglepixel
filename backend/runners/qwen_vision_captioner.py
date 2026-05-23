@@ -152,22 +152,34 @@ class Runner(RunnerBase):
         image_base64 = params.get("image_base64")
         image_path = params.get("image_path")
 
-        # Resolve image to base64 (supporting transparent decryption via self.load_image)
+        # Resolve image to base64. Dataset images live under
+        # /workspace/datasets/ and are intentionally stored as plain
+        # bytes — AI Toolkit reads them directly during training and
+        # the `/api/trainers/file` endpoint serves them without going
+        # through the encryption layer. So we read raw bytes here too,
+        # rather than calling self.load_image() (which routes through
+        # crypto.read_decrypted and refuses non-.enc files). Path is
+        # sandboxed to /workspace so a malicious payload can't escape
+        # the workspace root.
         if not image_base64 and image_path:
+            from PIL import Image
             img_path = Path(image_path)
             if not img_path.is_absolute():
                 img_path = WORKSPACE / img_path
-            
             try:
-                # Load image (automatically decryptions .enc if active)
-                pil_img = self.load_image(img_path).convert("RGB")
+                img_path = img_path.resolve()
+                img_path.relative_to(WORKSPACE.resolve())
+            except ValueError:
+                raise RuntimeError(f"Refusing to read image outside workspace: {image_path}")
+            if not img_path.exists() or not img_path.is_file():
+                raise FileNotFoundError(f"Dataset image not found: {image_path}")
+            try:
+                pil_img = Image.open(img_path).convert("RGB")
                 buf = io.BytesIO()
                 pil_img.save(buf, format="JPEG", quality=95)
                 image_base64 = base64.b64encode(buf.getvalue()).decode("utf-8")
-            except FileNotFoundError:
-                raise FileNotFoundError(f"Dataset image not found: {image_path}")
             except Exception as e:
-                raise RuntimeError(f"Failed to load dataset image: {e}")
+                raise RuntimeError(f"Failed to load dataset image at {img_path}: {e}")
 
         if not image_base64:
             raise ValueError("Either `image_base64` or `image_path` must be provided")
