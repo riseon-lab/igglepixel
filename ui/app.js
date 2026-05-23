@@ -1589,7 +1589,7 @@ async function loadModels() {
   }
   try {
     const data = await api.models();
-    state.models    = data.models;
+    state.models    = (data.models || []).filter(m => !m.id.startsWith('ltx'));
     state.upscalers = data.upscalers || [];
     state.gpu       = data.gpu;
     state.gpuStatus = 'ready';
@@ -1598,7 +1598,7 @@ async function loadModels() {
     $('#modelCount').textContent = state.models.length;
     $('#gpuDebug').textContent   = JSON.stringify(data.gpu, null, 2);
   } catch (e) {
-    state.models    = mockModels();
+    state.models    = mockModels().filter(m => !m.id.startsWith('ltx'));
     state.upscalers = [];
     renderModels();
     $('#modelCount').textContent = state.models.length;
@@ -1612,7 +1612,7 @@ async function loadPreviewRegistry() {
     const res = await fetch('/preview_registry.static.json', { cache: 'no-store' });
     if (!res.ok) throw new Error(`preview registry ${res.status}`);
     const data = await res.json();
-    state.models    = data.models || [];
+    state.models    = (data.models || []).filter(m => !m.id.startsWith('ltx'));
     state.upscalers = data.upscalers || [];
     state.gpu       = { type: 'nvidia', name: 'Preview GPU', vram_gb: 80 };
     state.gpuStatus = 'ready';
@@ -1621,7 +1621,7 @@ async function loadPreviewRegistry() {
     $('#gpuDebug').textContent   = JSON.stringify(state.gpu, null, 2);
     renderModels();
   } catch (err) {
-    state.models    = mockModels();
+    state.models    = mockModels().filter(m => !m.id.startsWith('ltx'));
     state.upscalers = [];
     state.gpu       = { type: 'unknown', name: 'Preview mode', vram_gb: 0 };
     state.gpuStatus = 'disconnected';

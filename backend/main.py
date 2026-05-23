@@ -4507,7 +4507,7 @@ def get_train_job_samples(job_id: str):
 
     def sample_step_from_path(path: Path) -> Optional[int]:
         rel = path.relative_to(out_dir).as_posix().lower()
-        name_match = re.match(r"^0*(\d{1,8})__", path.name.lower())
+        name_match = re.match(r"^0*(\d{1,8})[_-]", path.name.lower())
         if name_match:
             step = int(name_match.group(1))
             if 0 < step <= max_plausible_step:
@@ -4534,6 +4534,10 @@ def get_train_job_samples(job_id: str):
         if step is None:
             continue
         m = re.match(r"^\d+__(.+?)__\d+\.(?:jpg|png)$", p.name)
+        if not m:
+            m = re.match(r"^\d+[_-]+(.+?)[_-]+\d+\.(?:jpg|png)$", p.name)
+        if not m:
+            m = re.match(r"^\d+[_-]+(.+?)\.(?:jpg|png)$", p.name)
         prompt_slug = m.group(1) if m else p.stem
         try:
             ws_rel = p.relative_to(WORKSPACE.resolve()).as_posix()
@@ -4802,9 +4806,7 @@ async def upload_asset(
         # Phase 2 fallback: backend has the key, do the encryption here.
         fcrypto.write_encrypted(auth.data_key, visible, body)
     else:
-        # No keys anywhere — store plaintext. (Dev / debug only.)
-        visible.parent.mkdir(parents=True, exist_ok=True)
-        visible.write_bytes(body)
+        raise HTTPException(400, "Security constraint: At-rest encryption key is not available. Please unlock the dashboard before uploading assets.")
 
     rel = visible.relative_to(WORKSPACE)
     return {

@@ -121,14 +121,14 @@ def write_encrypted(key: bytes, dest_visible: Path, plaintext: bytes) -> Path:
 
 
 def read_decrypted(key: bytes, source_visible: Path) -> bytes:
-    """Read whichever of <name>.enc or <name> exists; decrypt the encrypted form."""
+    """Read <name>.enc and decrypt it. Refuses to read unencrypted plaintext files."""
     on_disk = find_on_disk(source_visible)
     if on_disk is None:
         raise FileNotFoundError(source_visible)
+    if on_disk.suffix != ".enc":
+        raise RuntimeError(f"Security constraint: Refusing to read unencrypted plaintext file at {on_disk}")
     raw = on_disk.read_bytes()
-    if on_disk.suffix == ".enc":
-        return decrypt_bytes(key, raw)
-    return raw   # legacy plaintext (kept for migration / dev convenience)
+    return decrypt_bytes(key, raw)
 
 
 def looks_encrypted(path: Path) -> bool:

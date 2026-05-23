@@ -980,14 +980,8 @@ class Runner(RunnerBase):
     @staticmethod
     def _decrypt_ref_to_temp(visible: Path) -> Path:
         key = _data_key()
-        if key:
-            import backend.crypto as fcrypto
-
-            data = fcrypto.read_decrypted(key, visible)
-        else:
-            if not visible.exists():
-                raise FileNotFoundError(visible)
-            data = visible.read_bytes()
+        import backend.crypto as fcrypto
+        data = fcrypto.read_decrypted(key, visible)
         suffix = visible.suffix or ".png"
         LTX_TMP_DIR.mkdir(parents=True, exist_ok=True)
         fd, tmp = tempfile.mkstemp(suffix=suffix, dir=str(LTX_TMP_DIR))
@@ -1024,9 +1018,5 @@ class Runner(RunnerBase):
         plaintext = src.read_bytes()
         out_visible.parent.mkdir(parents=True, exist_ok=True)
         key = _data_key()
-        if key:
-            import backend.crypto as fcrypto
-
-            return fcrypto.write_encrypted(key, out_visible, plaintext)
-        out_visible.write_bytes(plaintext)
-        return out_visible
+        import backend.crypto as fcrypto
+        return fcrypto.write_encrypted(key, out_visible, plaintext)
