@@ -3863,14 +3863,70 @@ OLLAMA_INSTALL_ROOT = WORKSPACE
 OLLAMA_MODELS_DIR = WORKSPACE / ".cache" / "ollama" / "models"
 
 
-def _ollama_download_url() -> str:
+def _ollama_target_arch() -> str:
+    machine = platform.machine().lower()
+    return "arm64" if machine in ("aarch64", "arm64") else "amd64"
+
+
+def _ollama_resolve_latest_asset_url() -> Optional[str]:
+    """Resolve the latest Ollama tarball URL via the GitHub releases API.
+    The ollama.com `/download/ollama-linux-<arch>.tgz` shortcut has
+    repeatedly 404'd between releases (it redirects to a specific tag
+    that doesn't carry the expected asset name), so we ask the actual
+    release manifest which assets exist and pick the matching tgz."""
+    arch = _ollama_target_arch()
+    api = "https://api.github.com/repos/ollama/ollama/releases/latest"
+    headers = {"User-Agent": "igglepixel/forge", "Accept": "application/vnd.github+json"}
+    try:
+        r = httpx.get(api, follow_redirects=True, timeout=15.0, headers=headers)
+        r.raise_for_status()
+        manifest = r.json()
+    except Exception as e:
+        _vision_runtime_append(f"github releases API for ollama unavailable: {e}")
+        return None
+    candidates = []
+    for asset in manifest.get("assets") or []:
+        name = (asset.get("name") or "").lower()
+        if arch in name and name.endswith(".tgz"):
+            candidates.append((name, asset.get("browser_download_url")))
+    # Prefer an exact `ollama-linux-<arch>.tgz` match; otherwise take the
+    # first compatible tarball (covers a future rename like
+    # `ollama-cuda12-linux-amd64.tgz`).
+    expected = f"ollama-linux-{arch}.tgz"
+    for name, url in candidates:
+        if name == expected and url:
+            return url
+    for _, url in candidates:
+        if url:
+            return url
+    return None
+
+
+def _ollama_download_url_candidates() -> list[str]:
     override = os.environ.get("IGGLEPIXEL_OLLAMA_TARBALL_URL", "").strip()
     if override:
-        return override
-    machine = platform.machine().lower()
-    if machine in ("aarch64", "arm64"):
-        return "https://ollama.com/download/ollama-linux-arm64.tgz"
-    return "https://ollama.com/download/ollama-linux-amd64.tgz"
+        return [override]
+    arch = _ollama_target_arch()
+    urls: list[str] = []
+    resolved = _ollama_resolve_latest_asset_url()
+    if resolved:
+        urls.append(resolved)
+    # GitHub's `releases/latest/download/<asset>` alias auto-redirects to
+    # the latest tag's asset of the same name. Works even when the API
+    # is rate-limited, and is more durable than ollama.com which has
+    # been pointing at a specific outdated tag.
+    urls.append(f"https://github.com/ollama/ollama/releases/latest/download/ollama-linux-{arch}.tgz")
+    # Last resort: the canonical ollama.com URL. Kept so an Ollama-side
+    # fix lands automatically without a code change here.
+    urls.append(f"https://ollama.com/download/ollama-linux-{arch}.tgz")
+    # Deduplicate while preserving order.
+    seen: set[str] = set()
+    deduped: list[str] = []
+    for u in urls:
+        if u and u not in seen:
+            seen.add(u)
+            deduped.append(u)
+    return deduped
 
 
 def _install_ollama_runtime() -> tuple[Optional[str], str]:
@@ -3894,36 +3950,44 @@ def _install_ollama_runtime() -> tuple[Optional[str], str]:
         _vision_runtime_append(f"ollama install failed: {msg}")
         return None, msg
 
-    url = _ollama_download_url()
-    _vision_runtime_append(f"installing Ollama runtime (self-heal) from {url}")
+    urls = _ollama_download_url_candidates()
+    _vision_runtime_append(f"installing Ollama runtime (self-heal); will try {len(urls)} source(s)")
 
     tmp_tarball = OLLAMA_INSTALL_ROOT / ".ollama-install.tgz"
-    httpx_error = ""
-    # Attempt 1: streaming download via httpx into a temp file (avoids
-    # holding ~300 MB in memory).
-    try:
-        with httpx.stream(
-            "GET", url,
-            follow_redirects=True,
-            timeout=httpx.Timeout(60.0, read=600.0),
-        ) as r:
-            r.raise_for_status()
-            total = int(r.headers.get("content-length", "0") or "0")
-            seen = 0
-            next_pct = 5
-            with open(tmp_tarball, "wb") as fp:
-                for chunk in r.iter_bytes(chunk_size=1 << 20):
-                    fp.write(chunk)
-                    seen += len(chunk)
-                    if total and (seen * 100) // total >= next_pct:
-                        _vision_runtime_append(f"ollama download {next_pct}%")
-                        next_pct += 5
-    except Exception as e:
-        httpx_error = f"httpx: {e}"
-        _vision_runtime_append(f"ollama download via httpx failed: {e}; retrying with curl")
-        # Attempt 2: curl is in the base image and uses a different TLS
-        # stack (libcurl vs Python ssl), so it often succeeds in
-        # containers where httpx fails on TLS/CDN quirks.
+    download_errors: list[str] = []
+    downloaded = False
+    for url in urls:
+        _vision_runtime_append(f"ollama download: {url}")
+        try:
+            tmp_tarball.unlink(missing_ok=True)
+        except Exception:
+            pass
+        # Attempt 1: streaming download via httpx into a temp file.
+        try:
+            with httpx.stream(
+                "GET", url,
+                follow_redirects=True,
+                timeout=httpx.Timeout(60.0, read=600.0),
+            ) as r:
+                r.raise_for_status()
+                total = int(r.headers.get("content-length", "0") or "0")
+                seen = 0
+                next_pct = 5
+                with open(tmp_tarball, "wb") as fp:
+                    for chunk in r.iter_bytes(chunk_size=1 << 20):
+                        fp.write(chunk)
+                        seen += len(chunk)
+                        if total and (seen * 100) // total >= next_pct:
+                            _vision_runtime_append(f"ollama download {next_pct}%")
+                            next_pct += 5
+            downloaded = True
+            break
+        except Exception as e:
+            download_errors.append(f"httpx {url}: {e}")
+            _vision_runtime_append(f"  httpx failed: {e}; trying curl")
+        # Attempt 2: curl on the same URL. Different TLS stack
+        # (libcurl vs Python `ssl`) — sometimes one works when the
+        # other fails on CDN/cert quirks.
         try:
             tmp_tarball.unlink(missing_ok=True)
         except Exception:
@@ -3934,22 +3998,25 @@ def _install_ollama_runtime() -> tuple[Optional[str], str]:
                  "-o", str(tmp_tarball), url],
                 check=True, timeout=900,
             )
+            downloaded = True
+            break
         except FileNotFoundError:
-            msg = f"{httpx_error} | curl: binary not found in PATH"
-            _vision_runtime_append(f"ollama install failed: {msg}")
-            return None, msg
+            download_errors.append("curl: binary not found in PATH")
+            _vision_runtime_append("  curl binary missing — no further retries possible for this URL")
         except subprocess.TimeoutExpired:
-            msg = f"{httpx_error} | curl: timed out after 900s downloading {url}"
-            _vision_runtime_append(f"ollama install failed: {msg}")
-            return None, msg
+            download_errors.append(f"curl {url}: timed out after 900s")
+            _vision_runtime_append(f"  curl: timed out after 900s")
         except subprocess.CalledProcessError as ce:
-            msg = f"{httpx_error} | curl: exit {ce.returncode} downloading {url}"
-            _vision_runtime_append(f"ollama install failed: {msg}")
-            return None, msg
+            download_errors.append(f"curl {url}: exit {ce.returncode}")
+            _vision_runtime_append(f"  curl: exit {ce.returncode}")
         except Exception as ce:
-            msg = f"{httpx_error} | curl: {ce}"
-            _vision_runtime_append(f"ollama install failed: {msg}")
-            return None, msg
+            download_errors.append(f"curl {url}: {ce}")
+            _vision_runtime_append(f"  curl: {ce}")
+
+    if not downloaded:
+        msg = "all download sources failed: " + " | ".join(download_errors)
+        _vision_runtime_append(f"ollama install failed: {msg}")
+        return None, msg
 
     # Extract the tarball into OLLAMA_INSTALL_ROOT.
     try:
