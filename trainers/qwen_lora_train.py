@@ -104,22 +104,101 @@ def py_import_ok(py: Path, module: str) -> bool:
 
 
 def torch_build(py: Path) -> tuple[str, str]:
-    code = "import torch; print(torch.__version__)"
+    code = "import torch; print(torch.__version__.split('+', 1)[0]); print(torch.version.cuda or '')"
     proc = subprocess.run([str(py), "-c", code], capture_output=True, text=True, check=True)
-    version = proc.stdout.strip()
-    base, _, cuda = version.partition("+")
-    return base, cuda
+    lines = [line.strip() for line in proc.stdout.splitlines()]
+    return (lines[0] if lines else "", lines[1] if len(lines) > 1 else "")
+
+
+def pytorch_cuda_index(cuda_version: str) -> str:
+    parts = (cuda_version or "").split(".")
+    if len(parts) < 2:
+        return ""
+    major, minor = parts[0], parts[1]
+    if not (major.isdigit() and minor.isdigit()):
+        return ""
+    return f"cu{major}{minor}"
+
+
+def torchaudio_probe(py: Path) -> tuple[bool, str]:
+    code = (
+        "import torch\n"
+        "import torchaudio\n"
+        "print('torch=' + torch.__version__ + ' cuda=' + str(torch.version.cuda))\n"
+        "print('torchaudio=' + torchaudio.__version__)\n"
+    )
+    proc = subprocess.run([str(py), "-c", code], capture_output=True, text=True)
+    output = (proc.stdout + proc.stderr).strip()
+    return proc.returncode == 0, output
+
+
+def install_matching_torchaudio(py: Path) -> None:
+    torch_version, cuda_version = torch_build(py)
+    if not torch_version:
+        raise SystemExit("Could not determine AI Toolkit torch version")
+    cmd = [
+        str(py),
+        "-m",
+        "pip",
+        "install",
+        "--upgrade",
+        "--force-reinstall",
+        "--no-deps",
+        f"torchaudio=={torch_version}",
+    ]
+    cuda_index = pytorch_cuda_index(cuda_version)
+    if cuda_index:
+        cmd.extend(["--index-url", f"https://download.pytorch.org/whl/{cuda_index}"])
+    run(cmd)
+
+
+def install_cuda128_torch_stack(py: Path) -> None:
+    run([
+        str(py),
+        "-m",
+        "pip",
+        "install",
+        "--upgrade",
+        "--force-reinstall",
+        "--index-url",
+        "https://download.pytorch.org/whl/cu128",
+        "torch==2.8.0",
+        "torchvision==0.23.0",
+        "torchaudio==2.8.0",
+    ])
 
 
 def ensure_torchaudio(py: Path) -> None:
-    if py_import_ok(py, "torchaudio"):
+    ok, details = torchaudio_probe(py)
+    if ok:
+        log("AI Toolkit torch/torchaudio CUDA stack is aligned")
         return
-    log("Installing torchaudio to satisfy AI Toolkit startup imports")
-    torch_version, cuda_suffix = torch_build(py)
-    cmd = [str(py), "-m", "pip", "install", f"torchaudio=={torch_version}"]
-    if cuda_suffix.startswith("cu"):
-        cmd.extend(["--index-url", f"https://download.pytorch.org/whl/{cuda_suffix}"])
-    run(cmd)
+    log("Repairing AI Toolkit torchaudio install")
+    if details:
+        log("torchaudio probe failed:")
+        for line in details.splitlines()[-8:]:
+            log("  " + line)
+    try:
+        install_matching_torchaudio(py)
+    except Exception as exc:
+        log(f"Matching torchaudio install failed: {type(exc).__name__}: {exc}")
+
+    ok, details = torchaudio_probe(py)
+    if ok:
+        log("AI Toolkit torchaudio repaired")
+        return
+
+    log("Falling back to known-good CUDA 12.8 torch/torchvision/torchaudio stack")
+    install_cuda128_torch_stack(py)
+    ok, details = torchaudio_probe(py)
+    if ok:
+        log("AI Toolkit torch stack repaired")
+        return
+    if details:
+        log("torch stack probe still failed:")
+        for line in details.splitlines()[-8:]:
+            log("  " + line)
+    raise SystemExit("AI Toolkit torch/torchaudio CUDA versions are still mismatched after repair")
 
 
 def is_flux_klein(base_model: str) -> bool:
