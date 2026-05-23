@@ -81,7 +81,7 @@ class Runner(RunnerBase):
         self._vllm_proc = subprocess.Popen(
             cmd,
             stdout=sys.stdout,
-            stderr=subprocess.stderr,
+            stderr=sys.stderr,
             env=env,
             start_new_session=True,
         )
