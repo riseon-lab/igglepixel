@@ -927,11 +927,15 @@ def _latest_app_runtime_job() -> Optional[dict]:
 def _runtime_deps_status_payload() -> dict:
     req_path = _runtime_deps_requirement_path()
     latest = _latest_app_runtime_job()
+    torchao_available = importlib.util.find_spec("torchao") is not None
+    vllm_available = importlib.util.find_spec("vllm") is not None
     return {
         "available": req_path.exists(),
         "requirements_path": str(req_path),
         "python_path": sys.executable,
-        "torchao_available": importlib.util.find_spec("torchao") is not None,
+        "torchao_available": torchao_available,
+        "vllm_available": vllm_available,
+        "deps_ready": torchao_available and vllm_available,
         "latest_job": latest,
     }
 
@@ -982,6 +986,8 @@ def _run_app_runtime_install_job(job_id: str) -> None:
         if return_code == 0:
             job["status"] = "done"
             job["torchao_available"] = importlib.util.find_spec("torchao") is not None
+            job["vllm_available"] = importlib.util.find_spec("vllm") is not None
+            job["deps_ready"] = job["torchao_available"] and job["vllm_available"]
         else:
             job["status"] = "error"
             job["error"] = f"pip install exited with code {return_code}"
@@ -3563,7 +3569,7 @@ def _vision_runtime_command(req: TrainerVisionRuntimeRequest) -> list[str]:
     raise HTTPException(
         400,
         "vLLM is not installed in the backend Python environment. "
-        "Install vllm on the pod, set IGGLEPIXEL_VISION_PYTHON to a Python that can import vllm, "
+        "Use the Settings runtime deps install button, set IGGLEPIXEL_VISION_PYTHON to a Python that can import vllm, "
         "or set IGGLEPIXEL_VISION_SERVER_CMD. Checked: " + candidates,
     )
 

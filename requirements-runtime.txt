@@ -51,6 +51,11 @@
 #   Qwen text-to-image INT8 uses Diffusers' TorchAO quantization backend by
 #   default. It avoids bitsandbytes CUDA stream failures seen on some L40S pod
 #   images while preserving the lower-VRAM INT8 path.
+#
+# Why vllm + qwen-vl-utils:
+#   Dataset Studio's pod captioner starts an OpenAI-compatible local vision
+#   server for Qwen2.5-VL. The UI already has a runtime deps button, so these
+#   live here instead of requiring terminal access on the pod.
 
 diffusers>=0.38.0
 peft
@@ -61,3 +66,5 @@ uv
 virtualenv
 bitsandbytes>=0.46
 torchao>=0.15
+vllm
+qwen-vl-utils

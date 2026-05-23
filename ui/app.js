@@ -1389,8 +1389,10 @@ function renderRuntimeDepsResult(payload = {}) {
   const done = status === 'done';
   const error = status === 'error' || status === 'missing';
   const torchaoReady = payload.torchao_available ?? job?.torchao_available;
+  const vllmReady = payload.vllm_available ?? job?.vllm_available;
+  const depsReady = payload.deps_ready ?? job?.deps_ready ?? (torchaoReady && vllmReady);
 
-  pill.dataset.state = done || torchaoReady ? 'on' : error ? 'off' : running ? 'loading' : 'unknown';
+  pill.dataset.state = done || depsReady ? 'on' : error ? 'off' : running ? 'loading' : 'unknown';
   if (running) {
     pill.textContent = status === 'queued' ? 'Deps: queued' : 'Deps: installing';
   } else if (done) {
@@ -1398,7 +1400,7 @@ function renderRuntimeDepsResult(payload = {}) {
   } else if (error) {
     pill.textContent = 'Deps: attention needed';
   } else {
-    pill.textContent = torchaoReady ? 'Deps: ready' : 'Deps: available';
+    pill.textContent = depsReady ? 'Deps: ready' : 'Deps: available';
   }
 
   if (!payload.available && !job?.requirements_path) {
@@ -1409,10 +1411,14 @@ function renderRuntimeDepsResult(payload = {}) {
     line.textContent = job.error;
   } else if (done) {
     line.textContent = 'Install complete. Stop and relaunch affected models before testing.';
-  } else if (torchaoReady) {
-    line.textContent = 'TorchAO is importable in this Python environment.';
+  } else if (depsReady) {
+    line.textContent = 'TorchAO and vLLM are importable in this Python environment.';
+  } else if (torchaoReady && !vllmReady) {
+    line.textContent = 'TorchAO is ready. vLLM is still missing for the Dataset Studio pod captioner.';
+  } else if (!torchaoReady && vllmReady) {
+    line.textContent = 'vLLM is ready. TorchAO is still missing for Qwen INT8.';
   } else {
-    line.textContent = 'Ready to install packages added by the latest app update.';
+    line.textContent = 'Ready to install TorchAO, vLLM, and other packages added by the latest app update.';
   }
 
   const chunks = [];
