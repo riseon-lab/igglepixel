@@ -56,8 +56,9 @@
 #   Dataset Studio's pod captioner starts an OpenAI-compatible local vision
 #   server for Qwen2.5-VL. The UI already has a runtime deps button, so these
 #   live here instead of requiring terminal access on the pod. The backend
-#   installer uses `uv pip install --torch-backend=auto` so vLLM picks a CUDA
-#   wheel that matches the pod instead of accidentally pulling a CUDA 13 build.
+#   installer uses `uv pip install --torch-backend=cu128` by default because
+#   the current RunPod CUDA runtime is 12.8; override with
+#   IGGLEPIXEL_RUNTIME_TORCH_BACKEND only if the pod image changes.
 
 diffusers>=0.38.0
 peft

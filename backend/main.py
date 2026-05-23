@@ -924,11 +924,44 @@ def _latest_app_runtime_job() -> Optional[dict]:
     return max(app_runtime_install_jobs.values(), key=lambda j: j.get("created_at", 0))
 
 
+def _python_can_import(module: str, python_bin: str) -> bool:
+    try:
+        res = subprocess.run(
+            [python_bin, "-c", f"import {module}"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=8,
+        )
+        return res.returncode == 0
+    except Exception:
+        return False
+
+
+def _command_succeeds(cmd: list[str]) -> bool:
+    try:
+        res = subprocess.run(
+            cmd,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=8,
+        )
+        return res.returncode == 0
+    except Exception:
+        return False
+
+
+def _vllm_available(python_bin: str = sys.executable) -> bool:
+    # `import vllm` can succeed even when the compiled CUDA extension is linked
+    # against the wrong runtime. Import the extension itself so bad CUDA wheels
+    # report as unavailable instead of failing later when Start model is pressed.
+    return _python_can_import("vllm._C", python_bin)
+
+
 def _runtime_deps_status_payload() -> dict:
     req_path = _runtime_deps_requirement_path()
     latest = _latest_app_runtime_job()
     torchao_available = importlib.util.find_spec("torchao") is not None
-    vllm_available = importlib.util.find_spec("vllm") is not None
+    vllm_available = _vllm_available()
     return {
         "available": req_path.exists(),
         "requirements_path": str(req_path),
@@ -995,23 +1028,26 @@ def _run_app_runtime_install_job(job_id: str) -> None:
             job["error"] = f"uv bootstrap exited with code {bootstrap_code}"
             return
         uv_bin = shutil.which("uv") or str(Path(sys.executable).resolve().parent / "uv")
+        torch_backend = os.environ.get("IGGLEPIXEL_RUNTIME_TORCH_BACKEND", "cu128").strip() or "cu128"
         cmd = [
             uv_bin,
             "pip",
             "install",
             "--python", sys.executable,
-            "--torch-backend=auto",
+            f"--torch-backend={torch_backend}",
             "--upgrade",
+            "--reinstall-package", "vllm",
             "-r", str(req_path),
         ]
+        job["torch_backend"] = torch_backend
         job["command"] = " ".join(shlex.quote(part) for part in cmd)
-        _log("== installing runtime deps with uv --torch-backend=auto ==")
+        _log(f"== installing runtime deps with uv --torch-backend={torch_backend} ==")
         return_code = _run_and_log(cmd)
         job["returncode"] = return_code
         if return_code == 0:
             job["status"] = "done"
             job["torchao_available"] = importlib.util.find_spec("torchao") is not None
-            job["vllm_available"] = importlib.util.find_spec("vllm") is not None
+            job["vllm_available"] = _vllm_available()
             job["deps_ready"] = job["torchao_available"] and job["vllm_available"]
         else:
             job["status"] = "error"
@@ -3535,32 +3571,6 @@ def _vision_runtime_host_port(endpoint: str) -> tuple[str, int]:
     return host, port
 
 
-def _python_can_import(module: str, python_bin: str) -> bool:
-    try:
-        res = subprocess.run(
-            [python_bin, "-c", f"import {module}"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            timeout=8,
-        )
-        return res.returncode == 0
-    except Exception:
-        return False
-
-
-def _command_succeeds(cmd: list[str]) -> bool:
-    try:
-        res = subprocess.run(
-            cmd,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            timeout=8,
-        )
-        return res.returncode == 0
-    except Exception:
-        return False
-
-
 def _vision_python_candidates() -> list[str]:
     candidates: list[str] = []
     for value in (
@@ -3595,7 +3605,7 @@ def _vision_runtime_command(req: TrainerVisionRuntimeRequest) -> list[str]:
     if vllm_bin and _command_succeeds([vllm_bin, "--version"]):
         return [vllm_bin, "serve", req.model, *common_args]
     for python_bin in _vision_python_candidates():
-        if _python_can_import("vllm", python_bin):
+        if _vllm_available(python_bin):
             return [
                 python_bin,
                 "-m",
@@ -3606,8 +3616,8 @@ def _vision_runtime_command(req: TrainerVisionRuntimeRequest) -> list[str]:
     candidates = ", ".join(_vision_python_candidates()) or "none"
     raise HTTPException(
         400,
-        "vLLM is not installed in the backend Python environment. "
-        "Use the Settings runtime deps install button, set IGGLEPIXEL_VISION_PYTHON to a Python that can import vllm, "
+        "vLLM is not installed or its CUDA extension cannot load in the backend Python environment. "
+        "Use the Settings runtime deps install button, set IGGLEPIXEL_VISION_PYTHON to a Python that can import vllm._C, "
         "or set IGGLEPIXEL_VISION_SERVER_CMD. Checked: " + candidates,
     )
 
