@@ -6369,6 +6369,7 @@ function renderDatasetVisionRuntime(payload = {}) {
   if (!pill || !status) return;
   const provider = $('#captionProvider')?.value || 'ollama';
   const isOllama = provider === 'ollama';
+  const managedOllama = isOllama && payload.running;
   const stateName = payload.state || (payload.ready ? 'ready' : payload.running ? 'starting' : 'stopped');
   const loading = stateName === 'starting' || payload.status === 'starting';
   pill.dataset.state = payload.ready ? 'on' : loading ? 'loading' : stateName === 'exited' ? 'off' : 'unknown';
@@ -6379,7 +6380,9 @@ function renderDatasetVisionRuntime(payload = {}) {
         : isOllama ? 'Ollama: stopped' : 'Vision: stopped';
   if (payload.ready) {
     status.textContent = isOllama
-      ? `${payload.model || 'Ollama vision model'} is reachable. Stop unloads it from memory without closing Ollama.`
+      ? managedOllama
+        ? `${payload.model || 'Ollama vision model'} is reachable. Stop will shut down the IgglePixel-started Ollama server.`
+        : `${payload.model || 'Ollama vision model'} is reachable. Unload releases it from memory without closing Ollama.`
       : `${payload.model || 'vision model'} is reachable at ${payload.endpoint || 'endpoint'}.`;
   } else if (loading) {
     status.textContent = isOllama
@@ -6390,7 +6393,7 @@ function renderDatasetVisionRuntime(payload = {}) {
   } else if (payload.returncode != null) {
     status.textContent = `Managed server exited with code ${payload.returncode}.`;
   } else if (isOllama) {
-    status.textContent = 'Ollama is not reachable yet. Start Ollama, then click Check Ollama.';
+    status.textContent = 'Ollama is not reachable yet. Click Start Ollama.';
   } else {
     status.textContent = 'No vision server is reachable yet.';
   }
@@ -6405,9 +6408,11 @@ function renderDatasetVisionRuntime(payload = {}) {
     start.title = isOllama ? 'Starts Ollama if it is not already reachable.' : '';
   }
   if (stop) {
-    stop.disabled = isOllama ? !payload.ready : !payload.running;
-    stop.textContent = isOllama ? 'Unload' : 'Stop';
-    stop.title = isOllama ? 'Unload the Ollama model from memory using keep_alive: 0.' : '';
+    stop.disabled = isOllama ? !(payload.ready || payload.running) : !payload.running;
+    stop.textContent = isOllama ? (payload.running ? 'Stop' : 'Unload') : 'Stop';
+    stop.title = isOllama
+      ? (payload.running ? 'Stop the IgglePixel-started Ollama server.' : 'Unload the Ollama model from memory using keep_alive: 0.')
+      : '';
   }
 }
 

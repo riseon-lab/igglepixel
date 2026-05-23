@@ -7,6 +7,7 @@ import json
 import os
 import re
 import secrets
+import signal
 import shlex
 import shutil
 import subprocess
@@ -3661,6 +3662,7 @@ def _ollama_binary_candidates() -> list[str]:
         "/usr/bin/ollama",
         "/bin/ollama",
         "/Applications/Ollama.app/Contents/Resources/ollama",
+        str(WORKSPACE / "bin" / "ollama"),
     ):
         if value and value not in candidates:
             candidates.append(value)
@@ -3686,7 +3688,7 @@ def _ollama_runtime_command(req: TrainerVisionRuntimeRequest) -> list[str]:
         checked = ", ".join(_ollama_binary_candidates()) or "none"
         raise HTTPException(
             400,
-            "Ollama is not installed on this backend host, or the backend cannot see it. "
+            "Ollama is not installed or is not visible to the backend process. "
             "Install Ollama on the machine running IgglePixel, set IGGLEPIXEL_OLLAMA_BIN, "
             "or set IGGLEPIXEL_OLLAMA_SERVER_CMD. Checked: " + checked,
         )
@@ -3967,6 +3969,7 @@ async def start_vision_runtime(req: TrainerVisionRuntimeRequest):
                 stderr=subprocess.STDOUT,
                 text=True,
                 bufsize=1,
+                start_new_session=True,
             )
         except FileNotFoundError as e:
             raise HTTPException(400, f"Vision runtime command not found: {e.filename}")
@@ -3993,8 +3996,49 @@ async def stop_vision_runtime(
     model: str = Query(""),
 ):
     _require_unlocked()
+    global vision_runtime_proc, vision_runtime_cfg
 
     if provider.strip().lower() == "ollama":
+        with vision_runtime_lock:
+            proc = vision_runtime_proc
+            cfg = dict(vision_runtime_cfg)
+        proc_alive = proc is not None and proc.poll() is None
+        if proc_alive and (cfg.get("provider") or "").strip().lower() == "ollama":
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+            except Exception:
+                proc.terminate()
+            try:
+                proc.wait(timeout=8)
+            except subprocess.TimeoutExpired:
+                try:
+                    os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                except Exception:
+                    proc.kill()
+                proc.wait(timeout=4)
+            _vision_runtime_append("Ollama runtime stopped")
+            with vision_runtime_lock:
+                vision_runtime_proc = None
+                vision_runtime_cfg = {}
+            return {
+                "managed": True,
+                "running": False,
+                "ready": False,
+                "pid": None,
+                "returncode": proc.poll(),
+                "provider": "ollama",
+                "endpoint": endpoint or cfg.get("endpoint", ""),
+                "model": model or cfg.get("model", ""),
+                "command": cfg.get("command"),
+                "log": ["Ollama runtime stopped by user"],
+                "status": "stopped",
+                "state": "stopped",
+            }
+
         result = await _ollama_unload_model(endpoint, model)
         return {
             "managed": False,
@@ -4029,7 +4073,6 @@ async def stop_vision_runtime(
             "state": "stopped",
         }
 
-    global vision_runtime_proc
     proc = vision_runtime_proc
     if proc is None or proc.poll() is not None:
         return {**_vision_runtime_public(), "status": "not_running", "state": "stopped"}
