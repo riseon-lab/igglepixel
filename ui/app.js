@@ -4354,6 +4354,28 @@ function updateGenerationHero(stage, job) {
   }
 }
 
+function applyViewportAssetRatio(canvas, asset) {
+  // Drive the canvas aspect ratio from the asset's dimensions so portrait
+  // outputs get a tall canvas and landscape gets a wide one — the image
+  // always fills the available space instead of sitting small inside a
+  // fixed-shape box. Server-side metadata is the fast path; otherwise
+  // wait for the media's natural size to land.
+  if (!canvas) return;
+  if (asset?.width && asset?.height) {
+    canvas.style.setProperty('--asset-ratio', `${asset.width} / ${asset.height}`);
+    return;
+  }
+  const media = canvas.querySelector('.viewport-media');
+  if (!media) return;
+  const apply = () => {
+    const w = media.videoWidth || media.naturalWidth;
+    const h = media.videoHeight || media.naturalHeight;
+    if (w && h) canvas.style.setProperty('--asset-ratio', `${w} / ${h}`);
+  };
+  if (media.naturalWidth || media.videoWidth) apply();
+  else media.addEventListener(media.tagName === 'VIDEO' ? 'loadedmetadata' : 'load', apply, { once: true });
+}
+
 function renderHeroPreview(modelId, opts = {}) {
   const canvas = $('#wsViewportCanvas');
   const stage = $('#wsViewportStage');
@@ -4368,6 +4390,7 @@ function renderHeroPreview(modelId, opts = {}) {
   canvas.classList.toggle('is-idle', !runningJob && !asset);
 
   if (runningJob) {
+    canvas.style.removeProperty('--asset-ratio');
     updateGenerationHero(stage, runningJob);
     if (hud) hud.style.setProperty('display', 'none', 'important');
     return;
@@ -4377,11 +4400,13 @@ function renderHeroPreview(modelId, opts = {}) {
     stage.innerHTML = `<div class="viewport-asset-wrap">${heroAssetHtml(asset)}</div>`;
     bindHeroMediaRecovery(modelId, asset);
     bindHeroPreviewClick(modelId, asset);
+    applyViewportAssetRatio(canvas, asset);
     if (meta) meta.textContent = heroMetaText(asset);
     if (hud) hud.style.removeProperty('display');
     return;
   }
 
+  canvas.style.removeProperty('--asset-ratio');
   stage.innerHTML = viewportIdleHtml();
   if (hud) hud.style.setProperty('display', 'none', 'important');
 }
