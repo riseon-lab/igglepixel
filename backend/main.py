@@ -3868,13 +3868,18 @@ def _ollama_target_arch() -> str:
     return "arm64" if machine in ("aarch64", "arm64") else "amd64"
 
 
-def _ollama_resolve_latest_asset_url() -> Optional[str]:
-    """Resolve the latest Ollama tarball URL via the GitHub releases API.
-    The ollama.com `/download/ollama-linux-<arch>.tgz` shortcut has
-    repeatedly 404'd between releases (it redirects to a specific tag
-    that doesn't carry the expected asset name), so we ask the actual
-    release manifest which assets exist and pick the matching tgz."""
-    arch = _ollama_target_arch()
+def _ollama_arch_aliases(arch: str) -> tuple[str, ...]:
+    return {
+        "amd64": ("amd64", "x86_64", "x86-64"),
+        "arm64": ("arm64", "aarch64"),
+    }.get(arch, (arch,))
+
+
+def _ollama_release_assets() -> tuple[Optional[str], list[dict]]:
+    """Return (tag_name, [{name, url, size}, ...]) from the latest
+    GitHub release. Logs the full asset list so a future rename is
+    visible in the install log without another code change. Returns
+    (None, []) if the API call fails or the manifest is empty."""
     api = "https://api.github.com/repos/ollama/ollama/releases/latest"
     headers = {"User-Agent": "igglepixel/forge", "Accept": "application/vnd.github+json"}
     try:
@@ -3883,49 +3888,91 @@ def _ollama_resolve_latest_asset_url() -> Optional[str]:
         manifest = r.json()
     except Exception as e:
         _vision_runtime_append(f"github releases API for ollama unavailable: {e}")
-        return None
-    candidates = []
+        return None, []
+    tag = manifest.get("tag_name")
+    assets: list[dict] = []
     for asset in manifest.get("assets") or []:
-        name = (asset.get("name") or "").lower()
-        if arch in name and name.endswith(".tgz"):
-            candidates.append((name, asset.get("browser_download_url")))
-    # Prefer an exact `ollama-linux-<arch>.tgz` match; otherwise take the
-    # first compatible tarball (covers a future rename like
-    # `ollama-cuda12-linux-amd64.tgz`).
-    expected = f"ollama-linux-{arch}.tgz"
-    for name, url in candidates:
-        if name == expected and url:
-            return url
-    for _, url in candidates:
-        if url:
-            return url
-    return None
+        name = asset.get("name") or ""
+        url = asset.get("browser_download_url") or ""
+        if name and url:
+            assets.append({"name": name, "url": url, "size": asset.get("size") or 0})
+    if tag is not None:
+        _vision_runtime_append(f"ollama latest release: {tag} ({len(assets)} asset(s))")
+        for a in assets:
+            _vision_runtime_append(f"  asset: {a['name']} ({a['size']} bytes)")
+    return tag, assets
 
 
-def _ollama_download_url_candidates() -> list[str]:
+def _ollama_asset_kind(name: str) -> str:
+    """Classify a release asset so the installer knows whether to
+    extract it (tarball) or chmod it directly (raw binary)."""
+    low = name.lower()
+    if low.endswith(".tgz") or low.endswith(".tar.gz"):
+        return "tarball"
+    if low.endswith(".tar"):
+        return "tar"
+    if low.endswith(".zip"):
+        return "zip"
+    # Anything not matching a known archive extension and lacking an
+    # extension entirely is treated as a raw ELF binary — Ollama
+    # publishes a bare `ollama-linux-amd64` file alongside (or in
+    # place of) the tarball on recent releases.
+    base = low.rsplit("/", 1)[-1]
+    if "." not in base:
+        return "binary"
+    return "other"
+
+
+def _ollama_install_sources() -> list[dict]:
+    """Build the ordered candidate list the installer will try. Each
+    entry is {url, kind, name}; kind tells the post-download step
+    whether to extract a tarball or chmod a raw binary."""
+    arch = _ollama_target_arch()
     override = os.environ.get("IGGLEPIXEL_OLLAMA_TARBALL_URL", "").strip()
     if override:
-        return [override]
-    arch = _ollama_target_arch()
-    urls: list[str] = []
-    resolved = _ollama_resolve_latest_asset_url()
-    if resolved:
-        urls.append(resolved)
-    # GitHub's `releases/latest/download/<asset>` alias auto-redirects to
-    # the latest tag's asset of the same name. Works even when the API
-    # is rate-limited, and is more durable than ollama.com which has
-    # been pointing at a specific outdated tag.
-    urls.append(f"https://github.com/ollama/ollama/releases/latest/download/ollama-linux-{arch}.tgz")
-    # Last resort: the canonical ollama.com URL. Kept so an Ollama-side
-    # fix lands automatically without a code change here.
-    urls.append(f"https://ollama.com/download/ollama-linux-{arch}.tgz")
-    # Deduplicate while preserving order.
+        name = override.rsplit("/", 1)[-1] or "ollama"
+        return [{"url": override, "kind": _ollama_asset_kind(name), "name": name}]
+
+    needles = _ollama_arch_aliases(arch)
+    sources: list[dict] = []
+
+    # Best source: GitHub releases API — gives us the exact assets the
+    # latest release ships, so renames are picked up automatically.
+    _, assets = _ollama_release_assets()
+    matched: list[tuple[int, dict]] = []
+    for a in assets:
+        low = a["name"].lower()
+        if not any(n in low for n in needles):
+            continue
+        # Ranking: tarballs first (carry the bundled CUDA libs the
+        # Ollama binary loads at runtime), then plain archives, then
+        # raw binaries (still useful — CPU-only fallback works).
+        kind = _ollama_asset_kind(a["name"])
+        rank = {"tarball": 0, "tar": 1, "zip": 2, "binary": 3}.get(kind, 9)
+        if rank < 9:
+            matched.append((rank, {"url": a["url"], "kind": kind, "name": a["name"]}))
+    matched.sort(key=lambda x: x[0])
+    for _, src in matched:
+        sources.append(src)
+
+    # Stable alias backstop: GitHub auto-redirects `releases/latest/download/<asset>`
+    # to whatever the latest release uses for that asset name. Kept in
+    # case the API rate-limits us.
+    fallback_name = f"ollama-linux-{arch}.tgz"
+    fallback_url = f"https://github.com/ollama/ollama/releases/latest/download/{fallback_name}"
+    sources.append({"url": fallback_url, "kind": "tarball", "name": fallback_name})
+
+    # ollama.com — currently 404s on recent releases, kept so an
+    # Ollama-side fix re-enables the path automatically.
+    com_url = f"https://ollama.com/download/{fallback_name}"
+    sources.append({"url": com_url, "kind": "tarball", "name": fallback_name})
+
     seen: set[str] = set()
-    deduped: list[str] = []
-    for u in urls:
-        if u and u not in seen:
-            seen.add(u)
-            deduped.append(u)
+    deduped: list[dict] = []
+    for s in sources:
+        if s["url"] not in seen:
+            seen.add(s["url"])
+            deduped.append(s)
     return deduped
 
 
@@ -3950,16 +3997,17 @@ def _install_ollama_runtime() -> tuple[Optional[str], str]:
         _vision_runtime_append(f"ollama install failed: {msg}")
         return None, msg
 
-    urls = _ollama_download_url_candidates()
-    _vision_runtime_append(f"installing Ollama runtime (self-heal); will try {len(urls)} source(s)")
+    sources = _ollama_install_sources()
+    _vision_runtime_append(f"installing Ollama runtime (self-heal); will try {len(sources)} source(s)")
 
-    tmp_tarball = OLLAMA_INSTALL_ROOT / ".ollama-install.tgz"
+    tmp_file = OLLAMA_INSTALL_ROOT / ".ollama-install.dl"
     download_errors: list[str] = []
-    downloaded = False
-    for url in urls:
-        _vision_runtime_append(f"ollama download: {url}")
+    chosen: Optional[dict] = None
+    for src in sources:
+        url, kind = src["url"], src["kind"]
+        _vision_runtime_append(f"ollama download ({kind}): {url}")
         try:
-            tmp_tarball.unlink(missing_ok=True)
+            tmp_file.unlink(missing_ok=True)
         except Exception:
             pass
         # Attempt 1: streaming download via httpx into a temp file.
@@ -3973,32 +4021,30 @@ def _install_ollama_runtime() -> tuple[Optional[str], str]:
                 total = int(r.headers.get("content-length", "0") or "0")
                 seen = 0
                 next_pct = 5
-                with open(tmp_tarball, "wb") as fp:
+                with open(tmp_file, "wb") as fp:
                     for chunk in r.iter_bytes(chunk_size=1 << 20):
                         fp.write(chunk)
                         seen += len(chunk)
                         if total and (seen * 100) // total >= next_pct:
                             _vision_runtime_append(f"ollama download {next_pct}%")
                             next_pct += 5
-            downloaded = True
+            chosen = src
             break
         except Exception as e:
             download_errors.append(f"httpx {url}: {e}")
             _vision_runtime_append(f"  httpx failed: {e}; trying curl")
-        # Attempt 2: curl on the same URL. Different TLS stack
-        # (libcurl vs Python `ssl`) — sometimes one works when the
-        # other fails on CDN/cert quirks.
+        # Attempt 2: curl on the same URL.
         try:
-            tmp_tarball.unlink(missing_ok=True)
+            tmp_file.unlink(missing_ok=True)
         except Exception:
             pass
         try:
             subprocess.run(
                 ["curl", "-fSL", "--retry", "3", "--retry-delay", "2",
-                 "-o", str(tmp_tarball), url],
+                 "-o", str(tmp_file), url],
                 check=True, timeout=900,
             )
-            downloaded = True
+            chosen = src
             break
         except FileNotFoundError:
             download_errors.append("curl: binary not found in PATH")
@@ -4013,23 +4059,72 @@ def _install_ollama_runtime() -> tuple[Optional[str], str]:
             download_errors.append(f"curl {url}: {ce}")
             _vision_runtime_append(f"  curl: {ce}")
 
-    if not downloaded:
+    if chosen is None:
         msg = "all download sources failed: " + " | ".join(download_errors)
         _vision_runtime_append(f"ollama install failed: {msg}")
         return None, msg
 
-    # Extract the tarball into OLLAMA_INSTALL_ROOT.
+    # Determine final kind from the magic bytes — declared kind can be
+    # wrong if the URL served HTML (e.g. a 200-with-error-page CDN) or
+    # if a "binary" was actually a zipped wrapper.
     try:
-        import tarfile
-        with tarfile.open(str(tmp_tarball), mode="r:gz") as tar:
-            tar.extractall(OLLAMA_INSTALL_ROOT)
+        with open(tmp_file, "rb") as fp:
+            head = fp.read(8)
+    except OSError as e:
+        msg = f"reading downloaded artifact failed: {e}"
+        _vision_runtime_append(f"ollama install failed: {msg}")
+        return None, msg
+
+    detected_kind = chosen["kind"]
+    if head[:2] == b"\x1f\x8b":
+        detected_kind = "tarball"
+    elif head[:4] == b"\x7fELF":
+        detected_kind = "binary"
+    elif head[:2] == b"PK":
+        detected_kind = "zip"
+    elif head[:5].lower() == b"<!doc" or head[:1] == b"<":
+        msg = f"downloaded artifact is HTML, not a binary (CDN error page from {chosen['url']})"
+        _vision_runtime_append(f"ollama install failed: {msg}")
+        try:
+            tmp_file.unlink(missing_ok=True)
+        except Exception:
+            pass
+        return None, msg
+    _vision_runtime_append(f"ollama artifact detected as {detected_kind}")
+
+    try:
+        if detected_kind == "tarball":
+            import tarfile
+            with tarfile.open(str(tmp_file), mode="r:gz") as tar:
+                tar.extractall(OLLAMA_INSTALL_ROOT)
+        elif detected_kind == "tar":
+            import tarfile
+            with tarfile.open(str(tmp_file), mode="r:") as tar:
+                tar.extractall(OLLAMA_INSTALL_ROOT)
+        elif detected_kind == "zip":
+            import zipfile
+            with zipfile.ZipFile(str(tmp_file)) as zf:
+                zf.extractall(OLLAMA_INSTALL_ROOT)
+        elif detected_kind == "binary":
+            # Raw ELF binary — place it where the tarball would have
+            # unpacked the bin/ollama path so the rest of the install
+            # flow (chmod, --version probe) works unchanged. Note: a
+            # raw binary lacks the bundled lib/ollama CUDA libs, so
+            # GPU acceleration falls back to whatever the system
+            # provides (which on RunPod CUDA images usually works).
+            persistent_bin.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(tmp_file), str(persistent_bin))
+        else:
+            msg = f"downloaded artifact has unsupported format ({detected_kind})"
+            _vision_runtime_append(f"ollama install failed: {msg}")
+            return None, msg
     except Exception as e:
-        msg = f"extract {tmp_tarball}: {e}"
+        msg = f"extract/move {tmp_file}: {e}"
         _vision_runtime_append(f"ollama install failed: {msg}")
         return None, msg
     finally:
         try:
-            tmp_tarball.unlink(missing_ok=True)
+            tmp_file.unlink(missing_ok=True)
         except Exception:
             pass
 
