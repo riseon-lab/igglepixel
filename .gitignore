@@ -5,6 +5,7 @@
 # commit any of it. Holds .forge_auth.json (hashed creds + signing key),
 # user assets, runner logs, downloaded model weights.
 workspace/
+local-captioner/workspace/
 
 # ── Auth artifacts (defence in depth — already covered by workspace/) ──
 .forge_auth.json

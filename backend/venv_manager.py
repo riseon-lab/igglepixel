@@ -286,7 +286,7 @@ def _create_venv(runtime_id: str, python_version: Optional[str], log: Callable[[
             if rc != 0:
                 _fail(f"uv python install {python_version}")
 
-        cmd = ["uv", "venv", str(venv)]
+        cmd = ["uv", "venv", str(venv), "--system-site-packages"]
         if python_version:
             cmd.extend(["--python", python_version])
         rc = _run(cmd, tee)
@@ -304,7 +304,7 @@ def _create_venv(runtime_id: str, python_version: Optional[str], log: Callable[[
             py_bin = candidate
         else:
             log(f"WARN: no python{python_version} binary found; using {py_bin}")
-    rc = _run([py_bin, "-m", "venv", str(venv)], log)
+    rc = _run([py_bin, "-m", "venv", str(venv), "--system-site-packages"], log)
     if rc == 0:
         return
 
@@ -318,7 +318,7 @@ def _create_venv(runtime_id: str, python_version: Optional[str], log: Callable[[
         if install_rc != 0:
             raise RuntimeError(f"python -m venv failed and virtualenv could not be installed for runtime '{runtime_id}'")
 
-    rc = _run([py_bin, "-m", "virtualenv", str(venv)], log)
+    rc = _run([py_bin, "-m", "virtualenv", str(venv), "--system-site-packages"], log)
     if rc != 0:
         raise RuntimeError(f"python -m venv and virtualenv failed for runtime '{runtime_id}'")
 
