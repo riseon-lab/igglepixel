@@ -33,6 +33,7 @@ function writeJSONStorage(key, value) {
 const state = {
   models:        [],
   gpu:           null,
+  gpuStatus:     'loading',
   filter:        'all',
   assetFilter:   'all',
   running:       {},
@@ -52,12 +53,21 @@ const state = {
   promptModes:   readJSONStorage('forge_prompt_modes', {}),   // model_id -> 'builder' | 'raw'
   promptBuilders: readJSONStorage('forge_prompt_builders', {}),// model_id -> guided prompt fields
   recents:       {},          // model_id -> [asset, …] (this session only)
+  activePreviews: {},         // model_id -> focused asset in the hero preview
   imgInputs:     {},          // { model_id -> { ref:{img,enabled}, pose:{...}, ... } }
   loraStates:    readJSONStorage('forge_lora_states', {}), // persisted per-model LoRA toggles + strengths
   trainers:      [],
   trainJobs:     [],
   trainPoll:     null,
   trainValidation: null,
+  datasets:      [],
+  activeDataset: null,
+  datasetItems:  [],
+  datasetFilter: 'all',
+  datasetSelected: -1,
+  datasetBusy:   false,
+  datasetVisionPoll: null,
+  previewDatasetStore: {},
   components:    [],          // installed split-file components: [{target, filename, size_mb, path}]
   runtimes:      {},          // { model_id -> {state: 'missing'|'installing'|'ready'|'error', last_line?, error?} }
   runtimeDepsPoll: null,
@@ -216,14 +226,18 @@ const COLOUR_OPTIONS = [
   'black', 'white', 'ivory', 'cream', 'charcoal', 'silver', 'grey', 'navy', 'cobalt blue',
   'sky blue', 'emerald green', 'forest green', 'olive', 'sage', 'red', 'burgundy', 'rose',
   'pink', 'lavender', 'purple', 'mustard yellow', 'gold', 'copper', 'orange', 'rust',
-  'tan', 'camel', 'brown', 'transparent', 'iridescent', 'neon', 'pastel', 'monochrome'
+  'tan', 'camel', 'brown', 'oxblood', 'gunmetal', 'pearl', 'mint green', 'electric blue',
+  'transparent', 'iridescent', 'holographic', 'neon', 'pastel', 'monochrome',
+  'Aerochrome false-colour infrared'
 ];
 
 const MATERIAL_OPTIONS = [
   'cotton', 'linen', 'silk', 'satin', 'velvet', 'chiffon', 'lace', 'wool', 'cashmere',
   'denim', 'leather', 'suede', 'latex', 'vinyl', 'mesh', 'organza', 'tulle', 'knit',
   'ribbed fabric', 'technical nylon', 'waterproof fabric', 'metallic fabric', 'sequins',
-  'embroidered fabric', 'sheer fabric', 'matte fabric', 'glossy fabric', 'distressed fabric'
+  'embroidered fabric', 'sheer fabric', 'matte fabric', 'glossy fabric', 'distressed fabric',
+  'jersey fabric', 'fleece', 'canvas', 'corduroy', 'tweed', 'brocade', 'lame metallic fabric', 'neoprene',
+  'patent leather', 'faux fur', 'feather trim', 'rubber', 'crochet', 'chainmail'
 ];
 
 const PROMPT_BUILDER_SECTIONS = [
@@ -235,8 +249,10 @@ const PROMPT_BUILDER_SECTIONS = [
       { key: 'subjectCount', label: 'Subjects', type: 'select', options: ['single subject', 'two subjects', 'small group', 'crowd', 'subject with pet', 'subject with vehicle'] },
       { key: 'presentation', label: 'Presentation', type: 'select', options: ['feminine presentation', 'masculine presentation', 'androgynous presentation', 'gender-neutral styling', 'fashion model look', 'everyday person look', 'fantasy character look'] },
       { key: 'age', label: 'Age', type: 'select', options: ['adult 18-24', 'adult 25-34', 'adult 35-44', 'adult 45-54', 'adult 55-64', 'senior adult', 'elderly adult', 'ageless fantasy character'] },
-      { key: 'bodyType', label: 'Body type', type: 'select', options: ['slim build', 'lean build', 'athletic build', 'toned build', 'muscular build', 'soft build', 'curvy build', 'plus-size build', 'broad-shouldered build', 'petite build', 'tall build', 'average build'] },
-      { key: 'posture', label: 'Posture', type: 'select', options: ['relaxed posture', 'confident posture', 'upright posture', 'casual slouch', 'elegant posture', 'dynamic posture', 'balanced stance', 'contrapposto stance'] },
+      { key: 'bodyType', label: 'Body type', type: 'select', options: ['slim build', 'lean build', 'athletic build', 'toned build', 'muscular build', 'soft build', 'curvy build', 'plus-size build', 'broad-shouldered build', 'petite build', 'tall build', 'average build', 'willowy build', 'stocky build', 'lithe build', 'statuesque build'] },
+      { key: 'silhouette', label: 'Silhouette', type: 'select', options: ['clean simple silhouette', 'hourglass silhouette', 'boxy silhouette', 'long vertical silhouette', 'wide-shoulder silhouette', 'narrow-waist silhouette', 'layered silhouette', 'oversized silhouette', 'tailored silhouette', 'flowing silhouette'] },
+      { key: 'posture', label: 'Posture', type: 'select', options: ['relaxed posture', 'confident posture', 'upright posture', 'casual slouch', 'elegant posture', 'dynamic posture', 'balanced stance', 'contrapposto stance', 'guarded posture', 'playful posture', 'commanding posture', 'resting posture'] },
+      { key: 'subjectRole', label: 'Role / archetype', type: 'select', options: ['fashion editorial subject', 'street style subject', 'athlete', 'performer', 'artist', 'musician', 'detective', 'explorer', 'scientist', 'royal figure', 'warrior', 'pilot', 'mechanic', 'chef', 'student', 'office worker', 'traveller', 'witch', 'spacefarer'] },
       { key: 'subjectDetail', label: 'Extra subject detail', type: 'text', wide: true, placeholder: 'distinctive silhouette, era, occupation, character notes...' },
     ],
   },
@@ -244,13 +260,13 @@ const PROMPT_BUILDER_SECTIONS = [
     id: 'face-hair',
     title: 'Face, Hair, Details',
     fields: [
-      { key: 'expression', label: 'Expression', type: 'select', options: ['neutral expression', 'soft smile', 'wide smile', 'serious expression', 'confident expression', 'pensive expression', 'curious expression', 'surprised expression', 'dreamy expression', 'intense gaze', 'laughing', 'subtle smirk', 'calm expression', 'melancholic expression'] },
-      { key: 'head', label: 'Head direction', type: 'select', options: ['looking at camera', 'looking left', 'looking right', 'looking up', 'looking down', 'looking over shoulder', 'eyes closed', 'gaze off-frame', 'chin lifted', 'chin lowered'] },
-      { key: 'hairColor', label: 'Hair colour', type: 'select', options: ['black hair', 'dark brown hair', 'brown hair', 'chestnut hair', 'auburn hair', 'red hair', 'ginger hair', 'copper hair', 'blonde hair', 'platinum blonde hair', 'silver hair', 'grey hair', 'white hair', 'pastel pink hair', 'blue hair', 'green hair', 'purple hair', 'two-tone hair', 'balayage hair', 'shaved head', 'bald head'] },
-      { key: 'hairStyle', label: 'Hair style', type: 'select', options: ['long straight hair', 'long wavy hair', 'long curly hair', 'short bob', 'pixie cut', 'buzz cut', 'undercut', 'slicked-back hair', 'messy hair', 'braided hair', 'box braids', 'cornrows', 'high ponytail', 'low ponytail', 'bun', 'space buns', 'afro', 'locs', 'wet-look hair', 'windblown hair', 'fringe bangs', 'curtain bangs'] },
-      { key: 'makeup', label: 'Make-up', type: 'select', options: ['no visible make-up', 'natural make-up', 'soft glam make-up', 'editorial make-up', 'smoky eye make-up', 'winged eyeliner', 'glossy lips', 'matte lips', 'bold red lip', 'metallic eye shadow', 'glitter make-up', 'goth make-up', 'avant-garde face paint', 'dewy skin finish'] },
-      { key: 'piercings', label: 'Piercings', type: 'select', options: ['no piercings visible', 'ear piercings', 'multiple ear piercings', 'nose ring', 'septum piercing', 'lip piercing', 'eyebrow piercing', 'industrial piercing', 'facial piercing set', 'minimal jewellery piercings'] },
-      { key: 'tattoos', label: 'Tattoos / marks', type: 'select', options: ['no visible tattoos', 'small tattoos', 'sleeve tattoo', 'neck tattoo', 'hand tattoos', 'delicate line tattoos', 'geometric tattoos', 'floral tattoos', 'freckles', 'beauty mark', 'scars', 'birthmark'] },
+      { key: 'expression', label: 'Expression', type: 'select', options: ['neutral expression', 'soft smile', 'wide smile', 'serious expression', 'confident expression', 'pensive expression', 'curious expression', 'surprised expression', 'dreamy expression', 'intense gaze', 'laughing', 'subtle smirk', 'calm expression', 'melancholic expression', 'closed-mouth smile', 'open-mouth smile', 'raised eyebrow', 'focused expression', 'playful expression', 'defiant expression', 'tired expression', 'serene expression'] },
+      { key: 'head', label: 'Head direction', type: 'select', options: ['looking at camera', 'looking left', 'looking right', 'looking up', 'looking down', 'looking over shoulder', 'eyes closed', 'gaze off-frame', 'chin lifted', 'chin lowered', 'looking past camera', 'looking into mirror', 'head tilted left', 'head tilted right', 'profile gaze', 'downcast eyes'] },
+      { key: 'hairColor', label: 'Hair colour', type: 'select', options: ['black hair', 'dark brown hair', 'brown hair', 'chestnut hair', 'auburn hair', 'red hair', 'ginger hair', 'copper hair', 'strawberry blonde hair', 'dark blonde hair', 'blonde hair', 'platinum blonde hair', 'silver hair', 'grey hair', 'white hair', 'pastel pink hair', 'blue hair', 'green hair', 'purple hair', 'two-tone hair', 'dark roots', 'balayage hair', 'ombre hair', 'highlighted hair', 'shaved head', 'bald head'] },
+      { key: 'hairStyle', label: 'Hair style', type: 'select', options: ['long straight hair', 'long wavy hair', 'long curly hair', 'shoulder-length hair', 'short bob', 'lob haircut', 'pixie cut', 'buzz cut', 'undercut', 'slicked-back hair', 'middle part hair', 'side part hair', 'messy hair', 'braided hair', 'loose braid', 'box braids', 'cornrows', 'high ponytail', 'low ponytail', 'bun', 'messy bun', 'space buns', 'afro', 'locs', 'wet-look hair', 'windblown hair', 'fringe bangs', 'curtain bangs'] },
+      { key: 'makeup', label: 'Make-up', type: 'select', options: ['no visible make-up', 'natural make-up', 'soft glam make-up', 'editorial make-up', 'smoky eye make-up', 'winged eyeliner', 'graphic eyeliner', 'glossy lips', 'matte lips', 'bold red lip', 'nude lip', 'metallic eye shadow', 'glitter make-up', 'goth make-up', 'avant-garde face paint', 'dewy skin finish', 'matte skin finish', 'sun-kissed blush', 'highlighter glow'] },
+      { key: 'piercings', label: 'Piercings', type: 'select', options: ['no piercings visible', 'ear piercings', 'multiple ear piercings', 'nose ring', 'nose stud', 'septum piercing', 'lip piercing', 'eyebrow piercing', 'industrial piercing', 'helix piercings', 'facial piercing set', 'minimal jewellery piercings'] },
+      { key: 'tattoos', label: 'Tattoos / marks', type: 'select', options: ['no visible tattoos', 'small tattoos', 'sleeve tattoo', 'neck tattoo', 'hand tattoos', 'delicate line tattoos', 'geometric tattoos', 'floral tattoos', 'script tattoo', 'freckles', 'beauty mark', 'scars', 'birthmark', 'paint marks', 'glitter on skin'] },
       { key: 'faceDetail', label: 'Extra face detail', type: 'text', wide: true, placeholder: 'eye colour, freckles, facial hair, skin finish, jewellery detail...' },
     ],
   },
@@ -258,17 +274,19 @@ const PROMPT_BUILDER_SECTIONS = [
     id: 'wardrobe',
     title: 'Wardrobe',
     fields: [
-      { key: 'outfit', label: 'Full outfit', type: 'select', options: ['tailored suit', 'evening gown', 'cocktail dress', 'streetwear outfit', 'casual outfit', 'athleisure outfit', 'workwear outfit', 'bohemian outfit', 'punk outfit', 'goth outfit', 'cyberpunk outfit', 'sci-fi armour', 'fantasy robe', 'formal uniform', 'raincoat outfit', 'winter outfit', 'summer outfit', 'swimwear outfit', 'festival outfit'] },
+      { key: 'outfit', label: 'Full outfit', type: 'select', options: ['tailored suit', 'evening gown', 'cocktail dress', 'sundress', 'slip dress', 'linen resort outfit', 'streetwear outfit', 'casual outfit', 'oversized sweater and jeans', 'athleisure outfit', 'workwear outfit', 'bohemian outfit', 'punk outfit', 'goth outfit', 'minimal monochrome outfit', 'high-fashion runway look', 'cyberpunk outfit', 'sci-fi armour', 'fantasy robe', 'formal uniform', 'raincoat outfit', 'winter outfit', 'summer outfit', 'swimwear outfit', 'festival outfit'] },
       { key: 'fullColor', label: 'Full colour', type: 'select', options: COLOUR_OPTIONS },
       { key: 'fullMaterial', label: 'Full material', type: 'select', options: MATERIAL_OPTIONS },
-      { key: 'topGarment', label: 'Top', type: 'select', options: ['t-shirt', 'tank top', 'crop top', 'button-up shirt', 'blouse', 'hoodie', 'sweater', 'cardigan', 'blazer', 'bomber jacket', 'leather jacket', 'denim jacket', 'trench coat', 'corset top', 'turtleneck', 'kimono jacket', 'sports jersey', 'utility vest'] },
+      { key: 'outfitFit', label: 'Fit / silhouette', type: 'select', options: ['tailored fit', 'relaxed fit', 'oversized fit', 'body-skimming fit', 'structured silhouette', 'flowing silhouette', 'layered styling', 'minimal clean styling', 'cinched waist fit', 'boxy fit', 'draped fit', 'asymmetrical styling'] },
+      { key: 'pattern', label: 'Pattern', type: 'select', options: ['solid colour', 'floral print', 'stripes', 'pinstripes', 'plaid', 'houndstooth', 'polka dots', 'geometric pattern', 'animal print', 'abstract print', 'embroidered detail', 'lace detail', 'logo-free garment', 'subtle texture pattern'] },
+      { key: 'topGarment', label: 'Top', type: 'select', options: ['t-shirt', 'tank top', 'crop top', 'button-up shirt', 'oversized shirt', 'blouse', 'hoodie', 'sweater', 'cardigan', 'blazer', 'bomber jacket', 'leather jacket', 'denim jacket', 'trench coat', 'corset top', 'bodysuit', 'turtleneck', 'kimono jacket', 'sports jersey', 'utility vest', 'puffer jacket', 'halter top'] },
       { key: 'topColor', label: 'Top colour', type: 'select', options: COLOUR_OPTIONS },
       { key: 'topMaterial', label: 'Top material', type: 'select', options: MATERIAL_OPTIONS },
-      { key: 'bottomGarment', label: 'Bottom', type: 'select', options: ['jeans', 'wide-leg trousers', 'tailored trousers', 'cargo pants', 'shorts', 'mini skirt', 'midi skirt', 'maxi skirt', 'pleated skirt', 'pencil skirt', 'leggings', 'joggers', 'leather pants', 'utility skirt', 'flowing fabric pants'] },
+      { key: 'bottomGarment', label: 'Bottom', type: 'select', options: ['jeans', 'straight-leg jeans', 'wide-leg trousers', 'tailored trousers', 'cargo pants', 'parachute pants', 'shorts', 'tailored shorts', 'mini skirt', 'midi skirt', 'maxi skirt', 'pleated skirt', 'pencil skirt', 'slip skirt', 'leggings', 'joggers', 'leather pants', 'utility skirt', 'flowing fabric pants'] },
       { key: 'bottomColor', label: 'Bottom colour', type: 'select', options: COLOUR_OPTIONS },
       { key: 'bottomMaterial', label: 'Bottom material', type: 'select', options: MATERIAL_OPTIONS },
-      { key: 'accessories', label: 'Accessories', type: 'select', options: ['no accessories', 'minimal jewellery', 'statement earrings', 'layered necklaces', 'rings', 'bracelets', 'watch', 'belt', 'gloves', 'scarf', 'hat', 'beanie', 'baseball cap', 'sunglasses', 'eyeglasses', 'handbag', 'backpack', 'crossbody bag', 'umbrella', 'headphones'] },
-      { key: 'shoes', label: 'Shoes', type: 'select', options: ['barefoot', 'white sneakers', 'black boots', 'ankle boots', 'knee-high boots', 'combat boots', 'loafers', 'dress shoes', 'heels', 'platform heels', 'sandals', 'running shoes', 'hiking boots', 'futuristic shoes', 'delicate flats'] },
+      { key: 'accessories', label: 'Accessories', type: 'select', options: ['no accessories', 'minimal jewellery', 'statement earrings', 'layered necklaces', 'rings', 'bracelets', 'watch', 'belt', 'gloves', 'scarf', 'silk scarf', 'hat', 'wide-brim hat', 'beanie', 'baseball cap', 'sunglasses', 'eyeglasses', 'handbag', 'backpack', 'crossbody bag', 'clutch bag', 'umbrella', 'headphones', 'hair clips', 'choker necklace'] },
+      { key: 'shoes', label: 'Shoes', type: 'select', options: ['barefoot', 'white sneakers', 'black boots', 'ankle boots', 'knee-high boots', 'combat boots', 'cowboy boots', 'loafers', 'dress shoes', 'heels', 'platform heels', 'kitten heels', 'sandals', 'strappy sandals', 'running shoes', 'hiking boots', 'futuristic shoes', 'delicate flats', 'Mary Jane shoes'] },
       { key: 'shoeColor', label: 'Shoe colour', type: 'select', options: COLOUR_OPTIONS },
       { key: 'clothingDetail', label: 'Extra clothing detail', type: 'text', wide: true, placeholder: 'fit, layering, patterns, logos to avoid, wear level, styling notes...' },
     ],
@@ -277,11 +295,12 @@ const PROMPT_BUILDER_SECTIONS = [
     id: 'scene',
     title: 'Scene',
     fields: [
-      { key: 'scene', label: 'Scene', type: 'select', options: ['studio backdrop', 'minimal interior', 'luxury apartment', 'bedroom', 'kitchen', 'office', 'workshop', 'gallery', 'museum', 'library', 'cafe', 'restaurant', 'hotel lobby', 'rooftop', 'city street', 'neon alley', 'subway station', 'train platform', 'parking garage', 'forest', 'beach', 'desert', 'mountain path', 'rainy street', 'snowy landscape', 'futuristic city', 'medieval village', 'spaceship interior', 'fantasy castle', 'concert stage'] },
-      { key: 'timeOfDay', label: 'Time', type: 'select', options: ['early morning', 'golden hour', 'midday', 'late afternoon', 'sunset', 'blue hour', 'night', 'midnight', 'overcast day'] },
-      { key: 'weather', label: 'Weather', type: 'select', options: ['clear weather', 'light rain', 'heavy rain', 'mist', 'fog', 'snow', 'wind', 'storm clouds', 'humid haze', 'dust in the air'] },
-      { key: 'background', label: 'Background', type: 'select', options: ['clean background', 'soft blurred background', 'busy detailed background', 'architectural background', 'natural landscape background', 'industrial background', 'luxury background', 'cluttered lived-in background', 'symmetrical background', 'deep background layers'] },
-      { key: 'props', label: 'Props', type: 'select', options: ['no props', 'flowers', 'book', 'phone', 'camera', 'laptop', 'microphone', 'musical instrument', 'coffee cup', 'drink glass', 'sword', 'tool kit', 'sports equipment', 'shopping bags', 'vehicle', 'chair', 'mirror', 'neon sign', 'smoke machine', 'floating objects'] },
+      { key: 'scene', label: 'Scene', type: 'select', options: ['studio backdrop', 'minimal interior', 'luxury apartment', 'living room', 'bedroom', 'bathroom mirror', 'kitchen', 'office', 'workshop', 'art studio', 'gallery', 'museum', 'library', 'cafe', 'restaurant', 'vintage diner', 'record store', 'hotel lobby', 'rooftop', 'city street', 'neon alley', 'subway station', 'train platform', 'parking garage', 'gym', 'nightclub', 'garden patio', 'greenhouse', 'park path', 'forest', 'beach', 'poolside', 'lake shore', 'desert', 'mountain path', 'rainy street', 'snowy landscape', 'futuristic city', 'medieval village', 'spaceship interior', 'fantasy castle', 'concert stage'] },
+      { key: 'timeOfDay', label: 'Time', type: 'select', options: ['early morning', 'golden hour', 'midday', 'late afternoon', 'sunset', 'blue hour', 'night', 'midnight', 'overcast day', 'rainy afternoon', 'late-night interior', 'dawn light', 'twilight'] },
+      { key: 'weather', label: 'Weather', type: 'select', options: ['clear weather', 'light rain', 'heavy rain', 'mist', 'fog', 'snow', 'wind', 'storm clouds', 'humid haze', 'dust in the air', 'drizzle', 'wet pavement after rain', 'falling leaves', 'sunlit haze', 'sea breeze'] },
+      { key: 'background', label: 'Background', type: 'select', options: ['clean background', 'soft blurred background', 'busy detailed background', 'architectural background', 'natural landscape background', 'industrial background', 'luxury background', 'cluttered lived-in background', 'symmetrical background', 'deep background layers', 'shallow background layers', 'bokeh city lights', 'plain paper backdrop', 'painted canvas backdrop', 'mirror reflection background'] },
+      { key: 'sceneMood', label: 'Atmosphere', type: 'select', options: ['minimal editorial set', 'cozy lived-in atmosphere', 'busy urban atmosphere', 'romantic atmosphere', 'moody cinematic atmosphere', 'clean commercial set', 'dreamlike surreal atmosphere', 'quiet intimate atmosphere', 'high-energy nightlife atmosphere', 'nostalgic atmosphere', 'luxury boutique atmosphere'] },
+      { key: 'props', label: 'Props', type: 'select', options: ['no props', 'flowers', 'book', 'phone', 'camera', 'laptop', 'microphone', 'musical instrument', 'coffee cup', 'drink glass', 'shopping bags', 'vehicle', 'chair', 'stool', 'sofa', 'mirror', 'neon sign', 'smoke machine', 'floating objects', 'vinyl record', 'paintbrush', 'skateboard', 'bicycle', 'suitcase', 'flowers in vase', 'sword', 'tool kit', 'sports equipment'] },
       { key: 'sceneDetail', label: 'Extra scene detail', type: 'text', wide: true, placeholder: 'set dressing, background objects, era, location specifics...' },
     ],
   },
@@ -289,11 +308,11 @@ const PROMPT_BUILDER_SECTIONS = [
     id: 'pose-action',
     title: 'Pose & Action',
     fields: [
-      { key: 'pose', label: 'Pose', type: 'select', options: ['standing', 'sitting', 'walking', 'running', 'kneeling', 'crouching', 'leaning', 'lying down', 'jumping', 'dancing', 'turning around', 'over-the-shoulder pose', 'crossed arms', 'hands in pockets', 'one hand on hip', 'arms raised', 'reaching forward', 'resting on chair', 'mid-stride', 'balanced action pose'] },
-      { key: 'bodyAxis', label: 'Body facing', type: 'select', options: ['facing camera', '3/4 view', 'side profile', 'back-facing', 'turned left', 'turned right', 'twisted torso', 'diagonal body line', 'centred subject', 'off-centre subject'] },
-      { key: 'handPose', label: 'Hands', type: 'select', options: ['relaxed hands', 'hands visible', 'hands clasped', 'holding object', 'touching face', 'adjusting hair', 'adjusting jacket', 'pointing', 'reaching', 'waving', 'one hand raised', 'hands behind back', 'hands in pockets'] },
-      { key: 'action', label: 'Action', type: 'select', options: ['standing still', 'walking toward camera', 'walking away', 'turning to camera', 'talking', 'laughing', 'reading', 'writing', 'typing', 'taking a photo', 'holding a drink', 'playing music', 'dancing', 'stretching', 'looking through a window', 'opening a door', 'climbing stairs', 'riding a bike', 'driving', 'casting a spell', 'fighting stance', 'floating', 'running through rain'] },
-      { key: 'motion', label: 'Motion feel', type: 'select', options: ['frozen moment', 'subtle movement', 'natural motion blur', 'dynamic motion', 'wind in clothing', 'hair moving in wind', 'fabric flowing', 'splashing water', 'floating particles', 'cinematic stillness'] },
+      { key: 'pose', label: 'Pose', type: 'select', options: ['standing', 'sitting', 'walking', 'running', 'kneeling', 'crouching', 'leaning', 'leaning against wall', 'lying down', 'reclining pose', 'seated on floor', 'perched on stool', 'jumping', 'dancing', 'turning around', 'over-the-shoulder pose', 'looking back over shoulder', 'crossed arms', 'arms at sides', 'hands in pockets', 'hands on hips', 'one hand on hip', 'arms raised', 'reaching forward', 'resting on chair', 'mid-stride', 'walking across frame', 'balanced action pose', 'fashion editorial pose', 'lookbook stance'] },
+      { key: 'bodyAxis', label: 'Body facing', type: 'select', options: ['facing camera', '3/4 view', 'side profile', 'back-facing', 'turned left', 'turned right', 'twisted torso', 'diagonal body line', 'centred subject', 'off-centre subject', 'weight shifted to one leg', 'shoulders angled toward camera', 'hips angled away from camera'] },
+      { key: 'handPose', label: 'Hands', type: 'select', options: ['relaxed hands', 'hands visible', 'hands clasped', 'holding object', 'touching face', 'fingertips near face', 'touching necklace', 'adjusting glasses', 'adjusting hair', 'adjusting jacket', 'holding clothing hem', 'hand on railing', 'pointing', 'reaching', 'waving', 'one hand raised', 'hands behind back', 'hands in pockets'] },
+      { key: 'action', label: 'Action', type: 'select', options: ['standing still', 'walking toward camera', 'walking away', 'walking across frame', 'turning to camera', 'talking', 'laughing', 'reading', 'writing', 'typing', 'taking a photo', 'holding a drink', 'playing music', 'dancing', 'stretching', 'looking through a window', 'opening a door', 'climbing stairs', 'riding a bike', 'driving', 'checking phone', 'putting on sunglasses', 'adjusting outfit', 'casting a spell', 'fighting stance', 'floating', 'running through rain'] },
+      { key: 'motion', label: 'Motion feel', type: 'select', options: ['frozen moment', 'subtle movement', 'natural motion blur', 'dynamic motion', 'wind in clothing', 'hair moving in wind', 'fabric flowing', 'splashing water', 'floating particles', 'cinematic stillness', 'gentle body movement', 'sharp decisive gesture', 'graceful movement', 'candid in-between moment'] },
       { key: 'actionDetail', label: 'Extra action detail', type: 'text', wide: true, placeholder: 'gesture, interaction, object being used, exact body language...' },
     ],
   },
@@ -302,22 +321,37 @@ const PROMPT_BUILDER_SECTIONS = [
     title: 'Camera',
     fields: [
       { key: 'distance', label: 'Subject distance', type: 'select', options: ['extreme close-up', 'close-up', 'headshot', 'bust shot', 'waist-up shot', 'half body', 'three-quarter body', 'full body', 'wide shot', 'extreme wide shot'] },
-      { key: 'camera', label: 'Camera angle', type: 'select', options: ['eye-level angle', 'low angle', 'high angle', 'overhead angle', 'worm-eye view', 'Dutch angle', 'front view', '3/4 camera view', 'side profile view', 'back view', 'over-the-shoulder view', 'point-of-view shot'] },
-      { key: 'lens', label: 'Lens', type: 'select', options: ['24mm wide-angle lens', '35mm documentary lens', '50mm natural lens', '85mm portrait lens', '100mm macro lens', '135mm telephoto lens', 'anamorphic lens', 'fisheye lens', 'tilt-shift lens', 'macro close-up lens'] },
-      { key: 'framing', label: 'Framing', type: 'select', options: ['centred composition', 'rule of thirds', 'symmetrical framing', 'negative space', 'tight crop', 'loose crop', 'environmental portrait framing', 'foreground frame', 'layered foreground', 'leading lines', 'diagonal composition'] },
-      { key: 'depthOfField', label: 'Depth of field', type: 'select', options: ['deep focus', 'shallow depth of field', 'creamy bokeh', 'background separation', 'foreground blur', 'rack focus feel', 'macro depth of field'] },
-      { key: 'cameraMove', label: 'Video camera move', type: 'select', categories: ['video'], options: ['static camera', 'slow push-in', 'slow pull-back', 'tracking shot', 'orbit shot', 'handheld camera', 'crane up', 'pan left', 'pan right', 'tilt up', 'tilt down', 'locked-off tripod shot'] },
+      { key: 'camera', label: 'Camera angle', type: 'select', options: ['eye-level angle', 'low angle', 'slightly low angle', 'high angle', 'slightly high angle', 'waist-level angle', 'ground-level angle', 'overhead angle', 'bird\'s-eye view', 'worm-eye view', 'Dutch angle', 'front view', '3/4 camera view', 'side profile view', 'back view', 'mirror reflection angle', 'over-the-shoulder view', 'point-of-view shot'] },
+      { key: 'lens', label: 'Lens', type: 'select', options: ['24mm wide-angle lens', '28mm environmental portrait lens', '35mm documentary lens', '50mm natural lens', '70mm portrait lens', '85mm portrait lens', '100mm macro lens', '135mm telephoto lens', '200mm compression lens', 'anamorphic lens', 'fisheye lens', 'tilt-shift lens', 'macro close-up lens'] },
+      { key: 'framing', label: 'Framing', type: 'select', options: ['centred composition', 'rule of thirds', 'symmetrical framing', 'negative space', 'tight crop', 'loose crop', 'full-body lookbook framing', 'centered full-body with headroom', 'three-quarter portrait crop', 'close portrait crop', 'environmental portrait framing', 'foreground frame', 'layered foreground', 'leading lines', 'diagonal composition', 'low horizon line', 'high horizon line'] },
+      { key: 'depthOfField', label: 'Depth of field', type: 'select', options: ['deep focus', 'shallow depth of field', 'creamy bokeh', 'background separation', 'foreground blur', 'rack focus feel', 'macro depth of field', 'soft background falloff', 'everything sharp', 'cinematic focus rolloff'] },
+      { key: 'cameraMove', label: 'Video camera move', type: 'select', categories: ['video'], options: ['static camera', 'locked-off tripod shot', 'slow push-in', 'slow pull-back', 'dolly in', 'dolly out', 'tracking shot', 'gimbal follow shot', 'sideways truck left', 'sideways truck right', 'orbit shot', 'crane up', 'crane down', 'pan left', 'pan right', 'tilt up', 'tilt down', 'handheld camera'] },
+    ],
+  },
+  {
+    id: 'video-direction',
+    title: 'Video Direction',
+    fields: [
+      { key: 'temporalAction', label: 'Temporal action', type: 'select', categories: ['video'], options: ['single continuous action', 'starts still then moves', 'approaches camera', 'moves across frame', 'turns and reveals subject', 'object enters frame', 'object exits frame', 'repeating loopable action', 'before-and-after transformation', 'cause-and-effect action'] },
+      { key: 'actionPacing', label: 'Pacing', type: 'select', categories: ['video'], options: ['very slow pace', 'slow cinematic pace', 'natural real-time pace', 'quick energetic pace', 'gradual build-up', 'pause then action', 'smooth loop pacing'] },
+      { key: 'shotContinuity', label: 'Shot continuity', type: 'select', categories: ['video'], options: ['single unbroken shot', 'continuous motion with no cuts', 'match start and end for seamless loop', 'same scene throughout', 'same lighting throughout', 'no sudden scene changes', 'no jump cuts'] },
+      { key: 'subjectConsistency', label: 'Subject consistency', type: 'select', categories: ['video'], options: ['keep subject identity consistent', 'keep outfit consistent', 'keep face consistent', 'keep body proportions consistent', 'keep object shape consistent', 'keep character on-model', 'no morphing or identity drift'] },
+      { key: 'startFrame', label: 'Start framing', type: 'select', categories: ['video'], options: ['starts on close-up', 'starts on medium shot', 'starts on wide shot', 'starts with subject centred', 'starts with subject off-frame', 'starts with empty scene', 'starts from behind subject', 'starts on detail insert'] },
+      { key: 'endFrame', label: 'End framing', type: 'select', categories: ['video'], options: ['ends on close-up', 'ends on medium shot', 'ends on wide shot', 'ends with subject centred', 'ends with subject exiting frame', 'ends on held final pose', 'ends matching first frame', 'ends on detail insert'] },
+      { key: 'motionConstraints', label: 'Motion constraints', type: 'select', categories: ['video'], options: ['minimal subject movement', 'controlled natural movement', 'no camera shake', 'no fast motion', 'no warping or morphing', 'no extra limbs appearing', 'no sudden pose changes', 'physically plausible motion', 'stable background geometry'] },
+      { key: 'videoDirectionDetail', label: 'Extra video direction', type: 'text', wide: true, categories: ['video'], placeholder: 'timing, beats, loop notes, motion limits, continuity requirements...' },
     ],
   },
   {
     id: 'lighting-style',
     title: 'Lighting & Style',
     fields: [
-      { key: 'lighting', label: 'Lighting', type: 'select', options: ['soft natural light', 'hard sunlight', 'golden hour light', 'blue hour light', 'studio softbox lighting', 'ring light', 'window light', 'neon lighting', 'practical lamp light', 'candlelight', 'moonlight', 'backlit silhouette', 'rim lighting', 'volumetric light beams', 'flash photography lighting'] },
-      { key: 'exposure', label: 'Exposure', type: 'select', options: ['balanced exposure', 'underexposed shadows', 'overexposed highlights', 'high-key exposure', 'low-key exposure', 'silhouette exposure', 'HDR tonal range', 'film-like contrast'] },
-      { key: 'colourGrade', label: 'Colour grade', type: 'select', options: ['natural colour grade', 'cinematic teal and amber', 'warm colour grade', 'cool colour grade', 'muted colours', 'high saturation', 'pastel palette', 'monochrome black and white', 'sepia tone', 'bleach bypass', 'Aerochrome false-colour infrared', 'neon cyberpunk palette', 'earth-tone palette'] },
-      { key: 'style', label: 'Style', type: 'select', options: ['photorealistic', 'editorial fashion photography', 'cinematic film still', 'documentary photography', 'street photography', 'luxury campaign', 'beauty campaign', 'commercial product style', 'fine art portrait', 'dark fantasy', 'high fantasy', 'sci-fi concept art', 'anime style', 'graphic novel style', 'oil painting', 'watercolour illustration', '3D render', 'clay render'] },
-      { key: 'finish', label: 'Finish', type: 'select', options: ['ultra-detailed', 'clean realistic detail', 'soft film grain', 'sharp crisp detail', 'dreamy soft focus', 'gritty texture', 'polished commercial finish', 'matte finish', 'glossy finish', 'subtle haze', 'high contrast detail'] },
+      { key: 'lighting', label: 'Lighting', type: 'select', options: ['soft natural light', 'hard sunlight', 'golden hour light', 'blue hour light', 'overcast soft daylight', 'dappled sunlight', 'sunbeam through window', 'studio softbox lighting', 'ring light', 'window light', 'neon lighting', 'colour gel lighting', 'cinematic side lighting', 'Rembrandt lighting', 'butterfly lighting', 'practical lamp light', 'candlelight', 'moonlight', 'backlit silhouette', 'rim lighting', 'volumetric light beams', 'flash photography lighting'] },
+      { key: 'exposure', label: 'Exposure', type: 'select', options: ['balanced exposure', 'underexposed shadows', 'overexposed highlights', 'high-key exposure', 'low-key exposure', 'silhouette exposure', 'HDR tonal range', 'film-like contrast', 'soft shadow detail', 'deep shadow contrast', 'bright airy exposure'] },
+      { key: 'colourGrade', label: 'Colour grade', type: 'select', options: ['natural colour grade', 'cinematic teal and amber', 'warm colour grade', 'cool colour grade', 'muted colours', 'high saturation', 'pastel palette', 'monochrome black and white', 'sepia tone', 'bleach bypass', 'Aerochrome false-colour infrared', 'neon cyberpunk palette', 'earth-tone palette', 'soft mint and gold palette', 'cool moonlit palette', 'warm nostalgic film palette'] },
+      { key: 'style', label: 'Style', type: 'select', options: ['photorealistic', 'editorial fashion photography', 'lookbook photography', 'lifestyle photography', 'high-end e-commerce photography', 'minimalist studio photography', 'cinematic film still', 'analog film photography', 'Polaroid snapshot', 'documentary photography', 'street photography', 'luxury campaign', 'beauty campaign', 'commercial product style', 'fine art portrait', 'Y2K fashion editorial', 'dark fantasy', 'high fantasy', 'sci-fi concept art', 'anime style', 'graphic novel style', 'oil painting', 'watercolour illustration', '3D render', 'clay render'] },
+      { key: 'mood', label: 'Mood', type: 'select', options: ['calm intimate mood', 'playful mood', 'confident editorial mood', 'nostalgic mood', 'mysterious mood', 'surreal mood', 'romantic mood', 'quiet luxury mood', 'high-energy mood', 'melancholic mood', 'dreamy mood'] },
+      { key: 'finish', label: 'Finish', type: 'select', options: ['ultra-detailed', 'clean realistic detail', 'soft film grain', 'sharp crisp detail', 'dreamy soft focus', 'gritty texture', 'polished commercial finish', 'matte finish', 'glossy finish', 'subtle haze', 'high contrast detail', 'natural skin texture', 'fine fabric texture', 'cinematic grain'] },
       { key: 'styleDetail', label: 'Extra style detail', type: 'text', wide: true, placeholder: 'artist-free aesthetic notes, texture, mood, production design...' },
     ],
   },
@@ -502,6 +536,8 @@ const api = {
   loras:         () => json(apiCall('/api/loras')),
   assets:        () => json(apiCall('/api/assets', { timeoutMs: 8000 })),
   trainers:      () => json(apiCall('/api/trainers')),
+  trainerDatasets: () => json(apiCall('/api/trainers/datasets')),
+  createTrainerDataset: (b) => json(apiCall('/api/trainers/dataset/create', jsonBody(b))),
   downloadTrainerDataset: (b) => json(apiCall('/api/trainers/datasets/download', jsonBody(b))),
   uploadTrainerDataset:   (files, targetName) => {
     const fd = new FormData();
@@ -513,10 +549,27 @@ const api = {
       timeoutMs: 120000,
     }));
   },
+  uploadDatasetFiles:   (files, datasetPath) => {
+    const fd = new FormData();
+    files.forEach(file => fd.append('files', file, file.name));
+    const qs = new URLSearchParams({ dataset_path: datasetPath || '' });
+    return json(apiCall(`/api/trainers/dataset/upload?${qs}`, {
+      method: 'POST',
+      body: fd,
+      timeoutMs: 120000,
+    }));
+  },
   validateTrainerDataset: (b) => json(apiCall('/api/trainers/validate', jsonBody(b))),
   listTrainerDataset:     (b) => json(apiCall('/api/trainers/dataset/list', jsonBody(b))),
   saveTrainerCaption:     (b) => json(apiCall('/api/trainers/dataset/caption', jsonBody(b))),
   toggleTrainerExclude:   (b) => json(apiCall('/api/trainers/dataset/exclude', jsonBody(b))),
+  datasetVisionProxy:     (b) => json(apiCall('/api/trainers/dataset/vision-proxy', jsonBody(b))),
+  datasetVisionRuntimeStatus: (b) => {
+    const qs = new URLSearchParams(b || {});
+    return json(apiCall(`/api/trainers/dataset/vision-runtime/status?${qs}`));
+  },
+  datasetVisionRuntimeStart:  (b) => json(apiCall('/api/trainers/dataset/vision-runtime/start', jsonBody(b))),
+  datasetVisionRuntimeStop:   ()  => json(apiCall('/api/trainers/dataset/vision-runtime/stop', { method: 'POST' })),
   trainJobs:     () => json(apiCall('/api/train-jobs')),
   startTrainJob: (b) => json(apiCall('/api/train-jobs', jsonBody(b))),
   trainJob:      (id) => json(apiCall(`/api/train-jobs/${encodeURIComponent(id)}`)),
@@ -650,6 +703,7 @@ async function bootApp() {
   const appEl = $('.app');
   if (appEl) {
     appEl.style.display = '';
+    applySidebarPreference();
     appEl.classList.add('ready');
   }
   await ensureServiceWorker();   // register SW so <img> requests get decrypted
@@ -951,6 +1005,8 @@ function bindShell() {
     renderModels();
   }));
   $('#modelSearch').addEventListener('input', renderModels);
+  $('#sidebarToggle')?.addEventListener('click', toggleSidebar);
+  window.addEventListener('resize', () => requestAnimationFrame(updateSidebarGlow));
 
   $$('.chip[data-asset-filter]').forEach(c => c.addEventListener('click', () => {
     state.assetFilter = c.dataset.assetFilter;
@@ -979,6 +1035,15 @@ function bindShell() {
   });
   $('#wsGenerate').addEventListener('click', onGenerate);
   $('#wsCancel').addEventListener('click', cancelGenerate);
+  $('#wsViewportLightbox')?.addEventListener('click', () => {
+    const asset = activePreviewAsset(state.workspace);
+    if (!asset) return;
+    openLightbox(asset, { list: state.recents[state.workspace] || [asset], index: Math.max(0, (state.recents[state.workspace] || []).indexOf(asset)) });
+  });
+  $('#wsViewportDownload')?.addEventListener('click', () => {
+    const asset = activePreviewAsset(state.workspace);
+    if (asset) downloadAsset(asset);
+  });
   $('#wsEnhancePrompt')?.addEventListener('click', enhanceWorkspacePrompt);
   $('#wsPromptModeBuilder')?.addEventListener('click', () => setPromptMode('builder'));
   $('#wsPromptModeRaw')?.addEventListener('click', () => setPromptMode('raw'));
@@ -1070,6 +1135,7 @@ function bindShell() {
   ['#settingsHFToken', '#wsHFToken', '#hfTokenDl', '#trainerWizardHFToken'].forEach(sel => {
     $(sel)?.addEventListener('change', e => saveHFToken(e.target.value));
   });
+  bindDatasetStudio();
 
   $$('[data-save]').forEach(b => b.addEventListener('click', () => {
     const key = b.dataset.save;
@@ -1096,6 +1162,46 @@ function bindShell() {
     dz.classList.remove('drag');
     uploadFiles([...e.dataTransfer.files]);
   });
+}
+
+function applySidebarPreference() {
+  setSidebarCollapsed(!!state.settings.sidebar_collapsed, { persist: false });
+}
+
+function toggleSidebar() {
+  const app = $('.app');
+  const next = !app?.classList.contains('sidebar-collapsed');
+  setSidebarCollapsed(next);
+}
+
+function setSidebarCollapsed(collapsed, opts = {}) {
+  const app = $('.app');
+  const btn = $('#sidebarToggle');
+  if (!app) return;
+  app.classList.toggle('sidebar-collapsed', collapsed);
+  if (btn) {
+    btn.classList.toggle('active', collapsed);
+    btn.setAttribute('aria-pressed', collapsed ? 'true' : 'false');
+    btn.title = collapsed ? 'Expand sidebar' : 'Collapse sidebar';
+  }
+  if (opts.persist !== false) {
+    state.settings.sidebar_collapsed = collapsed;
+    localStorage.setItem('forge_settings', JSON.stringify(state.settings));
+  }
+  requestAnimationFrame(updateSidebarGlow);
+}
+
+function updateSidebarGlow() {
+  const glow = $('#sidebarGlow');
+  const sidebar = $('.sidebar-scroll');
+  const active = $('.sidebar .nav-item.active');
+  const sidebarShell = $('.sidebar');
+  if (!glow || !sidebar || !active || !sidebarShell || getComputedStyle(sidebarShell).display === 'none') return;
+  const sidebarRect = sidebar.getBoundingClientRect();
+  const activeRect = active.getBoundingClientRect();
+  glow.style.opacity = '1';
+  glow.style.height = `${Math.max(24, Math.round(activeRect.height))}px`;
+  glow.style.transform = `translateY(${Math.round(activeRect.top - sidebarRect.top)}px)`;
 }
 
 function applySettingsToInputs() {
@@ -1393,10 +1499,12 @@ function switchView(name, push = true) {
   $$('.view').forEach(v => v.classList.toggle('active', v.dataset.view === name));
   const navName = name === 'trainer-running' ? 'trainers' : name;
   $$('.nav-item').forEach(n => n.classList.toggle('active', n.dataset.view === navName));
+  requestAnimationFrame(updateSidebarGlow);
   state.view = name;
   if (name === 'loras')   loadLoras();
   if (name === 'assets')  loadAssets();
   if (name === 'running') renderRunning();
+  if (name === 'datasets') loadDatasetLibrary();
   if (name === 'trainers') {
     loadTrainers();
     pokeTrainerPoll();
@@ -1436,33 +1544,33 @@ window.addEventListener('popstate', (e) => {
 
 // ── Models ───────────────────────────────────────────────────────────────
 async function loadModels() {
+  state.gpuStatus = 'loading';
+  renderGPU(state.gpu, 'loading');
+  if (state.preview) {
+    await loadPreviewRegistry();
+    for (const m of state.models) {
+      state.modelStates[m.id] = { downloaded: true, ready: true };
+    }
+    renderModels();
+    return;
+  }
   try {
     const data = await api.models();
     state.models    = data.models;
     state.upscalers = data.upscalers || [];
     state.gpu       = data.gpu;
+    state.gpuStatus = 'ready';
     renderGPU(data.gpu);
     renderModels();
     $('#modelCount').textContent = state.models.length;
     $('#gpuDebug').textContent   = JSON.stringify(data.gpu, null, 2);
   } catch (e) {
-    if (state.preview) {
-      await loadPreviewRegistry();
-    } else {
-      state.models    = mockModels();
-      state.upscalers = [];
-      renderModels();
-      $('#modelCount').textContent = state.models.length;
-      $('#gpuPill').innerHTML = '<div class="dot"></div><span>Dev mode (no backend)</span>';
-    }
-  }
-  if (state.preview) {
-    // Pretend everything is downloaded + running so cards click through to
-    // the workspace and the drawer would say "Open workspace" if you visit it.
-    for (const m of state.models) {
-      state.modelStates[m.id] = { downloaded: true, ready: true };
-    }
+    state.models    = mockModels();
+    state.upscalers = [];
     renderModels();
+    $('#modelCount').textContent = state.models.length;
+    state.gpuStatus = 'error';
+    renderGPU(state.gpu, 'error');
   }
 }
 
@@ -1474,6 +1582,7 @@ async function loadPreviewRegistry() {
     state.models    = data.models || [];
     state.upscalers = data.upscalers || [];
     state.gpu       = { type: 'nvidia', name: 'Preview GPU', vram_gb: 80 };
+    state.gpuStatus = 'ready';
     renderGPU(state.gpu);
     $('#modelCount').textContent = state.models.length;
     $('#gpuDebug').textContent   = JSON.stringify(state.gpu, null, 2);
@@ -1482,19 +1591,76 @@ async function loadPreviewRegistry() {
     state.models    = mockModels();
     state.upscalers = [];
     state.gpu       = { type: 'unknown', name: 'Preview mode', vram_gb: 0 };
+    state.gpuStatus = 'disconnected';
     $('#modelCount').textContent = state.models.length;
-    $('#gpuPill').innerHTML = '<div class="dot"></div><span>Preview fallback models</span>';
+    renderGPU(state.gpu, 'disconnected');
     renderModels();
     console.warn('Preview registry unavailable, using mockModels()', err);
   }
 }
 
-function renderGPU(gpu) {
+let _gpuLoadHistory = Array(20).fill(15);
+
+function updateGPUSparkline(load) {
+  _gpuLoadHistory.push(load);
+  if (_gpuLoadHistory.length > 20) _gpuLoadHistory.shift();
+
+  const path = $('#gpuPill .sparkline-path');
+  if (!path) return;
+
+  const width = 60;
+  const height = 20;
+  const points = _gpuLoadHistory.map((val, idx) => {
+    const x = (idx / (_gpuLoadHistory.length - 1)) * width;
+    const y = height - 2 - (val / 100) * (height - 4);
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  });
+
+  path.setAttribute('d', `M ${points.join(' L ')}`);
+}
+
+function gpuVramGb(gpu) {
+  const candidates = [gpu?.vram_gb, gpu?.total_gb, gpu?.total_vram_gb, gpu?.memory_total_gb];
+  const found = candidates.find(value => Number.isFinite(Number(value)) && Number(value) > 0);
+  return found == null ? 0 : Number(found);
+}
+
+function gpuDisplayState(gpu, requested = state.gpuStatus) {
+  if (requested === 'error') return 'error';
+  if (requested === 'loading' || !gpu) return 'loading';
+  if (requested === 'disconnected' || gpu.type === 'unknown') return 'disconnected';
+  return 'ready';
+}
+
+function gpuDisplayLabel(gpu, displayState = gpuDisplayState(gpu)) {
+  if (displayState === 'loading') return 'GPU · checking...';
+  if (displayState === 'error') return 'GPU · unavailable';
+  if (displayState === 'disconnected') return gpu?.name ? `GPU · ${gpu.name}` : 'GPU · disconnected';
+  const name = gpu?.name || gpu?.type || 'GPU';
+  const vram = gpuVramGb(gpu);
+  return `${name}${vram ? ` · ${Math.round(vram)} GB` : ''}`;
+}
+
+function renderGPU(gpu, requestedState = state.gpuStatus) {
   const pill = $('#gpuPill');
-  pill.classList.toggle('online', gpu.type !== 'cpu' && gpu.type !== 'unknown');
-  const name = gpu.name || gpu.type || 'Unknown';
-  const vram = gpu.vram_gb ? `${gpu.vram_gb} GB` : '';
-  pill.innerHTML = `<div class="dot"></div><span>${name}${vram ? ' · ' + vram : ''}</span>`;
+  if (!pill) return;
+  const displayState = gpuDisplayState(gpu, requestedState);
+  state.gpuStatus = displayState;
+  pill.dataset.state = displayState;
+  pill.classList.toggle('online', displayState === 'ready');
+  pill.classList.toggle('loading', displayState === 'loading');
+  pill.classList.toggle('offline', displayState === 'disconnected');
+  pill.classList.toggle('error', displayState === 'error');
+  const label = gpuDisplayLabel(gpu, displayState);
+  pill.innerHTML = `
+    <div class="dot"></div>
+    <span>${label}</span>
+    <svg class="gpu-sparkline" viewBox="0 0 60 20">
+      <path class="sparkline-path" d="" fill="none" stroke="var(--cat-image)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path>
+    </svg>
+  `;
+  updateGPUSparkline(_gpuLoadHistory[_gpuLoadHistory.length - 1]);
+  renderTrainerGpuChip();
 }
 
 function modelVramValues(m) {
@@ -1540,7 +1706,7 @@ function renderModels() {
   }
   const gpu = state.gpu;
   grid.innerHTML = filtered.map(m => {
-    const vram = gpu?.vram_gb || 0;
+    const vram = gpuVramGb(gpu);
     const vramProfile = modelVramProfile(m);
     const phase = drawerPhase(m.id);
     let btnText = 'Configure';
@@ -2882,6 +3048,7 @@ function renderWorkspace(m, sections) {
 
   // Recents + queue
   renderRecents(m.id);
+  renderHeroPreview(m.id);
   renderQueue();
 
   // Wire dynamic inputs (param fields, seed toggle)
@@ -3532,16 +3699,43 @@ function pickImageForInput(m, key) {
 }
 
 // ── Aspect-ratio chips ───────────────────────────────────────────────────
+function withStandardResolutionPresets(presets = []) {
+  const landscape1080 = { label: '16:9 1080p', w: 1920, h: 1080 };
+  const portrait1080 = { label: '9:16 1080p', w: 1080, h: 1920 };
+  const seen = new Set(presets.map(p => `${p.w}x${p.h}`));
+  const out = [...presets];
+
+  const insertMissing = (preset, matcher) => {
+    const key = `${preset.w}x${preset.h}`;
+    if (seen.has(key)) return;
+    let insertAt = -1;
+    out.forEach((p, i) => {
+      if (matcher(p)) insertAt = i;
+    });
+    if (insertAt === -1) {
+      out.push(preset);
+    } else {
+      out.splice(insertAt + 1, 0, preset);
+    }
+    seen.add(key);
+  };
+
+  insertMissing(landscape1080, p => p.w > p.h && Math.abs((p.w / p.h) - (16 / 9)) < 0.08);
+  insertMissing(portrait1080, p => p.h > p.w && Math.abs((p.w / p.h) - (9 / 16)) < 0.08);
+  return out;
+}
+
 function renderAspectChips(m, hasDims) {
   const row = $('#wsAspectRow');
   if (!hasDims) { row.innerHTML = ''; return; }
-  const presets = m.aspect_presets || [
+  const basePresets = m.aspect_presets || [
     { label: 'Square',          w: 1024, h: 1024 },
     { label: 'Landscape 16:9',  w: 1664, h: 928  },
     { label: 'Portrait 9:16',   w: 928,  h: 1664 },
     { label: '3:4',             w: 1152, h: 1536 },
     { label: '4:3',             w: 1536, h: 1152 },
   ];
+  const presets = withStandardResolutionPresets(basePresets);
   const w = state.params.width, h = state.params.height;
   row.innerHTML = presets.map(p => {
     const active = w === p.w && h === p.h ? ' active' : '';
@@ -3915,6 +4109,125 @@ function bindLoraCards(m) {
   });
 }
 
+function assetKey(asset) {
+  return asset ? (asset.path || asset.url || asset.name || '') : '';
+}
+
+function activePreviewAsset(modelId) {
+  if (!modelId) return null;
+  const items = state.recents[modelId] || [];
+  const active = state.activePreviews[modelId];
+  const activeKey = assetKey(active);
+  if (activeKey) {
+    const fresh = items.find(a => assetKey(a) === activeKey);
+    if (fresh) return fresh;
+    if (active?.url) return active;
+  }
+  return items[items.length - 1] || null;
+}
+
+function setActivePreview(modelId, asset, opts = {}) {
+  if (!modelId || !asset) return;
+  state.activePreviews[modelId] = asset;
+  renderHeroPreview(modelId, opts);
+  renderRecents(modelId);
+}
+
+function viewportIdleHtml() {
+  return `<div class="viewport-idle">
+    <div class="idle-core" aria-hidden="true">
+      <span></span><span></span><span></span>
+    </div>
+    <div class="idle-copy">
+      <strong>Inference field online</strong>
+      <span>Compose a prompt and generate when ready.</span>
+    </div>
+  </div>`;
+}
+
+function heroAssetHtml(asset) {
+  const u = esc(asset?.url || '');
+  const n = esc(asset?.name || '');
+  if (asset?.kind === 'video') {
+    return `<video class="viewport-media" src="${u}" controls playsinline preload="metadata"></video>`;
+  }
+  if (asset?.kind === 'audio') {
+    return `<div class="viewport-audio">
+      <svg aria-hidden="true"><use href="#i-audio"/></svg>
+      <div class="asset-audio-label">${esc(asset.name || 'Audio generation')}</div>
+      <audio src="${u}" controls preload="metadata"></audio>
+    </div>`;
+  }
+  return `<img class="viewport-media" src="${u}" alt="${n}">`;
+}
+
+function heroMetaText(asset) {
+  if (!asset) return 'Dimensions: - · Seed: -';
+  const bits = [];
+  if (asset.width && asset.height) bits.push(`${asset.width}x${asset.height}`);
+  if (asset.seed != null) bits.push(`seed ${asset.seed}`);
+  bits.push(asset.name || asset.path || 'generation');
+  return bits.join(' · ');
+}
+
+function generationStatusText(job) {
+  if (!job) return 'Preparing render field';
+  const bits = queueCardBits(job);
+  if (bits.hasProgress) return `${bits.pct}%${job.etaMs != null && bits.pct < 100 ? ` · ${formatETA(job.etaMs)}` : ''}`;
+  return job.status === 'pending' ? 'Queued for generation' : 'Estimating render path';
+}
+
+function generationHeroHtml(job) {
+  const pct = Math.max(0, Math.min(100, Math.round((job?.progress || 0) * 100)));
+  const prompt = esc((job?.params?.prompt || currentWorkspacePrompt() || 'Rendering generation').replace(/\s+/g, ' ').slice(0, 180));
+  return `<div class="viewport-generating">
+    <div class="generating-aura" aria-hidden="true">
+      <span></span><span></span><span></span>
+    </div>
+    <div class="generating-copy">
+      <strong>Rendering latent field</strong>
+      <span class="generating-prompt">${prompt}</span>
+    </div>
+    <div class="generating-progress" aria-hidden="true"><span style="width:${pct}%"></span></div>
+    <div class="generating-status">${esc(generationStatusText(job))}</div>
+  </div>`;
+}
+
+function renderHeroPreview(modelId, opts = {}) {
+  const canvas = $('#wsViewportCanvas');
+  const stage = $('#wsViewportStage');
+  const hud = $('#wsViewportHud');
+  const meta = $('#wsViewportMeta');
+  if (!canvas || !stage || !modelId) return;
+  const runningJob = opts.job || state.queue.find(j => j.model_id === modelId && j.status === 'running');
+  const asset = opts.asset || activePreviewAsset(modelId);
+
+  canvas.classList.toggle('is-generating', !!runningJob);
+  canvas.classList.toggle('is-ready', !runningJob && !!asset);
+  canvas.classList.toggle('is-idle', !runningJob && !asset);
+
+  if (runningJob) {
+    stage.innerHTML = generationHeroHtml(runningJob);
+    if (hud) hud.style.display = 'none';
+    return;
+  }
+
+  if (asset) {
+    stage.innerHTML = `<div class="viewport-asset-wrap">${heroAssetHtml(asset)}</div>`;
+    if (meta) meta.textContent = heroMetaText(asset);
+    if (hud) hud.style.display = '';
+    return;
+  }
+
+  stage.innerHTML = viewportIdleHtml();
+  if (hud) hud.style.display = 'none';
+}
+
+function updateHeroProgress(job) {
+  if (!job || state.workspace !== job.model_id) return;
+  renderHeroPreview(job.model_id, { job });
+}
+
 function renderRecents(modelId) {
   const items   = state.recents[modelId] || [];
   // Pending + running jobs for *this* model become loading cards prepended
@@ -3924,16 +4237,18 @@ function renderRecents(modelId) {
   const grid = $('#wsRecent');
 
   if (!items.length && !queued.length) {
-    grid.innerHTML = `<div class="empty" style="grid-column:1/-1;padding:18px"><span style="font-size:11.5px">Nothing generated yet.</span></div>`;
+    grid.innerHTML = `<div class="recent-empty"><span>No generations yet</span><small>Finished renders will pin here as selectable previews.</small></div>`;
     return;
   }
 
   const queuedHtml = queueCardsHtml(queued);
+  const activeKey = assetKey(activePreviewAsset(modelId));
 
   const recentHtml = items.slice().reverse().map((_, i) => {
     const idx = items.length - 1 - i;
     const a = items[idx];
-    return `<div class="asset" data-recent-idx="${idx}">
+    const active = activeKey && assetKey(a) === activeKey ? ' active' : '';
+    return `<div class="asset${active}" data-recent-idx="${idx}">
       ${assetMediaHtml(a, { lazy: true })}
       <button class="asset-menu-btn" data-asset-menu="${idx}" data-asset-source="recent" title="Actions">
         <svg><use href="#i-dots"/></svg>
@@ -3944,12 +4259,12 @@ function renderRecents(modelId) {
 
   grid.innerHTML = queuedHtml + recentHtml;
 
-  // Recent tile click → lightbox; 3-dot → asset menu (Download / Delete).
+  // Recent tile click → focus the hero preview; 3-dot → asset menu.
   $$('.asset[data-recent-idx]', grid).forEach(el => el.addEventListener('click', (e) => {
     if (e.target.closest('[data-asset-menu]')) return;
     if (e.target.closest('audio')) return;
     const idx = Number(el.dataset.recentIdx);
-    openLightbox(items[idx], { list: items, index: idx });
+    setActivePreview(modelId, items[idx]);
   }));
   $$('[data-asset-menu]', grid).forEach(b => b.addEventListener('click', (e) => {
     e.stopPropagation();
@@ -4202,6 +4517,7 @@ async function deleteAssetAnywhere(asset) {
   // 3. Re-paint the open workspace's recents + Generated cell if it was the latest.
   if (state.workspace) {
     renderRecents(state.workspace);
+    renderHeroPreview(state.workspace);
     const m = state.models.find(x => x.id === state.workspace);
     if (m?.image_inputs?.length) renderImgStrip(m);
   }
@@ -4210,8 +4526,10 @@ async function deleteAssetAnywhere(asset) {
 
 function pruneFromRecents(asset) {
   if (!asset?.path) return;
+  const removedKey = assetKey(asset);
   for (const id of Object.keys(state.recents)) {
     state.recents[id] = state.recents[id].filter(a => a.path !== asset.path);
+    if (assetKey(state.activePreviews[id]) === removedKey) delete state.activePreviews[id];
   }
 }
 
@@ -4370,12 +4688,14 @@ function compilePromptBuilder(m = state.selected) {
   const sectionText = (label, parts) => parts.length ? `${label}: ${parts.join('; ')}` : '';
 
   const subject = [];
-  add(subject, 'core idea', 'idea');
-  add(subject, 'subjects', 'subjectCount');
-  add(subject, 'presentation', 'presentation');
+  add(subject, 'main subject', 'idea');
+  add(subject, 'subject count', 'subjectCount');
+  add(subject, 'appearance', 'presentation');
   add(subject, 'age', 'age');
   add(subject, 'body type', 'bodyType');
+  add(subject, 'silhouette', 'silhouette');
   add(subject, 'posture', 'posture');
+  add(subject, 'role or archetype', 'subjectRole');
   add(subject, 'extra detail', 'subjectDetail');
 
   const faceHair = [];
@@ -4389,7 +4709,9 @@ function compilePromptBuilder(m = state.selected) {
   add(faceHair, 'extra face detail', 'faceDetail');
 
   const wardrobe = [];
-  addCombined(wardrobe, 'full outfit', ['fullColor', 'fullMaterial', 'outfit']);
+  addCombined(wardrobe, 'outfit', ['fullColor', 'fullMaterial', 'outfit']);
+  add(wardrobe, 'fit and silhouette', 'outfitFit');
+  add(wardrobe, 'pattern', 'pattern');
   addCombined(wardrobe, 'top', ['topColor', 'topMaterial', 'topGarment']);
   addCombined(wardrobe, 'bottom', ['bottomColor', 'bottomMaterial', 'bottomGarment']);
   addCombined(wardrobe, 'shoes', ['shoeColor', 'shoes']);
@@ -4397,10 +4719,11 @@ function compilePromptBuilder(m = state.selected) {
   add(wardrobe, 'extra clothing detail', 'clothingDetail');
 
   const scene = [];
-  add(scene, 'location', 'scene');
-  add(scene, 'time', 'timeOfDay');
+  add(scene, 'setting', 'scene');
+  add(scene, 'time of day', 'timeOfDay');
   add(scene, 'weather', 'weather');
   add(scene, 'background', 'background');
+  add(scene, 'atmosphere', 'sceneMood');
   add(scene, 'props', 'props');
   add(scene, 'extra scene detail', 'sceneDetail');
 
@@ -4412,11 +4735,23 @@ function compilePromptBuilder(m = state.selected) {
   add(poseAction, 'motion feel', 'motion');
   add(poseAction, 'extra action detail', 'actionDetail');
 
+  const videoDirection = [];
+  if (m?.category === 'video') {
+    add(videoDirection, 'temporal action', 'temporalAction');
+    add(videoDirection, 'pacing', 'actionPacing');
+    add(videoDirection, 'shot continuity', 'shotContinuity');
+    add(videoDirection, 'subject consistency', 'subjectConsistency');
+    add(videoDirection, 'start framing', 'startFrame');
+    add(videoDirection, 'end framing', 'endFrame');
+    add(videoDirection, 'motion constraints', 'motionConstraints');
+    add(videoDirection, 'extra video direction', 'videoDirectionDetail');
+  }
+
   const camera = [];
-  add(camera, 'subject distance', 'distance');
-  add(camera, 'camera angle', 'camera');
+  add(camera, 'shot size', 'distance');
+  add(camera, 'viewpoint', 'camera');
   add(camera, 'lens', 'lens');
-  add(camera, 'framing', 'framing');
+  add(camera, 'composition', 'framing');
   add(camera, 'depth of field', 'depthOfField');
   if (m?.category === 'video') add(camera, 'camera move', 'cameraMove');
 
@@ -4424,8 +4759,9 @@ function compilePromptBuilder(m = state.selected) {
   add(lightingStyle, 'lighting', 'lighting');
   add(lightingStyle, 'exposure', 'exposure');
   add(lightingStyle, 'colour grade', 'colourGrade');
-  add(lightingStyle, 'style', 'style');
-  add(lightingStyle, 'finish', 'finish');
+  add(lightingStyle, 'visual style', 'style');
+  add(lightingStyle, 'mood', 'mood');
+  add(lightingStyle, 'image finish', 'finish');
   add(lightingStyle, 'extra style detail', 'styleDetail');
 
   return [
@@ -4434,6 +4770,7 @@ function compilePromptBuilder(m = state.selected) {
     sectionText('Wardrobe', wardrobe),
     sectionText('Scene', scene),
     sectionText('Pose and action', poseAction),
+    sectionText('Video direction', videoDirection),
     sectionText('Camera', camera),
     sectionText('Lighting and style', lightingStyle),
   ].filter(Boolean).join('. ');
@@ -4650,6 +4987,7 @@ function updateJobProgress(job, step, total) {
   } else {
     job.etaMs = safeStep >= safeTotal ? 0 : null;
   }
+  updateHeroProgress(job);
   renderQueue({ progressOnly: true });
 }
 
@@ -4756,10 +5094,12 @@ async function runQueue() {
     setModelState(job.model_id, { generating: true });
     renderQueue();
     updateWsStatus();
+    renderHeroPreview(job.model_id, { job });
     await runJob(job);
     setModelState(job.model_id, { generating: false });
     job.status = 'done';
     renderQueue();
+    renderHeroPreview(job.model_id);
   }
   // Drain finished + cancelled items so the next batch starts clean.
   state.queue = state.queue.filter(j => j.status === 'pending' || j.status === 'running');
@@ -4768,6 +5108,7 @@ async function runQueue() {
   updateGenerateBtn();
   updateWsStatus();
   renderQueue();
+  if (state.workspace) renderHeroPreview(state.workspace);
   if (!state.preview) refreshAssetsSoon();
 }
 
@@ -4872,6 +5213,9 @@ async function runJob(job) {
     }
     const newAssets = res.assets || [];
     state.recents[job.model_id] = [...(state.recents[job.model_id] || []), ...newAssets];
+    if (newAssets.length) {
+      state.activePreviews[job.model_id] = newAssets[newAssets.length - 1];
+    }
     if (state.preview) {
       state.assets = [...newAssets, ...state.assets];
       renderAssets();
@@ -4880,6 +5224,7 @@ async function runJob(job) {
     }
     if (state.workspace === job.model_id) {
       renderRecents(job.model_id);
+      renderHeroPreview(job.model_id);
       refreshSeedField();
       // Refresh the Generated cell on edit-style models.
       const m = state.models.find(x => x.id === job.model_id);
@@ -5196,6 +5541,11 @@ async function waitForRunner(modelId, maxSeconds) {
 
 // ── Running ──────────────────────────────────────────────────────────────
 async function pollRunning() {
+  if (state.preview) {
+    updateGPUSparkline(12 + Math.random() * 4);
+    setTimeout(pollRunning, 3000);
+    return;
+  }
   try {
     const gated = await enforceLiveAuthGate();
     if (!gated) {
@@ -5280,6 +5630,683 @@ function streamLogs(id, el) {
     el.scrollTop = el.scrollHeight;
   };
   es.onerror = () => es.close();
+}
+
+// ── Dataset Studio ───────────────────────────────────────────────────────
+const DATASET_REVIEW_PROMPT = `You are curating images for a single-character FLUX LoRA training dataset.
+Return JSON only in this exact shape: {"keep":true,"reason":"short reason"}.
+Keep only if the image has exactly one clear human subject, a readable unoccluded face, a single frame, and the subject is large enough for identity details.
+Reject object-only images, multiple people, composites, watermarks/text overlays, extreme long shots, severe blur, or heavy face occlusion.`;
+
+const DATASET_CAPTION_FALLBACK = `You are a computer vision labeling engine for FLUX LoRA character training. Analyze the image and generate one concise descriptive prose paragraph containing only visible elements.
+
+Describe subject framing, camera angle, pose, action, expression, clothing, layers, environment, background, and lighting.
+
+Do not use the subject's name, trigger tags, gender nouns, guessed age, ethnicity, identity, or introductory phrases. Output only the raw descriptive caption.`;
+
+let datasetPipelineCancel = false;
+
+function bindDatasetStudio() {
+  $('#btnCreateDataset')?.addEventListener('click', openCreateDatasetModal);
+  $('#datasetSearchInput')?.addEventListener('input', renderDatasetLibrary);
+  $('#btnBackToDatasets')?.addEventListener('click', showDatasetList);
+  $('#btnToggleCaptionDrawer')?.addEventListener('click', () => toggleDatasetDrawer(true));
+  $('#btnCloseCaptionDrawer')?.addEventListener('click', () => toggleDatasetDrawer(false));
+  $('#btnCheckCaptionRuntime')?.addEventListener('click', () => checkDatasetVisionRuntime({ quiet: false }));
+  $('#btnStartCaptionRuntime')?.addEventListener('click', startDatasetVisionRuntime);
+  $('#btnStopCaptionRuntime')?.addEventListener('click', stopDatasetVisionRuntime);
+  $('#btnRunCaptioning')?.addEventListener('click', runDatasetPipeline);
+  $('#btnCancelCaptioning')?.addEventListener('click', () => {
+    datasetPipelineCancel = true;
+    datasetLog('Stop requested. Finishing the current image...', 'warn');
+  });
+  $('#btnSendToTrainer')?.addEventListener('click', sendDatasetToTrainer);
+  $('#btnSaveCaption')?.addEventListener('click', saveDatasetInspectorCaption);
+  $('#btnToggleExclude')?.addEventListener('click', toggleDatasetInspectorExclude);
+  $('#inspectorCaptionText')?.addEventListener('input', (e) => {
+    const len = $('#captionLength');
+    if (len) len.textContent = `${e.target.value.length} chars`;
+  });
+
+  $$('[data-dataset-filter]').forEach(btn => btn.addEventListener('click', () => {
+    state.datasetFilter = btn.dataset.datasetFilter || 'all';
+    $$('[data-dataset-filter]').forEach(x => x.classList.toggle('active', x === btn));
+    renderDatasetGrid();
+  }));
+
+  const drop = $('#datasetDropZone');
+  const input = $('#datasetFileInput');
+  drop?.addEventListener('click', () => input?.click());
+  input?.addEventListener('change', async (e) => {
+    await uploadFilesToActiveDataset([...e.target.files]);
+    e.target.value = '';
+  });
+  drop?.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    drop.classList.add('drag');
+  });
+  drop?.addEventListener('dragleave', () => drop.classList.remove('drag'));
+  drop?.addEventListener('drop', async (e) => {
+    e.preventDefault();
+    drop.classList.remove('drag');
+    await uploadFilesToActiveDataset([...e.dataTransfer.files]);
+  });
+}
+
+function datasetNameFromPath(path) {
+  const parts = String(path || '').split('/').filter(Boolean);
+  return parts.at(-1) || 'dataset';
+}
+
+function datasetStatCounts() {
+  const all = state.datasetItems || [];
+  const included = all.filter(x => !x.excluded);
+  const captioned = included.filter(x => (x.caption || '').trim());
+  return {
+    all: all.length,
+    included: included.length,
+    excluded: all.length - included.length,
+    captioned: captioned.length,
+    missing: included.length - captioned.length,
+    ready: included.length >= 8 && included.length === captioned.length,
+  };
+}
+
+async function loadDatasetLibrary() {
+  const grid = $('#datasetFolderGrid');
+  if (!grid) return;
+  grid.innerHTML = `<div class="empty"><span class="spinner"></span><span>Scanning datasets...</span></div>`;
+  try {
+    if (state.preview) {
+      state.datasets = Object.values(state.previewDatasetStore);
+    } else {
+      const res = await api.trainerDatasets();
+      state.datasets = res.datasets || [];
+    }
+    renderDatasetLibrary();
+  } catch (e) {
+    grid.innerHTML = `<div class="empty"><span>Dataset scan failed: ${esc(e.message || 'unknown error')}</span></div>`;
+  }
+}
+
+function renderDatasetLibrary() {
+  const grid = $('#datasetFolderGrid');
+  if (!grid) return;
+  const q = ($('#datasetSearchInput')?.value || '').trim().toLowerCase();
+  const rows = (state.datasets || []).filter(ds => {
+    const hay = `${ds.name || ''} ${ds.dataset_path || ''}`.toLowerCase();
+    return !q || hay.includes(q);
+  });
+  const navCount = $('#datasetNavCount');
+  if (navCount) navCount.textContent = String((state.datasets || []).length);
+  if (!rows.length) {
+    grid.innerHTML = `
+      <div class="empty dataset-library-empty">
+        <strong>No datasets yet.</strong>
+        <span>Create a dataset, upload images, then run auto-review and pod captions.</span>
+      </div>`;
+    return;
+  }
+  grid.innerHTML = rows.map(ds => {
+    const count = Number(ds.image_count || ds.pairs || 0);
+    const caps = Number(ds.caption_count || 0);
+    const pct = count ? Math.round((caps / count) * 100) : 0;
+    return `
+      <button class="dataset-card dataset-folder-card" data-dataset-open="${esc(ds.dataset_path)}" type="button">
+        <div class="dataset-card-head">
+          <div>
+            <strong>${esc(ds.name || datasetNameFromPath(ds.dataset_path))}</strong>
+            <span>${esc(ds.dataset_path || '')}</span>
+          </div>
+          <em>${count} img</em>
+        </div>
+        <div class="dataset-card-progress"><span style="width:${Math.min(100, pct)}%"></span></div>
+        <div class="dataset-card-foot">
+          <span>${caps} captions</span>
+          <span>${ds.valid === false ? esc(ds.error || 'needs attention') : (pct === 100 && count ? 'ready' : 'needs prep')}</span>
+        </div>
+      </button>`;
+  }).join('');
+  $$('[data-dataset-open]', grid).forEach(card => {
+    card.addEventListener('click', () => openDatasetByPath(card.dataset.datasetOpen));
+  });
+}
+
+function openCreateDatasetModal() {
+  $('#modalTitle').textContent = 'Create Dataset';
+  $('#modalMeta').textContent = 'A clean folder will be created under /workspace/datasets.';
+  $('#modalBody').innerHTML = `
+    <div class="field">
+      <label>Dataset name</label>
+      <input class="input" id="newDatasetName" placeholder="melissa_flux" autocomplete="off" spellcheck="false">
+    </div>
+    <div class="hint">Use a simple folder name. You can add images immediately after creation.</div>`;
+  $('#modalFoot').innerHTML = `
+    <button class="btn ghost" id="modalCancel">Cancel</button>
+    <button class="btn primary" id="modalCreateDataset">Create</button>`;
+  $('#modalCancel').onclick = closeModal;
+  $('#modalCreateDataset').onclick = async () => {
+    const name = ($('#newDatasetName')?.value || '').trim();
+    if (!name) return toast('Name the dataset first.', 'error');
+    $('#modalCreateDataset').disabled = true;
+    try {
+      let ds;
+      if (state.preview) {
+        const safe = name.replace(/[^A-Za-z0-9._-]+/g, '_').replace(/^_+|_+$/g, '') || 'dataset';
+        ds = { name: safe, dataset_path: `datasets/${safe}`, image_count: 0, caption_count: 0, pairs: 0, valid: true, items: [] };
+        state.previewDatasetStore[ds.dataset_path] = ds;
+      } else {
+        ds = await api.createTrainerDataset({ name });
+      }
+      closeModal();
+      await loadDatasetLibrary();
+      await openDatasetByPath(ds.dataset_path);
+      toast('Dataset created', 'success');
+    } catch (e) {
+      toast(`Create failed: ${e.message || 'unknown error'}`, 'error');
+      $('#modalCreateDataset').disabled = false;
+    }
+  };
+  openModal();
+  setTimeout(() => $('#newDatasetName')?.focus(), 50);
+}
+
+function showDatasetList() {
+  $('#datasetWorkspaceScreen').style.display = 'none';
+  $('#datasetListScreen').style.display = '';
+  state.activeDataset = null;
+  state.datasetItems = [];
+  state.datasetSelected = -1;
+  loadDatasetLibrary();
+}
+
+async function openDatasetByPath(datasetPath) {
+  const ds = (state.datasets || []).find(x => x.dataset_path === datasetPath)
+    || { name: datasetNameFromPath(datasetPath), dataset_path: datasetPath };
+  state.activeDataset = ds;
+  state.datasetSelected = -1;
+  $('#datasetListScreen').style.display = 'none';
+  const workspace = $('#datasetWorkspaceScreen');
+  workspace.style.display = 'flex';
+  $('#activeDatasetTitle').textContent = ds.name || datasetNameFromPath(ds.dataset_path);
+  $('#activeDatasetSub').textContent = ds.dataset_path || '';
+  resetDatasetConsole();
+  await loadActiveDatasetItems();
+  toggleDatasetDrawer(!state.datasetItems.length);
+}
+
+async function loadActiveDatasetItems() {
+  if (!state.activeDataset?.dataset_path) return;
+  try {
+    if (state.preview) {
+      state.datasetItems = state.previewDatasetStore[state.activeDataset.dataset_path]?.items || [];
+    } else {
+      const res = await api.listTrainerDataset({ dataset_path: state.activeDataset.dataset_path });
+      state.datasetItems = (res.pairs || []).map((p, i) => ({ ...p, _idx: i }));
+    }
+    renderDatasetWorkspace();
+  } catch (e) {
+    state.datasetItems = [];
+    renderDatasetWorkspace();
+    toast(`Dataset load failed: ${e.message || 'unknown error'}`, 'error');
+  }
+}
+
+function toggleDatasetDrawer(open) {
+  const drawer = $('#datasetCaptionDrawer');
+  if (drawer) drawer.style.display = open ? 'flex' : 'none';
+  if (open) checkDatasetVisionRuntime({ quiet: true });
+}
+
+function resetDatasetConsole() {
+  const el = $('#captionConsole');
+  if (el) el.textContent = 'Ready.';
+}
+
+function datasetLog(message, kind = 'info') {
+  const el = $('#captionConsole');
+  if (!el) return;
+  const prefix = kind === 'error' ? 'ERR' : kind === 'warn' ? 'WARN' : 'OK';
+  el.textContent = `${(el.textContent || '').trim()}\n[${prefix}] ${message}`.trim();
+  el.scrollTop = el.scrollHeight;
+}
+
+function renderDatasetWorkspace() {
+  renderDatasetStats();
+  renderDatasetProcess();
+  renderDatasetGrid();
+  renderDatasetInspector();
+}
+
+function renderDatasetStats() {
+  const host = $('#datasetStats');
+  if (!host) return;
+  const c = datasetStatCounts();
+  host.innerHTML = [
+    ['Images', c.all],
+    ['Included', c.included],
+    ['Captioned', c.captioned],
+    ['Needs caption', c.missing],
+    ['Excluded', c.excluded],
+  ].map(([label, value]) => `<div class="dataset-stat"><strong>${value}</strong><span>${label}</span></div>`).join('');
+}
+
+function renderDatasetProcess() {
+  const c = datasetStatCounts();
+  const stepState = {
+    upload: c.all > 0 ? 'done' : 'active',
+    review: c.all > 0 && c.excluded > 0 ? 'done' : c.all > 0 ? 'active' : '',
+    caption: c.missing === 0 && c.included > 0 ? 'done' : c.included > 0 ? 'active' : '',
+    curate: c.captioned > 0 ? 'active' : '',
+    train: c.ready ? 'done' : '',
+  };
+  $$('.dataset-process-step').forEach(step => {
+    const s = stepState[step.dataset.dsStep] || '';
+    step.classList.toggle('done', s === 'done');
+    step.classList.toggle('active', s === 'active');
+  });
+}
+
+function filteredDatasetItems() {
+  const rows = state.datasetItems || [];
+  if (state.datasetFilter === 'included') return rows.filter(x => !x.excluded);
+  if (state.datasetFilter === 'missing') return rows.filter(x => !x.excluded && !(x.caption || '').trim());
+  if (state.datasetFilter === 'excluded') return rows.filter(x => x.excluded);
+  return rows;
+}
+
+function renderDatasetGrid() {
+  const grid = $('#datasetWorkspaceGrid');
+  if (!grid) return;
+  const rows = filteredDatasetItems();
+  if (!rows.length) {
+    const emptyText = state.datasetItems.length ? 'No images match this filter.' : 'Upload images to start building this dataset.';
+    grid.innerHTML = `<div class="empty dataset-grid-empty"><span>${emptyText}</span></div>`;
+    return;
+  }
+  grid.innerHTML = rows.map((item) => {
+    const idx = state.datasetItems.indexOf(item);
+    const cap = (item.caption || '').trim();
+    const flags = item.flags || [];
+    const status = item.excluded ? 'Excluded' : cap ? 'Captioned' : 'Needs caption';
+    return `
+      <button class="dataset-grid-item ${idx === state.datasetSelected ? 'active' : ''} ${item.excluded ? 'excluded' : ''} ${cap ? 'captioned' : 'needs-caption'}" data-dataset-index="${idx}" type="button">
+        <img src="${esc(item.url || item.object_url || '')}" alt="${esc(item.image || 'dataset image')}" loading="lazy">
+        <span class="dataset-tile-badge">${esc(status)}</span>
+        ${flags.length ? `<span class="dataset-tile-flag">${esc(flags[0].label || 'flag')}</span>` : ''}
+      </button>`;
+  }).join('');
+  $$('[data-dataset-index]', grid).forEach(tile => {
+    tile.addEventListener('click', () => {
+      state.datasetSelected = Number(tile.dataset.datasetIndex);
+      renderDatasetGrid();
+      renderDatasetInspector();
+    });
+  });
+}
+
+function selectedDatasetItem() {
+  return state.datasetItems[state.datasetSelected] || null;
+}
+
+function renderDatasetInspector() {
+  const item = selectedDatasetItem();
+  const empty = $('#inspectorEmptyState');
+  const content = $('#inspectorContent');
+  if (!empty || !content) return;
+  if (!item) {
+    empty.style.display = 'flex';
+    content.style.display = 'none';
+    return;
+  }
+  empty.style.display = 'none';
+  content.style.display = 'flex';
+  $('#inspectorImage').src = item.url || item.object_url || '';
+  $('#inspectorFilename').textContent = item.image || item.filename || 'image';
+  const sizeKb = item.size_bytes ? `${Math.max(1, Math.round(item.size_bytes / 1024))} KB` : 'local file';
+  $('#inspectorDetails').textContent = `${item.excluded ? 'Excluded' : 'Included'} · ${sizeKb}`;
+  $('#inspectorCaptionText').value = item.caption || '';
+  $('#captionLength').textContent = `${(item.caption || '').length} chars`;
+  const warning = $('#inspectorWarning');
+  const flag = (item.flags || [])[0];
+  if (warning && flag) {
+    warning.style.display = 'block';
+    warning.textContent = `${flag.label}: ${flag.detail || 'needs attention'}`;
+  } else if (warning) {
+    warning.style.display = 'none';
+  }
+  $('#btnToggleExclude').textContent = item.excluded ? 'Include' : 'Exclude';
+}
+
+function setDatasetBusy(busy) {
+  state.datasetBusy = busy;
+  const run = $('#btnRunCaptioning');
+  const stop = $('#btnCancelCaptioning');
+  if (run) run.disabled = busy;
+  if (stop) stop.style.display = busy ? '' : 'none';
+  $('#datasetDropZone')?.classList.toggle('busy', busy);
+}
+
+async function uploadFilesToActiveDataset(files) {
+  const images = (files || []).filter(f => /^image\//.test(f.type));
+  if (!state.activeDataset?.dataset_path) return toast('Create or open a dataset first.', 'error');
+  if (!images.length) return toast('Choose image files to upload.', 'error');
+  setDatasetBusy(true);
+  datasetLog(`Uploading ${images.length} image${images.length === 1 ? '' : 's'}...`);
+  try {
+    if (state.preview) {
+      const store = state.previewDatasetStore[state.activeDataset.dataset_path] || state.activeDataset;
+      store.items = store.items || [];
+      for (const file of images) {
+        store.items.push({
+          image: file.name,
+          filename: file.name,
+          caption: '',
+          excluded: false,
+          flags: [{ label: 'NO CAP', tone: 'warn', detail: 'no caption yet' }],
+          size_bytes: file.size,
+          object_url: URL.createObjectURL(file),
+          image_base64: await fileToDataUrl(file),
+        });
+      }
+      store.image_count = store.items.length;
+      store.caption_count = store.items.filter(x => x.caption).length;
+      state.previewDatasetStore[state.activeDataset.dataset_path] = store;
+      state.activeDataset = store;
+    } else {
+      await api.uploadDatasetFiles(images, state.activeDataset.dataset_path);
+    }
+    await loadActiveDatasetItems();
+    datasetLog('Upload complete.');
+  } catch (e) {
+    toast(`Upload failed: ${e.message || 'unknown error'}`, 'error');
+    datasetLog(e.message || 'Upload failed', 'error');
+  } finally {
+    setDatasetBusy(false);
+  }
+}
+
+function fileToDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ''));
+    reader.onerror = () => reject(reader.error || new Error('Failed to read file'));
+    reader.readAsDataURL(file);
+  });
+}
+
+function datasetVisionSettings() {
+  return {
+    provider: $('#captionProvider')?.value || 'openai',
+    endpoint: ($('#captionEndpoint')?.value || '').trim(),
+    model: ($('#captionModel')?.value || '').trim(),
+    temperature: Number($('#captionTemp')?.value || 0.1),
+  };
+}
+
+function renderDatasetVisionRuntime(payload = {}) {
+  const pill = $('#captionRuntimePill');
+  const status = $('#captionRuntimeStatus');
+  const log = $('#captionRuntimeLog');
+  const start = $('#btnStartCaptionRuntime');
+  const stop = $('#btnStopCaptionRuntime');
+  if (!pill || !status) return;
+  const stateName = payload.state || (payload.ready ? 'ready' : payload.running ? 'starting' : 'stopped');
+  const loading = stateName === 'starting' || payload.status === 'starting';
+  pill.dataset.state = payload.ready ? 'on' : loading ? 'loading' : stateName === 'exited' ? 'off' : 'unknown';
+  pill.textContent = payload.ready
+    ? (stateName === 'external' ? 'Vision: external ready' : 'Vision: ready')
+    : loading ? 'Vision: starting'
+      : stateName === 'exited' ? 'Vision: exited'
+        : 'Vision: stopped';
+  if (payload.ready) {
+    status.textContent = `${payload.model || 'vision model'} is reachable at ${payload.endpoint || 'endpoint'}.`;
+  } else if (loading) {
+    status.textContent = 'Starting the pod vision server. First load can take a few minutes.';
+  } else if (payload.probe?.error) {
+    status.textContent = payload.probe.error;
+  } else if (payload.returncode != null) {
+    status.textContent = `Managed server exited with code ${payload.returncode}.`;
+  } else {
+    status.textContent = 'No vision server is reachable yet.';
+  }
+  if (log) {
+    const lines = payload.log || [];
+    log.textContent = lines.join('\n');
+    log.style.display = lines.length ? '' : 'none';
+  }
+  if (start) start.disabled = loading || payload.ready;
+  if (stop) stop.disabled = !payload.running;
+}
+
+async function checkDatasetVisionRuntime({ quiet = false } = {}) {
+  const settings = datasetVisionSettings();
+  if (!settings.endpoint || !settings.model) return null;
+  try {
+    const payload = state.preview
+      ? { ready: true, state: 'external', model: settings.model, endpoint: settings.endpoint, log: ['preview mode: vision endpoint mocked'] }
+      : await api.datasetVisionRuntimeStatus(settings);
+    renderDatasetVisionRuntime(payload);
+    if (!quiet) toast(payload.ready ? 'Vision model is reachable' : 'Vision model is not running yet', payload.ready ? 'success' : 'info');
+    return payload;
+  } catch (e) {
+    renderDatasetVisionRuntime({ state: 'stopped', probe: { error: e.message || 'status unavailable' } });
+    if (!quiet) toast(`Vision check failed: ${e.message || 'unknown error'}`, 'error');
+    return null;
+  }
+}
+
+async function startDatasetVisionRuntime() {
+  const settings = datasetVisionSettings();
+  if (!settings.endpoint || !settings.model) return toast('Set the vision endpoint and model first.', 'error');
+  const btn = $('#btnStartCaptionRuntime');
+  if (btn) btn.disabled = true;
+  renderDatasetVisionRuntime({ state: 'starting', model: settings.model, endpoint: settings.endpoint });
+  try {
+    const payload = state.preview
+      ? { ready: true, state: 'external', model: settings.model, endpoint: settings.endpoint, log: ['preview mode: vision endpoint mocked'] }
+      : await api.datasetVisionRuntimeStart(settings);
+    renderDatasetVisionRuntime(payload);
+    datasetLog(`Vision runtime ${payload.status || payload.state || 'starting'}.`);
+    if (!payload.ready) pollDatasetVisionRuntime();
+    toast(payload.ready ? 'Vision model is already reachable' : 'Starting vision model', payload.ready ? 'success' : 'info');
+  } catch (e) {
+    renderDatasetVisionRuntime({ state: 'stopped', probe: { error: e.message || 'start failed' } });
+    toast(`Vision start failed: ${e.message || 'unknown error'}`, 'error');
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+async function stopDatasetVisionRuntime() {
+  const btn = $('#btnStopCaptionRuntime');
+  if (btn) btn.disabled = true;
+  try {
+    const payload = state.preview ? { state: 'stopped', ready: false } : await api.datasetVisionRuntimeStop();
+    renderDatasetVisionRuntime(payload);
+    datasetLog('Vision runtime stopped.');
+    toast('Vision model stopped', 'success');
+  } catch (e) {
+    toast(`Vision stop failed: ${e.message || 'unknown error'}`, 'error');
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+function pollDatasetVisionRuntime() {
+  clearTimeout(state.datasetVisionPoll);
+  state.datasetVisionPoll = setTimeout(async () => {
+    const payload = await checkDatasetVisionRuntime({ quiet: true });
+    if (payload && !payload.ready && (payload.running || payload.state === 'starting')) {
+      pollDatasetVisionRuntime();
+    }
+  }, 2500);
+}
+
+async function runDatasetPipeline() {
+  if (!state.activeDataset?.dataset_path) return toast('Open a dataset first.', 'error');
+  const rows = state.datasetItems || [];
+  if (!rows.length) return toast('Upload images before running the pipeline.', 'error');
+  const settings = datasetVisionSettings();
+  if (!settings.endpoint || !settings.model) return toast('Set the vision endpoint and model first.', 'error');
+  const runtime = await checkDatasetVisionRuntime({ quiet: true });
+  if (!runtime?.ready) {
+    toggleDatasetDrawer(true);
+    return toast('Start the pod vision model before running the dataset pipeline.', 'error');
+  }
+
+  datasetPipelineCancel = false;
+  setDatasetBusy(true);
+  toggleDatasetDrawer(true);
+  resetDatasetConsole();
+  datasetLog(`Starting auto-review + caption with ${settings.model}`);
+  try {
+    for (let i = 0; i < rows.length; i++) {
+      if (datasetPipelineCancel) break;
+      const item = rows[i];
+      if (item.excluded) continue;
+      datasetLog(`Review ${i + 1}/${rows.length}: ${item.image}`);
+      const reviewText = await requestDatasetVision(item, DATASET_REVIEW_PROMPT, settings);
+      const review = parseDatasetReview(reviewText);
+      item.review = review;
+      if (review && review.keep === false) {
+        item.excluded = true;
+        item.flags = [{ label: 'REJECTED', tone: 'warn', detail: review.reason || 'auto-review rejected this image' }, ...(item.flags || [])];
+        await persistDatasetExclude(item, true);
+        datasetLog(`Excluded ${item.image}: ${review.reason || 'review rejected'}`, 'warn');
+        renderDatasetWorkspace();
+        continue;
+      }
+
+      if (!(item.caption || '').trim()) {
+        if (datasetPipelineCancel) break;
+        datasetLog(`Caption ${i + 1}/${rows.length}: ${item.image}`);
+        const prompt = ($('#captionPrompt')?.value || DATASET_CAPTION_FALLBACK).trim();
+        const raw = await requestDatasetVision(item, prompt, settings);
+        const caption = cleanDatasetCaption(raw);
+        if (!caption) throw new Error(`Captioner returned empty text for ${item.image}`);
+        item.caption = caption;
+        item.caption_path = item.caption_path || item.image.replace(/\.[^.]+$/, '.txt');
+        item.flags = (item.flags || []).filter(f => !['NO CAP', 'EMPTY CAP', 'SHORT CAP'].includes(f.label));
+        await persistDatasetCaption(item, caption);
+        datasetLog(`Saved caption for ${item.image}`);
+        renderDatasetWorkspace();
+      }
+    }
+    datasetLog(datasetPipelineCancel ? 'Pipeline stopped by user.' : 'Pipeline complete.');
+    toast(datasetPipelineCancel ? 'Dataset pipeline stopped' : 'Dataset pipeline complete', datasetPipelineCancel ? 'info' : 'success');
+  } catch (e) {
+    datasetLog(e.message || 'Pipeline failed', 'error');
+    toast(`Pipeline failed: ${e.message || 'unknown error'}`, 'error');
+  } finally {
+    datasetPipelineCancel = false;
+    setDatasetBusy(false);
+    await loadActiveDatasetItems();
+  }
+}
+
+async function requestDatasetVision(item, prompt, settings) {
+  if (state.preview) {
+    await new Promise(r => setTimeout(r, 160));
+    if (prompt === DATASET_REVIEW_PROMPT) return '{"keep":true,"reason":"single clear subject"}';
+    return 'A close portrait with clear facial details, relaxed posture, visible clothing layers, soft ambient lighting, and a simple background.';
+  }
+  const imagePath = `${state.activeDataset.dataset_path}/${item.image}`;
+  const res = await api.datasetVisionProxy({
+    provider: settings.provider,
+    endpoint: settings.endpoint,
+    model: settings.model,
+    temperature: settings.temperature,
+    prompt,
+    image_path: imagePath,
+  });
+  return res.response || '';
+}
+
+function parseDatasetReview(text) {
+  const raw = String(text || '').trim();
+  const jsonText = raw.match(/\{[\s\S]*\}/)?.[0] || raw;
+  try {
+    const parsed = JSON.parse(jsonText);
+    return { keep: parsed.keep !== false, reason: String(parsed.reason || '').slice(0, 160) };
+  } catch {
+    return { keep: !/\breject\b|\bmultiple\b|\bobject\b|\bwatermark\b/i.test(raw), reason: raw.slice(0, 160) };
+  }
+}
+
+function cleanDatasetCaption(text) {
+  let out = String(text || '')
+    .replace(/^["'`\s]+|["'`\s]+$/g, '')
+    .replace(/^(in this image|we see|this is a shot of|the image shows|there is)\s*:?\s*/i, '')
+    .replace(/\b(photorealistic|masterpiece|best quality|high quality|ultra detailed|8k|ai generated|generated image|stunning photography|hyperrealistic)\b/gi, '')
+    .replace(/[“”]{2,}/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  out = out.replace(/\s+([,.])/g, '$1').replace(/,\s*,+/g, ',');
+  return out.slice(0, 900);
+}
+
+async function persistDatasetCaption(item, caption) {
+  if (state.preview) return;
+  await api.saveTrainerCaption({
+    dataset_path: state.activeDataset.dataset_path,
+    image_rel: item.image,
+    caption,
+  });
+}
+
+async function persistDatasetExclude(item, excluded) {
+  if (state.preview) return;
+  await api.toggleTrainerExclude({
+    dataset_path: state.activeDataset.dataset_path,
+    image_rel: item.image,
+    excluded,
+  });
+}
+
+async function saveDatasetInspectorCaption() {
+  const item = selectedDatasetItem();
+  if (!item) return;
+  const caption = cleanDatasetCaption($('#inspectorCaptionText')?.value || '');
+  try {
+    await persistDatasetCaption(item, caption);
+    item.caption = caption;
+    item.caption_path = item.caption_path || item.image.replace(/\.[^.]+$/, '.txt');
+    item.flags = (item.flags || []).filter(f => !['NO CAP', 'EMPTY CAP', 'SHORT CAP'].includes(f.label));
+    renderDatasetWorkspace();
+    toast('Caption saved', 'success');
+  } catch (e) {
+    toast(`Save failed: ${e.message || 'unknown error'}`, 'error');
+  }
+}
+
+async function toggleDatasetInspectorExclude() {
+  const item = selectedDatasetItem();
+  if (!item) return;
+  const next = !item.excluded;
+  try {
+    await persistDatasetExclude(item, next);
+    item.excluded = next;
+    renderDatasetWorkspace();
+    toast(next ? 'Image excluded' : 'Image included', 'success');
+  } catch (e) {
+    toast(`Exclude failed: ${e.message || 'unknown error'}`, 'error');
+  }
+}
+
+async function sendDatasetToTrainer() {
+  if (!state.activeDataset?.dataset_path) return toast('Open a dataset first.', 'error');
+  const c = datasetStatCounts();
+  if (c.included < 8) return toast('Keep at least 8 included images before training.', 'error');
+  if (c.missing > 0 && !await confirmModal('Missing captions', `${c.missing} included images still need captions. Send to trainer anyway?`, 'Send anyway')) return;
+  setTrainerWizardSource('folder');
+  setTrainerDatasetPath(state.activeDataset.dataset_path);
+  const input = $('#trainerWizardFolder');
+  if (input) input.value = state.activeDataset.dataset_path;
+  switchView('trainers');
+  setTrainerWizardStep(1);
+  validateTrainerDataset().catch(() => {});
+  toast('Dataset loaded into trainer', 'success');
 }
 
 // ── Trainers ────────────────────────────────────────────────────────────
@@ -5697,12 +6724,21 @@ function renderTrainerFilenameHint() {
 function renderTrainerGpuChip() {
   const chip = $('#trainerGpuChip');
   if (!chip) return;
-  const g = state.gpu || {};
-  if (!g.total_gb) {
-    chip.textContent = '⚙ GPU · checking…';
-    return;
+  const displayState = gpuDisplayState(state.gpu);
+  const vram = gpuVramGb(state.gpu);
+  chip.dataset.state = displayState;
+  chip.classList.toggle('ok', displayState === 'ready');
+  chip.classList.toggle('warn', displayState === 'loading' || displayState === 'disconnected');
+  chip.classList.toggle('err', displayState === 'error');
+  if (displayState === 'loading') {
+    chip.textContent = 'GPU · checking...';
+  } else if (displayState === 'error') {
+    chip.textContent = 'GPU · unavailable';
+  } else if (displayState === 'disconnected') {
+    chip.textContent = 'GPU · disconnected';
+  } else {
+    chip.textContent = `GPU · ${vram ? `${Math.round(vram)} GB` : state.gpu?.name || 'ready'} · ready`;
   }
-  chip.textContent = `⚙ GPU · ${Math.round(g.total_gb)} GB · ready`;
 }
 
 function setTrainerWizardStep(idx) {
@@ -7134,7 +8170,7 @@ function renderTrainerModelSupport(trainer) {
   if (!root) return;
   const families = trainer?.model_families || [];
   if (!families.length) {
-    root.innerHTML = `<div class="empty" style="padding:18px">No model-family roadmap reported.</div>`;
+    root.innerHTML = `<div class="empty trainer-empty">No model-family roadmap reported.</div>`;
     return;
   }
   const toneFor = (status) => status === 'live' ? 'ok' : (status === 'next' ? 'pink' : '');
@@ -7153,7 +8189,7 @@ function renderTrainerDatasetSummary(summary) {
   const root = $('#trainerDatasetSummary');
   if (!root) return;
   if (!summary) {
-    root.innerHTML = `<div class="empty" style="padding:18px">No validation yet.</div>`;
+    root.innerHTML = `<div class="empty trainer-empty">No validation yet.</div>`;
     return;
   }
   const metric = (label, value) => `
@@ -7292,7 +8328,7 @@ function renderTrainerJobs() {
   if (!root) return;
   const jobs = state.trainJobs || [];
   if (!jobs.length) {
-    root.innerHTML = `<div class="empty" style="padding:18px">No training jobs yet.</div>`;
+    root.innerHTML = `<div class="empty trainer-empty">No training jobs yet.</div>`;
     return;
   }
   root.innerHTML = jobs.map(j => {
@@ -7415,6 +8451,12 @@ function pokeTrainerPoll() {
 
 // ── LoRAs ────────────────────────────────────────────────────────────────
 async function loadLoras() {
+  if (state.preview) {
+    state.loras = [];
+    $('#loraNavCount').textContent = 0;
+    renderLoraPanel();
+    return;
+  }
   try {
     const data = await api.loras();
     state.loras = data.loras || [];
@@ -7425,6 +8467,10 @@ async function loadLoras() {
 
 // ── Components (transformer / VAE / text-encoder split-file swaps) ──────
 async function loadComponents() {
+  if (state.preview) {
+    state.components = [];
+    return;
+  }
   try {
     const data = await api.components();
     state.components = data.components || [];
@@ -8339,7 +9385,7 @@ function confirmModal(title, text, confirmLabel = 'OK', danger = false) {
     $('#modalFoot').innerHTML = `
       <button class="btn ghost" id="modalCancel">Cancel</button>
       <button class="btn ${danger ? 'danger' : 'primary'}" id="modalConfirm">${confirmLabel}</button>`;
-    
+
     $('#modalCancel').onclick = () => { modalResolve = null; closeModal(); resolve(false); };
     $('#modalConfirm').onclick = () => { modalResolve = null; closeModal(); resolve(true); };
     openModal();
@@ -8499,7 +9545,7 @@ function mockTrainers() {
         ],
         model_families: [
           { id: 'qwen', label: 'Qwen Image', status: 'live', description: 'Character LoRA training is wired today, including checkpoints and library import.' },
-          { id: 'flux', label: 'Flux Klein', status: 'beta', description: 'Flux.2 Klein 9B turbo/base LoRA training uses the same guided dataset, config, and monitor workflow.' },
+          { id: 'flux', label: 'Flux Klein', status: 'live', description: 'Flux.2 Klein 9B turbo/base LoRA training uses the same guided dataset, config, and monitor workflow.' },
           { id: 'z-image', label: 'Z Image', status: 'planned', description: 'Planned after Flux once the wrapper and validation path are proven.' },
         ],
       },
@@ -8514,7 +9560,7 @@ function mockTrainers() {
         ],
         model_families: [
           { id: 'qwen', label: 'Qwen Image', status: 'live', description: 'Character LoRA training is wired today, including checkpoints and library import.' },
-          { id: 'flux', label: 'Flux Klein', status: 'beta', description: 'Flux.2 Klein 9B turbo/base LoRA training uses the same guided dataset, config, and monitor workflow.' },
+          { id: 'flux', label: 'Flux Klein', status: 'live', description: 'Flux.2 Klein 9B turbo/base LoRA training uses the same guided dataset, config, and monitor workflow.' },
           { id: 'z-image', label: 'Z Image', status: 'planned', description: 'Planned after Flux once the wrapper and validation path are proven.' },
         ],
       },

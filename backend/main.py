@@ -13,6 +13,7 @@ import subprocess
 import sys
 import threading
 import time
+from urllib.parse import urlparse
 from pathlib import Path
 from typing import Optional
 
@@ -2569,7 +2570,7 @@ TRAINER_MODEL_FAMILIES = [
     {
         "id": "flux",
         "label": "Flux Klein",
-        "status": "beta",
+        "status": "live",
         "description": "Flux.2 [klein] 9B turbo/base LoRA training using the same dataset wizard, checkpoints, samples, and library import.",
         "trainer_id": TRAINER_ID_FLUX_KLEIN_CHARACTER,
     },
@@ -2687,6 +2688,7 @@ class TrainJobRequest(BaseModel):
     learning_rate: float = 0.0002
     resolution: int = 1024
     batch_size: int = 1
+    gradient_accumulation_steps: int = 1
     repeats: int = 1
     hf_token: Optional[str] = None
     # Advanced cfg + sample prompts surfaced by the wizard's Step 4/5.
@@ -2943,6 +2945,33 @@ class TrainerExcludeUpdate(BaseModel):
     dataset_path: str
     image_rel: str
     excluded: bool
+
+
+class TrainerDatasetCreateRequest(BaseModel):
+    name: str
+
+
+class TrainerVisionProxyRequest(BaseModel):
+    provider: str
+    endpoint: str
+    model: str
+    temperature: float
+    prompt: str
+    image_base64: Optional[str] = None
+    image_path: Optional[str] = None
+
+
+class TrainerVisionRuntimeRequest(BaseModel):
+    provider: str = "openai"
+    endpoint: str = "http://127.0.0.1:8000/v1/chat/completions"
+    model: str = "Qwen/Qwen2.5-VL-7B-Instruct"
+    command: Optional[str] = None
+
+
+vision_runtime_lock = threading.Lock()
+vision_runtime_proc: Optional[subprocess.Popen] = None
+vision_runtime_log: list[str] = []
+vision_runtime_cfg: dict = {}
 
 
 def _excludes_path(dataset_dir: Path) -> Path:
@@ -3209,19 +3238,28 @@ def download_trainer_dataset(req: TrainerDatasetDownloadRequest):
 @app.post("/api/trainers/dataset/upload")
 async def upload_trainer_dataset(
     target_name: str = Query("upload"),
+    dataset_path: Optional[str] = Query(None),
     files: list[UploadFile] = File(...),
 ):
     _require_unlocked()
     if not files:
         raise HTTPException(400, "Choose at least one image or caption file")
 
-    safe_target = _safe_name(target_name, "upload")
-    target_dir = (DATASETS_DIR / "uploads" / f"{safe_target}_{int(time.time())}_{secrets.token_hex(3)}").resolve()
-    try:
-        target_dir.relative_to(DATASETS_DIR.resolve())
-    except ValueError:
-        raise HTTPException(400, "Invalid dataset folder name")
-    target_dir.mkdir(parents=True, exist_ok=False)
+    if dataset_path:
+        target_dir = _resolve_training_path(dataset_path)
+        try:
+            target_dir.relative_to(DATASETS_DIR.resolve())
+        except ValueError:
+            raise HTTPException(400, "Dataset upload target must be inside /workspace/datasets")
+        target_dir.mkdir(parents=True, exist_ok=True)
+    else:
+        safe_target = _safe_name(target_name, "upload")
+        target_dir = (DATASETS_DIR / "uploads" / f"{safe_target}_{int(time.time())}_{secrets.token_hex(3)}").resolve()
+        try:
+            target_dir.relative_to(DATASETS_DIR.resolve())
+        except ValueError:
+            raise HTTPException(400, "Invalid dataset folder name")
+        target_dir.mkdir(parents=True, exist_ok=False)
 
     saved = []
     for item in files:
@@ -3257,6 +3295,336 @@ async def upload_trainer_dataset(
         "files": saved,
         "scan": scan,
     }
+
+
+@app.get("/api/trainers/datasets")
+def list_trainer_datasets():
+    """List all available datasets in WORKSPACE/datasets."""
+    _require_unlocked()
+    if not DATASETS_DIR.exists():
+        DATASETS_DIR.mkdir(parents=True, exist_ok=True)
+
+    datasets = []
+
+    def scan_dir(directory: Path, prefix: str = ""):
+        if not directory.exists() or not directory.is_dir():
+            return
+        for path in sorted(directory.iterdir()):
+            if path.is_dir():
+                if path == DATASETS_DIR / "uploads" and not prefix:
+                    continue  # handle uploads recursively below
+                try:
+                    rel = path.relative_to(WORKSPACE.resolve()).as_posix()
+                except ValueError:
+                    rel = str(path)
+                scan = _scan_training_dataset(path)
+                datasets.append({
+                    "name": f"{prefix}{path.name}",
+                    "dataset_path": rel,
+                    "image_count": scan.get("image_count", 0),
+                    "caption_count": scan.get("caption_count", 0),
+                    "pairs": len(scan.get("pairs", [])),
+                    "valid": scan.get("valid", True),
+                    "error": scan.get("error", None)
+                })
+
+    # Scan top-level datasets
+    scan_dir(DATASETS_DIR)
+    # Scan uploads directory
+    scan_dir(DATASETS_DIR / "uploads", prefix="uploads/")
+
+    return {"datasets": datasets}
+
+
+@app.post("/api/trainers/dataset/create")
+def create_trainer_dataset(req: TrainerDatasetCreateRequest):
+    """Create a new dataset folder under datasets/."""
+    _require_unlocked()
+    name = _safe_name(req.name, "dataset")
+    target_dir = (DATASETS_DIR / name).resolve()
+    try:
+        target_dir.relative_to(DATASETS_DIR.resolve())
+    except ValueError:
+        raise HTTPException(400, "Invalid dataset folder name")
+
+    if target_dir.exists():
+        raise HTTPException(400, f"Dataset folder '{name}' already exists")
+
+    target_dir.mkdir(parents=True, exist_ok=False)
+
+    try:
+        rel = target_dir.relative_to(WORKSPACE.resolve()).as_posix()
+    except ValueError:
+        rel = str(target_dir)
+
+    return {
+        "status": "created",
+        "name": name,
+        "dataset_path": rel,
+        "path": str(target_dir)
+    }
+
+
+@app.post("/api/trainers/dataset/vision-proxy")
+def vision_proxy(req: TrainerVisionProxyRequest):
+    """Proxy vision requests to Ollama/LM Studio from backend to avoid CORS and mixed-content browser restrictions."""
+    _require_unlocked()
+
+    import base64
+
+    # 1. Resolve image to base64
+    base64_data = ""
+    if req.image_base64:
+        # Strip header if it contains 'data:image/...;base64,'
+        if "," in req.image_base64:
+            base64_data = req.image_base64.split(",")[1]
+        else:
+            base64_data = req.image_base64
+    elif req.image_path:
+        # Read local file from workspace
+        try:
+            img_path = (WORKSPACE / req.image_path.strip().lstrip("/")).resolve()
+            img_path.relative_to(WORKSPACE.resolve())
+            if not img_path.exists() or not img_path.is_file():
+                raise HTTPException(404, f"Image not found at {req.image_path}")
+            base64_data = base64.b64encode(img_path.read_bytes()).decode("utf-8")
+        except Exception as e:
+            if isinstance(e, HTTPException):
+                raise e
+            raise HTTPException(400, f"Failed to read image file: {str(e)}")
+    else:
+        raise HTTPException(400, "Either image_base64 or image_path must be provided")
+
+    # 2. Make post request based on provider
+    try:
+        headers = {"Content-Type": "application/json"}
+        if req.provider == "ollama":
+            body = {
+                "model": req.model,
+                "stream": False,
+                "options": {"temperature": req.temperature},
+                "messages": [{
+                    "role": "user",
+                    "content": req.prompt,
+                    "images": [base64_data]
+                }]
+            }
+            res = httpx.post(req.endpoint, json=body, headers=headers, timeout=90.0)
+            if res.status_code != 200:
+                raise HTTPException(res.status_code, f"Ollama returned error: {res.text}")
+            json_res = res.json()
+            response_text = json_res.get("message", {}).get("content", "") or json_res.get("response", "")
+        else:  # openai compatible
+            body = {
+                "model": req.model,
+                "temperature": req.temperature,
+                "messages": [{
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": req.prompt},
+                        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_data}"}}
+                    ]
+                }]
+            }
+            res = httpx.post(req.endpoint, json=body, headers=headers, timeout=90.0)
+            if res.status_code != 200:
+                raise HTTPException(res.status_code, f"Provider returned error: {res.text}")
+            json_res = res.json()
+            response_text = json_res.get("choices", [{}])[0].get("message", {}).get("content", "") or json_res.get("choices", [{}])[0].get("text", "")
+
+        return {"status": "success", "response": response_text}
+
+    except httpx.RequestError as exc:
+        raise HTTPException(500, f"Failed to contact model provider at {exc.request.url}: {exc}")
+    except Exception as e:
+        if isinstance(e, HTTPException):
+            raise e
+        raise HTTPException(500, f"Internal vision proxy error: {str(e)}")
+
+
+def _vision_runtime_append(line: str) -> None:
+    with vision_runtime_lock:
+        vision_runtime_log.append(line)
+        del vision_runtime_log[:-160]
+
+
+def _vision_runtime_alive() -> bool:
+    return vision_runtime_proc is not None and vision_runtime_proc.poll() is None
+
+
+def _vision_runtime_public(provider: str = "openai", endpoint: str = "", model: str = "") -> dict:
+    with vision_runtime_lock:
+        proc = vision_runtime_proc
+        log = list(vision_runtime_log[-80:])
+        cfg = dict(vision_runtime_cfg)
+    proc_alive = proc is not None and proc.poll() is None
+    return {
+        "managed": proc is not None,
+        "running": proc_alive,
+        "pid": proc.pid if proc_alive else None,
+        "returncode": proc.poll() if proc is not None and not proc_alive else None,
+        "provider": cfg.get("provider") or provider,
+        "endpoint": cfg.get("endpoint") or endpoint,
+        "model": cfg.get("model") or model,
+        "command": cfg.get("command"),
+        "log": log,
+    }
+
+
+def _vision_runtime_host_port(endpoint: str) -> tuple[str, int]:
+    parsed = urlparse(endpoint or "")
+    host = parsed.hostname or "127.0.0.1"
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    return host, port
+
+
+def _vision_runtime_command(req: TrainerVisionRuntimeRequest) -> list[str]:
+    host, port = _vision_runtime_host_port(req.endpoint)
+    raw = (req.command or os.environ.get("IGGLEPIXEL_VISION_SERVER_CMD") or "").strip()
+    if raw:
+        rendered = raw.format(model=req.model, endpoint=req.endpoint, host=host, port=port)
+        return shlex.split(rendered)
+    if req.provider != "openai":
+        raise HTTPException(400, "Only OpenAI-compatible pod vision can be started here. Start Ollama externally or switch provider.")
+    return [
+        sys.executable,
+        "-m",
+        "vllm.entrypoints.openai.api_server",
+        "--host", host,
+        "--port", str(port),
+        "--model", req.model,
+        "--trust-remote-code",
+        "--dtype", "auto",
+        "--gpu-memory-utilization", os.environ.get("IGGLEPIXEL_VISION_GPU_MEMORY", "0.82"),
+        "--max-model-len", os.environ.get("IGGLEPIXEL_VISION_MAX_MODEL_LEN", "8192"),
+    ]
+
+
+def _read_vision_runtime(proc: subprocess.Popen) -> None:
+    if not proc.stdout:
+        return
+    for raw in iter(proc.stdout.readline, ""):
+        if not raw:
+            break
+        _vision_runtime_append(raw.rstrip())
+    rc = proc.poll()
+    if rc is not None:
+        _vision_runtime_append(f"vision runtime exited with code {rc}")
+
+
+def _vision_probe(provider: str, endpoint: str) -> dict:
+    provider = (provider or "openai").strip().lower()
+    try:
+        if provider == "ollama":
+            tags_url = endpoint.replace("/api/chat", "/api/tags")
+            res = httpx.get(tags_url, timeout=2.5)
+        else:
+            models_url = endpoint.replace("/chat/completions", "/models")
+            res = httpx.get(models_url, timeout=2.5)
+        if res.status_code < 400:
+            return {"ready": True, "status_code": res.status_code}
+        return {"ready": False, "status_code": res.status_code, "error": res.text[:400]}
+    except Exception as e:
+        return {"ready": False, "error": str(e)}
+
+
+@app.get("/api/trainers/dataset/vision-runtime/status")
+def vision_runtime_status(
+    provider: str = Query("openai"),
+    endpoint: str = Query("http://127.0.0.1:8000/v1/chat/completions"),
+    model: str = Query("Qwen/Qwen2.5-VL-7B-Instruct"),
+):
+    _require_unlocked()
+    probe = _vision_probe(provider, endpoint)
+    payload = _vision_runtime_public(provider, endpoint, model)
+    payload.update({
+        "ready": probe.get("ready", False),
+        "probe": probe,
+    })
+    if payload["ready"] and not payload["running"]:
+        payload["state"] = "external"
+    elif payload["running"] and payload["ready"]:
+        payload["state"] = "ready"
+    elif payload["running"]:
+        payload["state"] = "starting"
+    elif payload["managed"] and payload.get("returncode") is not None:
+        payload["state"] = "exited"
+    else:
+        payload["state"] = "stopped"
+    return payload
+
+
+@app.post("/api/trainers/dataset/vision-runtime/start")
+def start_vision_runtime(req: TrainerVisionRuntimeRequest):
+    _require_unlocked()
+    global vision_runtime_proc, vision_runtime_cfg
+
+    if _vision_runtime_alive():
+        return {
+            **_vision_runtime_public(req.provider, req.endpoint, req.model),
+            "status": "already_running",
+        }
+
+    probe = _vision_probe(req.provider, req.endpoint)
+    if probe.get("ready"):
+        return {
+            **_vision_runtime_public(req.provider, req.endpoint, req.model),
+            "status": "external_ready",
+            "ready": True,
+            "state": "external",
+            "probe": probe,
+        }
+
+    cmd = _vision_runtime_command(req)
+    _vision_runtime_append("starting vision runtime")
+    _vision_runtime_append("command: " + " ".join(shlex.quote(x) for x in cmd))
+    env = os.environ.copy()
+    env.setdefault("HF_HOME", str(HF_HOME_DIR))
+    env.setdefault("HF_HUB_CACHE", str(HF_HOME_DIR / "hub"))
+    env.setdefault("TRANSFORMERS_CACHE", str(HF_HOME_DIR / "hub"))
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            cwd=str(BASE_DIR),
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+        )
+    except FileNotFoundError as e:
+        raise HTTPException(400, f"Vision runtime command not found: {e.filename}")
+    except Exception as e:
+        raise HTTPException(500, f"Failed to start vision runtime: {e}")
+
+    with vision_runtime_lock:
+        vision_runtime_proc = proc
+        vision_runtime_cfg = {
+            "provider": req.provider,
+            "endpoint": req.endpoint,
+            "model": req.model,
+            "command": " ".join(shlex.quote(x) for x in cmd),
+            "started_at": time.time(),
+        }
+    threading.Thread(target=_read_vision_runtime, args=(proc,), daemon=True).start()
+    return {**_vision_runtime_public(req.provider, req.endpoint, req.model), "status": "starting", "state": "starting"}
+
+
+@app.post("/api/trainers/dataset/vision-runtime/stop")
+def stop_vision_runtime():
+    _require_unlocked()
+    global vision_runtime_proc
+    proc = vision_runtime_proc
+    if proc is None or proc.poll() is not None:
+        return {**_vision_runtime_public(), "status": "not_running", "state": "stopped"}
+    proc.terminate()
+    try:
+        proc.wait(timeout=8)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait(timeout=4)
+    _vision_runtime_append("vision runtime stopped")
+    return {**_vision_runtime_public(), "status": "stopped", "state": "stopped"}
 
 
 def _public_train_job(job: dict) -> dict:
@@ -3429,11 +3797,13 @@ def _unique_lora_destination(base_name: str) -> Path:
     return dest
 
 
-def _import_trainer_outputs(job: dict, req: TrainJobRequest, output_dir: Path) -> list[dict]:
+def _import_trainer_outputs(job: dict, req: TrainJobRequest, output_dir: Path, latest_only: bool = False) -> list[dict]:
     output_name = job["output_name"]
     candidates = _trainer_output_candidates(output_dir, output_name, req.steps)
     if not candidates:
         return []
+    if latest_only:
+        candidates = [candidates[-1]]
 
     family_tag = "flux" if req.trainer_id == TRAINER_ID_FLUX_KLEIN_CHARACTER else "qwen"
     model_tag = "flux-klein" if family_tag == "flux" else "qwen-image"
@@ -3464,6 +3834,7 @@ def _import_trainer_outputs(job: dict, req: TrainJobRequest, output_dir: Path) -
             "learning_rate": req.learning_rate,
             "resolution": req.resolution,
             "batch_size": req.batch_size,
+            "gradient_accumulation_steps": req.gradient_accumulation_steps,
             "source_path": str(src),
         }
         meta_path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
@@ -3471,9 +3842,12 @@ def _import_trainer_outputs(job: dict, req: TrainJobRequest, output_dir: Path) -
     return imported
 
 
-def _trainer_output_records(output_dir: Path, output_name: str, total_steps: int) -> list[dict]:
+def _trainer_output_records(output_dir: Path, output_name: str, total_steps: int, latest_only: bool = False) -> list[dict]:
     records = []
-    for row in _trainer_output_candidates(output_dir, output_name, total_steps):
+    candidates = _trainer_output_candidates(output_dir, output_name, total_steps)
+    if latest_only and candidates:
+        candidates = [candidates[-1]]
+    for row in candidates:
         path: Path = row["path"]
         records.append({
             "path": str(path),
@@ -3481,6 +3855,48 @@ def _trainer_output_records(output_dir: Path, output_name: str, total_steps: int
             "step": row.get("step"),
         })
     return records
+
+
+def _finish_train_job_with_latest_checkpoint(job: dict, req: TrainJobRequest, output_dir: Path) -> bool:
+    """Stop a trainer run and promote the newest saved checkpoint.
+
+    This is intentionally separate from cancel: cancel means abandon the run,
+    while finish-latest means "the last checkpoint looked good; keep it".
+    """
+    if not output_dir.exists():
+        _set_train_job_error(job, "Finish requested, but the training output folder does not exist yet")
+        return False
+
+    if not req.auto_import_lora:
+        outputs = _trainer_output_records(output_dir, job["output_name"], req.steps, latest_only=True)
+        if not outputs:
+            _set_train_job_error(job, "Finish requested, but no saved LoRA checkpoint was found yet")
+            return False
+        job["imported_to_library"] = False
+        promoted = outputs
+    else:
+        outputs = _import_trainer_outputs(job, req, output_dir, latest_only=True)
+        if not outputs:
+            _set_train_job_error(job, "Finish requested, but no saved LoRA checkpoint was found yet")
+            return False
+        job["imported_to_library"] = True
+        promoted = outputs
+
+    job["status"] = "done"
+    job["phase"] = "Stopped at checkpoint"
+    job["progress"] = 100
+    job["finished_at"] = time.time()
+    job["lora_paths"] = [item["path"] for item in promoted]
+    job["lora_filenames"] = [item["filename"] for item in promoted]
+    job["lora_checkpoints"] = [{"filename": item["filename"], "step": item.get("step")} for item in promoted]
+    job["lora_path"] = promoted[-1]["path"]
+    job["lora_filename"] = promoted[-1]["filename"]
+    step_label = promoted[-1].get("step")
+    checkpoint_label = f"step {step_label}" if step_label else promoted[-1]["filename"]
+    action = "imported" if req.auto_import_lora else "kept in training output"
+    job["log_tail"].append(f"Finished early using latest checkpoint ({checkpoint_label}); LoRA {action}: {promoted[-1]['filename']}")
+    job["log_tail"] = job["log_tail"][-120:]
+    return True
 
 
 def _update_train_job_from_log(job: dict, req: TrainJobRequest, line: str) -> None:
@@ -3677,6 +4093,7 @@ def _run_train_job(job_id: str) -> None:
         "learning_rate": req.learning_rate,
         "resolution": req.resolution,
         "batch_size": req.batch_size,
+        "gradient_accumulation_steps": req.gradient_accumulation_steps,
         "repeats": req.repeats,
         "save_every": save_every,
         "optimizer": req.optimizer or "adamw8bit",
@@ -3697,7 +4114,8 @@ def _run_train_job(job_id: str) -> None:
     job["log_tail"].append("Starting trainer command")
     job["log_tail"].append(
         f"Requested settings: rank {req.rank}, steps {req.steps}, lr {req.learning_rate}, "
-        f"resolution {req.resolution}, batch {req.batch_size}, checkpoints every {save_every} steps"
+        f"resolution {req.resolution}, batch {req.batch_size}, grad accum {req.gradient_accumulation_steps}, "
+        f"checkpoints every {save_every} steps"
     )
     job["log_tail"].append(
         "Advanced settings: "
@@ -3725,6 +4143,7 @@ def _run_train_job(job_id: str) -> None:
             "TRAIN_LR": str(req.learning_rate),
             "TRAIN_RESOLUTION": str(req.resolution),
             "TRAIN_BATCH_SIZE": str(req.batch_size),
+            "TRAIN_GRAD_ACCUM": str(req.gradient_accumulation_steps),
             "TRAIN_REPEATS": str(req.repeats),
             "TRAIN_SAVE_EVERY": str(save_every),
             "TRAIN_GENERATE_SAMPLES": "1" if req.generate_samples else "0",
@@ -3771,7 +4190,17 @@ def _run_train_job(job_id: str) -> None:
                 proc.terminate()
                 _mark_train_job_cancelled(job)
                 return
-        rc = proc.wait()
+            if job.get("_finish_latest_checkpoint"):
+                proc.terminate()
+                break
+        try:
+            rc = proc.wait(timeout=30)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            rc = proc.wait()
+        if job.get("_finish_latest_checkpoint"):
+            _finish_train_job_with_latest_checkpoint(job, req, output_dir)
+            return
         if job.get("_cancel"):
             _mark_train_job_cancelled(job)
             return
@@ -3847,6 +4276,8 @@ def create_train_job(req: TrainJobRequest):
         raise HTTPException(400, "Resolution must be one of 512, 768, 1024, 1328")
     if req.batch_size < 1 or req.batch_size > 16:
         raise HTTPException(400, "Batch size must be between 1 and 16")
+    if req.gradient_accumulation_steps < 1 or req.gradient_accumulation_steps > 32:
+        raise HTTPException(400, "Gradient accumulation steps must be between 1 and 32")
     if req.repeats < 1 or req.repeats > 100:
         raise HTTPException(400, "Repeats must be between 1 and 100")
     if req.optimizer and req.optimizer not in TRAINER_OPTIMIZERS:
@@ -3881,6 +4312,7 @@ def create_train_job(req: TrainJobRequest):
         "learning_rate": req.learning_rate,
         "resolution": req.resolution,
         "batch_size": req.batch_size,
+        "gradient_accumulation_steps": req.gradient_accumulation_steps,
         "repeats": req.repeats,
         "save_every": save_every,
         "optimizer": req.optimizer or "adamw8bit",
@@ -3939,21 +4371,39 @@ def get_train_job_samples(job_id: str):
     # level deeper under ai-toolkit-output/<name>). Collect image files,
     # parse the step out of the filename, and bucket per step.
     sample_files = list(out_dir.rglob("samples/*.jpg")) + list(out_dir.rglob("samples/*.png"))
+    total_steps = int(job.get("total_steps") or job.get("steps") or 0)
+    max_plausible_step = max(total_steps + 1000, total_steps * 2, 1000)
+
+    def sample_step_from_path(path: Path) -> Optional[int]:
+        rel = path.relative_to(out_dir).as_posix().lower()
+        name_match = re.match(r"^0*(\d{1,8})__", path.name.lower())
+        if name_match:
+            step = int(name_match.group(1))
+            if 0 < step <= max_plausible_step:
+                return step
+        patterns = [
+            r"(?:^|[/_-])step[_-]?0*(\d{1,8})(?:\D|$)",
+            r"(?:^|[/_-])global[_-]?step[_-]?0*(\d{1,8})(?:\D|$)",
+            r"(?:^|[/_-])checkpoint[_-]?0*(\d{1,8})(?:\D|$)",
+        ]
+        for pattern in patterns:
+            match = re.search(pattern, rel)
+            if not match:
+                continue
+            step = int(match.group(1))
+            if 0 < step <= max_plausible_step:
+                return step
+        return None
+
     by_step: dict[int, list[dict]] = {}
     prompt_order: list[str] = []
     seen_prompts: set[str] = set()
     for p in sample_files:
-        m = re.match(r"^(\d+)__(.+?)__\d+\.(?:jpg|png)$", p.name)
-        if not m:
-            # Fall back to leading-int parse so non-standard names still appear.
-            mi = re.match(r"^(\d+)", p.name)
-            if not mi:
-                continue
-            step = int(mi.group(1))
-            prompt_slug = "default"
-        else:
-            step = int(m.group(1))
-            prompt_slug = m.group(2)
+        step = sample_step_from_path(p)
+        if step is None:
+            continue
+        m = re.match(r"^\d+__(.+?)__\d+\.(?:jpg|png)$", p.name)
+        prompt_slug = m.group(1) if m else p.stem
         try:
             ws_rel = p.relative_to(WORKSPACE.resolve()).as_posix()
         except ValueError:
@@ -3974,6 +4424,40 @@ def get_train_job_samples(job_id: str):
         ],
         "prompts": prompt_order,
     }
+
+
+@app.post("/api/train-jobs/{job_id}/finish-latest-checkpoint")
+def finish_train_job_latest_checkpoint(job_id: str):
+    _require_unlocked()
+    job = train_jobs.get(job_id)
+    if not job:
+        raise HTTPException(404, "Job not found")
+    if job["status"] in ("done", "error", "cancelled"):
+        return _public_train_job(job)
+
+    req: TrainJobRequest = job["_request"]
+    output_dir = Path(job.get("output_dir") or "")
+    if job["status"] == "queued" or not output_dir.exists():
+        raise HTTPException(400, "No trainer checkpoint exists yet. Wait for the first save-every checkpoint.")
+    if not _trainer_output_candidates(output_dir, job["output_name"], req.steps):
+        raise HTTPException(400, "No saved LoRA checkpoint was found yet. Wait for the first save-every checkpoint.")
+
+    job["_finish_latest_checkpoint"] = True
+    proc = job.get("_process")
+    if proc is not None:
+        try:
+            proc.terminate()
+        except Exception:
+            pass
+        job["phase"] = "Finishing from checkpoint"
+        tail = job.setdefault("log_tail", [])
+        if not tail or tail[-1] != "Finish requested using latest checkpoint":
+            tail.append("Finish requested using latest checkpoint")
+        job["log_tail"] = tail[-120:]
+        return {"status": "finishing", "message": "Stopping trainer and importing the latest checkpoint"}
+
+    _finish_train_job_with_latest_checkpoint(job, req, output_dir)
+    return _public_train_job(job)
 
 
 @app.delete("/api/train-jobs/{job_id}")
