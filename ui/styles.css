@@ -7668,7 +7668,8 @@ select,
   grid-template-columns: 380px 1fr !important;
   gap: 16px !important;
   align-items: stretch !important;
-  height: calc(100vh - var(--topbar-h) - 40px) !important;
+  height: calc(100dvh - var(--topbar-h) - 96px) !important;
+  min-height: 0 !important;
 }
 
 @media (max-width: 1100px) {
@@ -7683,8 +7684,11 @@ select,
   flex-direction: column !important;
   gap: 14px !important;
   height: 100% !important;
+  min-height: 0 !important;
   overflow-y: auto !important;
-  padding-right: 8px !important;
+  padding: 0 8px 28px 0 !important;
+  scroll-padding-bottom: 28px !important;
+  overscroll-behavior: contain !important;
 }
 
 .ws-control-deck::-webkit-scrollbar {
