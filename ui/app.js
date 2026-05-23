@@ -361,6 +361,15 @@ const DEFAULT_NEGATIVE_PROMPT =
   'extra fingers, extra arms, duplicate limbs, malformed hands, distorted face, bad anatomy, blurry, low quality, watermark, text artifacts, upside down subject';
 
 const loraId = (l) => l?.rel_path || l?.filename || '';
+const modelSupportsLora = (m) => {
+  if (!m) return false;
+  if (m.supports_lora === true) return true;
+  if (m.supports_lora === false) return false;
+  const id = String(m.id || '').toLowerCase();
+  const runner = String(m.runner_module || '').toLowerCase();
+  return /\b(qwen|flux|z-image|wan|hunyuan|ltx|longcat)/.test(id) ||
+    /\b(qwen|flux|z_image|wan|hunyuan|ltx|longcat)/.test(runner);
+};
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 const $  = (sel, root = document) => root.querySelector(sel);
@@ -1047,8 +1056,10 @@ function bindShell() {
   $('#wsEnhancePrompt')?.addEventListener('click', enhanceWorkspacePrompt);
   $('#wsPromptModeBuilder')?.addEventListener('click', () => setPromptMode('builder'));
   $('#wsPromptModeRaw')?.addEventListener('click', () => setPromptMode('raw'));
-  $('#wsLoraAdd').addEventListener('click', () => {
-    if (state.selected) openLoraPicker(state.selected);
+  ['#wsLoraAdd', '#wsLoraAddTop'].forEach(sel => {
+    $(sel)?.addEventListener('click', () => {
+      if (state.selected) openLoraPicker(state.selected);
+    });
   });
   $('#llmSend').addEventListener('click', sendLLMMessage);
   $('#llmPrompt').addEventListener('keydown', (e) => {
@@ -1735,7 +1746,7 @@ function renderModels() {
         </div>
         <div class="mc-tags">
           ${vramTag}
-          ${m.supports_lora ? '<span class="tag">LoRA</span>' : ''}
+          ${modelSupportsLora(m) ? '<span class="tag">LoRA</span>' : ''}
           ${access.gated ? '<span class="tag warn">HF terms</span>' : ''}
           ${dim ? '<span class="tag bad">GPU mismatch</span>' : ''}
         </div>
@@ -2109,7 +2120,7 @@ function renderDrawerBody() {
 
     <div class="drawer-stats">
       <div class="drawer-stat"><div class="label">VRAM</div><div class="value">${sizeStr}</div></div>
-      <div class="drawer-stat"><div class="label">LoRA</div><div class="value">${m.supports_lora ? 'yes' : 'no'}</div></div>
+      <div class="drawer-stat"><div class="label">LoRA</div><div class="value">${modelSupportsLora(m) ? 'yes' : 'no'}</div></div>
       ${m.category === 'llm' ? `
         <div class="drawer-stat" style="grid-column:1/-1">
           <div class="label">Context</div>
@@ -3866,7 +3877,7 @@ function componentRequirementStatus(modelId, entry) {
 }
 
 function renderWorkspaceLoras(m) {
-  if (!m.supports_lora) {
+  if (!modelSupportsLora(m)) {
     $('#wsLoraPane').style.display = 'none';
     return;
   }
@@ -3947,7 +3958,7 @@ function renderWorkspaceLoras(m) {
   assignedEl.innerHTML = `<div class="lora-group-head">Assigned (${assigned.length})</div>` +
     (assigned.length
       ? assigned.map(l => loraDetailedHtml(m.id, keyOf(l), { installed: true })).join('')
-      : `<div style="font-size:11.5px;color:var(--t-3);padding:6px 4px">No LoRAs assigned. Tag any LoRA with <span style="font-family:var(--font-mono)">${m.id}</span> to attach it here.</div>`);
+      : `<div class="lora-empty-note">No LoRAs assigned yet. Use Add to attach a downloaded LoRA to this model.</div>`);
 
   $('#wsLoraCount').textContent = `${defaults.length + assigned.length}`;
 

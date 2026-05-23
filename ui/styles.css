@@ -143,6 +143,24 @@ body::before {
   display: block;
   flex-shrink: 0;
 }
+.topbar-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex-shrink: 0;
+}
+.brand-mark {
+  display: block;
+  object-fit: contain;
+  flex: 0 0 auto;
+  filter: drop-shadow(0 0 12px rgba(145, 200, 255, 0.18));
+}
+.topbar-brand-mark {
+  width: 30px;
+  height: 30px;
+  border-radius: 10px;
+}
 .topbar-spacer { flex: 1; }
 .topbar-right { display: flex; align-items: center; gap: 6px; }
 
@@ -1131,13 +1149,32 @@ body::before {
 }
 .spinner {
   width: 16px; height: 16px;
-  border: 2px solid var(--line-2);
-  border-top-color: var(--t-1);
+  border: 1px solid rgba(255, 255, 255, 0.18);
   border-radius: 50%;
-  animation: spin 0.7s linear infinite;
   display: inline-block;
+  vertical-align: -3px;
+  background:
+    radial-gradient(circle at 50% 50%, rgba(255,255,255,0.13), transparent 58%),
+    url("brand/igglepixel-mark.png") center / 190% auto no-repeat;
+  box-shadow:
+    0 0 0 1px rgba(255,255,255,0.04),
+    0 0 14px rgba(145, 200, 255, 0.18),
+    0 0 18px rgba(255, 122, 168, 0.10);
+  animation: brandSpin 1.45s linear infinite;
 }
 @keyframes spin { to { transform: rotate(360deg); } }
+@keyframes brandSpin { to { transform: rotate(360deg); } }
+.empty > .spinner,
+.empty > div.spinner {
+  width: 34px;
+  height: 34px;
+  margin: 0 auto 10px;
+  background-size: 175% auto;
+  box-shadow:
+    0 0 0 1px rgba(255,255,255,0.05),
+    0 0 24px rgba(145, 200, 255, 0.24),
+    0 0 30px rgba(255, 122, 168, 0.14);
+}
 
 /* ── Auth overlay ──────────────────────────────────────────────────────── */
 .auth-shell {
@@ -1179,6 +1216,22 @@ body::before {
   border-radius: inherit;
   pointer-events: none;
   background: linear-gradient(180deg, rgba(255,255,255,0.04), transparent 35%);
+}
+.auth-brand {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  justify-items: center;
+  gap: 12px;
+  margin: -6px 0 22px;
+}
+.auth-brand-mark {
+  width: min(176px, 52vw);
+  height: min(176px, 52vw);
+  border-radius: 32px;
+  filter:
+    drop-shadow(0 0 26px rgba(145, 200, 255, 0.24))
+    drop-shadow(0 0 38px rgba(255, 122, 168, 0.20));
 }
 .auth-logo {
   height: 26px;
@@ -2345,6 +2398,38 @@ body::before {
 /* LoRA panel inside workspace */
 .lora-pane { padding: 0; overflow: hidden; }
 .lora-pane .ws-section-title { padding: 12px 14px 0; margin-bottom: 8px; }
+.lora-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.lora-title-add {
+  appearance: none;
+  border: 1px solid var(--line-2);
+  background: var(--glass-2);
+  color: var(--t-1);
+  border-radius: 999px;
+  padding: 5px 10px;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 140ms var(--ease), border-color 140ms var(--ease), transform 140ms var(--ease);
+}
+.lora-title-add:hover {
+  background: var(--glass-3);
+  border-color: var(--line-3);
+  transform: translateY(-1px);
+}
+.lora-empty-note {
+  color: var(--t-3);
+  font-size: 11.5px;
+  line-height: 1.45;
+  padding: 6px 4px;
+}
 .lora-group {
   padding: 0 10px 10px;
   display: flex;
@@ -2787,10 +2872,16 @@ body::before {
 }
 .asset.queued .qspinner {
   width: 28px; height: 28px;
-  border: 2px solid var(--line-2);
-  border-top-color: var(--t-1);
+  border: 1px solid rgba(255, 255, 255, 0.18);
   border-radius: 50%;
-  animation: spin 0.8s linear infinite;
+  background:
+    radial-gradient(circle at 50% 50%, rgba(255,255,255,0.13), transparent 58%),
+    url("brand/igglepixel-mark.png") center / 180% auto no-repeat;
+  box-shadow:
+    0 0 0 1px rgba(255,255,255,0.04),
+    0 0 18px rgba(145, 200, 255, 0.22),
+    0 0 22px rgba(255, 122, 168, 0.12);
+  animation: brandSpin 1.6s linear infinite;
 }
 .asset.queued.has-progress .qspinner {
   width: 22px; height: 22px;
@@ -6214,10 +6305,24 @@ body::before {
   line-height: 1;
   text-transform: none;
   white-space: nowrap;
+  text-shadow: 0 0 22px rgba(145, 200, 255, 0.12);
 }
-.brand-wordmark span { color: var(--aura-violet); }
+.brand-wordmark span {
+  color: transparent;
+  background: linear-gradient(110deg, #91c8ff 0%, #8b6dff 34%, #ff7aa8 66%, #d6a45f 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  text-shadow: none;
+}
 .topbar-logo.brand-wordmark { width: auto; height: auto; font-size: 18px; }
-.auth-logo.brand-wordmark { width: auto; height: auto; justify-content: center; font-size: 28px; margin-bottom: 22px; }
+.auth-logo.brand-wordmark {
+  width: auto;
+  height: auto;
+  justify-content: center;
+  margin: 0;
+  font-size: 32px;
+  font-weight: 850;
+}
 
 .px-theme.scanlines::after,
 .px-theme .scanlines::after,

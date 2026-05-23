@@ -3,7 +3,9 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Igglepixel</title>
+  <title>IgglePixel</title>
+  <link rel="icon" type="image/png" href="brand/igglepixel-mark.png">
+  <link rel="apple-touch-icon" href="brand/igglepixel-mark.png">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
@@ -166,7 +168,10 @@
      in either direction (signed in or signed out). -->
 <div class="auth-shell" id="authShell" aria-hidden="true">
   <div class="auth-card">
-    <div class="brand-wordmark auth-logo" aria-label="IgglePixel">Iggle<span>Pixel</span></div>
+    <div class="auth-brand" aria-label="IgglePixel">
+      <img class="brand-mark auth-brand-mark" src="brand/igglepixel-mark.png" alt="">
+      <div class="brand-wordmark auth-logo">Iggle<span>Pixel</span></div>
+    </div>
     <div class="auth-title" id="authTitle">Set up access</div>
     <div class="auth-sub" id="authSub">Create credentials for this pod. They reset when the pod stops.</div>
     <form class="auth-form" id="authForm" autocomplete="off" data-form-type="other">
@@ -186,7 +191,10 @@
 
   <!-- ── Topbar ────────────────────────────────────────────────────────── -->
   <header class="topbar">
-    <div class="brand-wordmark topbar-logo" aria-label="IgglePixel">Iggle<span>Pixel</span></div>
+    <div class="topbar-brand" aria-label="IgglePixel">
+      <img class="brand-mark topbar-brand-mark" src="brand/igglepixel-mark.png" alt="">
+      <div class="brand-wordmark topbar-logo">Iggle<span>Pixel</span></div>
+    </div>
     <button class="icon-btn" id="sidebarToggle" title="Collapse sidebar" aria-label="Collapse sidebar" aria-pressed="false" style="margin-left: 6px;"><svg><use href="#i-sidebar-toggle"/></svg></button>
     <div class="topbar-spacer"></div>
     <div class="topbar-right">
@@ -371,7 +379,10 @@
 
           <!-- LoRAs + auth -->
           <div class="ws-section lora-pane" id="wsLoraPane">
-            <div class="ws-section-title">LoRAs <span class="meta" id="wsLoraCount">0</span></div>
+            <div class="ws-section-title lora-title">
+              <span>LoRAs <span class="meta" id="wsLoraCount">0</span></span>
+              <button class="lora-title-add" id="wsLoraAddTop" type="button">+ Add</button>
+            </div>
 
             <div class="lora-group" id="wsLoraDefaults" style="display:none">
               <div class="lora-group-head">Bundled with model</div>
