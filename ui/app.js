@@ -6401,8 +6401,8 @@ function renderDatasetVisionRuntime(payload = {}) {
   }
   if (start) {
     start.disabled = loading || (!isOllama && payload.ready);
-    start.textContent = isOllama ? 'Check Ollama' : 'Start model';
-    start.title = isOllama ? 'Checks the configured Ollama endpoint. Ollama itself should already be running.' : '';
+    start.textContent = isOllama ? 'Start Ollama' : 'Start model';
+    start.title = isOllama ? 'Starts Ollama if it is not already reachable.' : '';
   }
   if (stop) {
     stop.disabled = isOllama ? !payload.ready : !payload.running;
@@ -6431,15 +6431,6 @@ async function checkDatasetVisionRuntime({ quiet = false } = {}) {
 async function startDatasetVisionRuntime() {
   const settings = datasetVisionSettings();
   if (!settings.endpoint || !settings.model) return toast('Set the vision endpoint and model first.', 'error');
-  if (settings.provider === 'ollama') {
-    const payload = await checkDatasetVisionRuntime({ quiet: true });
-    if (payload?.ready) {
-      toast('Ollama is reachable', 'success');
-    } else {
-      toast('Ollama is not reachable yet. Start Ollama, then check again.', 'info');
-    }
-    return;
-  }
   const btn = $('#btnStartCaptionRuntime');
   if (btn) btn.disabled = true;
   renderDatasetVisionRuntime({ state: 'starting', model: settings.model, endpoint: settings.endpoint });
@@ -6450,7 +6441,10 @@ async function startDatasetVisionRuntime() {
     renderDatasetVisionRuntime(payload);
     datasetLog(`Vision runtime ${payload.status || payload.state || 'starting'}.`);
     if (!payload.ready) pollDatasetVisionRuntime();
-    toast(payload.ready ? 'Vision model is already reachable' : 'Starting vision model', payload.ready ? 'success' : 'info');
+    toast(payload.ready
+      ? (settings.provider === 'ollama' ? 'Ollama is already reachable' : 'Vision model is already reachable')
+      : (settings.provider === 'ollama' ? 'Starting Ollama' : 'Starting vision model'),
+      payload.ready ? 'success' : 'info');
   } catch (e) {
     renderDatasetVisionRuntime({ state: 'stopped', probe: { error: e.message || 'start failed' } });
     toast(`Vision start failed: ${e.message || 'unknown error'}`, 'error');

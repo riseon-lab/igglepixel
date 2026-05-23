@@ -3651,6 +3651,15 @@ def _vision_runtime_command(req: TrainerVisionRuntimeRequest) -> list[str]:
     )
 
 
+def _ollama_runtime_command(req: TrainerVisionRuntimeRequest) -> list[str]:
+    host, port = _vision_runtime_host_port(req.endpoint)
+    raw = (req.command or os.environ.get("IGGLEPIXEL_OLLAMA_SERVER_CMD") or "").strip()
+    if raw:
+        rendered = raw.format(model=req.model, endpoint=req.endpoint, host=host, port=port)
+        return shlex.split(rendered)
+    return ["ollama", "serve"]
+
+
 def _read_vision_runtime(proc: subprocess.Popen) -> None:
     if not proc.stdout:
         return
@@ -3884,6 +3893,7 @@ async def start_vision_runtime(req: TrainerVisionRuntimeRequest):
         }
     else:
         global vision_runtime_proc, vision_runtime_cfg
+        provider = req.provider.strip().lower()
 
         if _vision_runtime_alive():
             return {
@@ -3901,13 +3911,20 @@ async def start_vision_runtime(req: TrainerVisionRuntimeRequest):
                 "probe": probe,
             }
 
-        cmd = _vision_runtime_command(req)
-        _vision_runtime_append("starting vision runtime")
+        if provider == "ollama":
+            cmd = _ollama_runtime_command(req)
+            _vision_runtime_append("starting Ollama runtime")
+        else:
+            cmd = _vision_runtime_command(req)
+            _vision_runtime_append("starting vision runtime")
         _vision_runtime_append("command: " + " ".join(shlex.quote(x) for x in cmd))
         env = os.environ.copy()
         env.setdefault("HF_HOME", str(HF_HOME_DIR))
         env.setdefault("HF_HUB_CACHE", str(HF_HOME_DIR / "hub"))
         env.setdefault("TRANSFORMERS_CACHE", str(HF_HOME_DIR / "hub"))
+        if provider == "ollama":
+            host, port = _vision_runtime_host_port(req.endpoint)
+            env["OLLAMA_HOST"] = f"http://{host}:{port}"
         try:
             proc = subprocess.Popen(
                 cmd,
