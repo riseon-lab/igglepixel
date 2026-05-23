@@ -3472,7 +3472,7 @@ async def vision_proxy(req: TrainerVisionProxyRequest):
     """Proxy vision requests to Ollama/LM Studio or managed Qwen2.5-VL Captioner."""
     _require_unlocked()
 
-    is_managed_model = (req.provider == "openai" and req.model == "Qwen/Qwen2.5-VL-7B-Instruct")
+    is_managed_model = (req.provider.strip().lower() == "openai" and req.model.strip().lower() in ("qwen/qwen2.5-vl-7b-instruct", "qwen2.5-vl-7b-instruct", "qwen25-vl-captioner"))
 
     if is_managed_model:
         info = launcher.get("qwen25-vl-captioner")
@@ -3692,7 +3692,7 @@ async def vision_runtime_status(
     model: str = Query("Qwen/Qwen2.5-VL-7B-Instruct"),
 ):
     _require_unlocked()
-    is_managed_model = (provider == "openai" and model == "Qwen/Qwen2.5-VL-7B-Instruct")
+    is_managed_model = (provider.strip().lower() == "openai" and model.strip().lower() in ("qwen/qwen2.5-vl-7b-instruct", "qwen2.5-vl-7b-instruct", "qwen25-vl-captioner"))
 
     if is_managed_model:
         info = launcher.get("qwen25-vl-captioner")
@@ -3777,7 +3777,7 @@ async def vision_runtime_status(
 async def start_vision_runtime(req: TrainerVisionRuntimeRequest):
     _require_unlocked()
 
-    is_managed_model = (req.provider == "openai" and req.model == "Qwen/Qwen2.5-VL-7B-Instruct")
+    is_managed_model = (req.provider.strip().lower() == "openai" and req.model.strip().lower() in ("qwen/qwen2.5-vl-7b-instruct", "qwen2.5-vl-7b-instruct", "qwen25-vl-captioner"))
 
     if is_managed_model:
         with open(REGISTRY_PATH, "r") as f:
