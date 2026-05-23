@@ -5970,7 +5970,7 @@ function renderDatasetLibrary() {
     const caps = Number(ds.caption_count || 0);
     const pct = count ? Math.round((caps / count) * 100) : 0;
     return `
-      <button class="dataset-card dataset-folder-card" data-dataset-open="${esc(ds.dataset_path)}" type="button">
+      <div class="dataset-card dataset-folder-card" data-dataset-open="${esc(ds.dataset_path)}" role="button" tabindex="0">
         <div class="dataset-card-head">
           <div>
             <strong>${esc(ds.name || datasetNameFromPath(ds.dataset_path))}</strong>
@@ -5986,10 +5986,15 @@ function renderDatasetLibrary() {
           <span>${caps} captions</span>
           <span>${ds.valid === false ? esc(ds.error || 'needs attention') : (pct === 100 && count ? 'ready' : 'needs prep')}</span>
         </div>
-      </button>`;
+      </div>`;
   }).join('');
   $$('[data-dataset-open]', grid).forEach(card => {
     card.addEventListener('click', () => openDatasetByPath(card.dataset.datasetOpen));
+    card.addEventListener('keydown', (e) => {
+      if (e.key !== 'Enter' && e.key !== ' ') return;
+      e.preventDefault();
+      openDatasetByPath(card.dataset.datasetOpen);
+    });
   });
   $$('[data-dataset-delete]', grid).forEach(btn => {
     btn.addEventListener('click', (e) => {

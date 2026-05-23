@@ -3504,6 +3504,33 @@ def _vision_runtime_host_port(endpoint: str) -> tuple[str, int]:
     return host, port
 
 
+def _python_can_import(module: str, python_bin: str) -> bool:
+    try:
+        res = subprocess.run(
+            [python_bin, "-c", f"import {module}"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=8,
+        )
+        return res.returncode == 0
+    except Exception:
+        return False
+
+
+def _vision_python_candidates() -> list[str]:
+    candidates: list[str] = []
+    for value in (
+        os.environ.get("IGGLEPIXEL_VISION_PYTHON"),
+        os.environ.get("VIRTUAL_ENV") and str(Path(os.environ["VIRTUAL_ENV"]) / "bin" / "python"),
+        sys.executable,
+        shutil.which("python3"),
+        shutil.which("python"),
+    ):
+        if value and value not in candidates:
+            candidates.append(value)
+    return candidates
+
+
 def _vision_runtime_command(req: TrainerVisionRuntimeRequest) -> list[str]:
     host, port = _vision_runtime_host_port(req.endpoint)
     raw = (req.command or os.environ.get("IGGLEPIXEL_VISION_SERVER_CMD") or "").strip()
@@ -3512,18 +3539,33 @@ def _vision_runtime_command(req: TrainerVisionRuntimeRequest) -> list[str]:
         return shlex.split(rendered)
     if req.provider != "openai":
         raise HTTPException(400, "Only OpenAI-compatible pod vision can be started here. Start Ollama externally or switch provider.")
-    return [
-        sys.executable,
-        "-m",
-        "vllm.entrypoints.openai.api_server",
+    common_args = [
         "--host", host,
         "--port", str(port),
-        "--model", req.model,
         "--trust-remote-code",
         "--dtype", "auto",
         "--gpu-memory-utilization", os.environ.get("IGGLEPIXEL_VISION_GPU_MEMORY", "0.82"),
         "--max-model-len", os.environ.get("IGGLEPIXEL_VISION_MAX_MODEL_LEN", "8192"),
     ]
+    vllm_bin = shutil.which("vllm")
+    if vllm_bin:
+        return [vllm_bin, "serve", req.model, *common_args]
+    for python_bin in _vision_python_candidates():
+        if _python_can_import("vllm", python_bin):
+            return [
+                python_bin,
+                "-m",
+                "vllm.entrypoints.openai.api_server",
+                "--model", req.model,
+                *common_args,
+            ]
+    candidates = ", ".join(_vision_python_candidates()) or "none"
+    raise HTTPException(
+        400,
+        "vLLM is not installed in the backend Python environment. "
+        "Install vllm on the pod, set IGGLEPIXEL_VISION_PYTHON to a Python that can import vllm, "
+        "or set IGGLEPIXEL_VISION_SERVER_CMD. Checked: " + candidates,
+    )
 
 
 def _read_vision_runtime(proc: subprocess.Popen) -> None:
