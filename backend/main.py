@@ -5725,24 +5725,36 @@ def get_train_job_samples(job_id: str):
 
     def sample_prompt_slug(path: Path, step: int) -> str:
         stem = path.stem
-        # Old shape: `<step>__<prompt>__<seed>`.
+        # Old shape: `<step>__<prompt>__<seed>` — AI Toolkit's documented
+        # convention is double-underscore separators around the prompt
+        # slug, so `__\d+$` reliably points at the seed without eating
+        # part of a prompt whose own slug ends in digits.
         m = re.match(r"^\d+__(.+?)__\d+$", stem)
-        if not m:
-            m = re.match(r"^\d+[_-]+(.+?)[_-]+\d+$", stem)
-        if not m:
-            m = re.match(r"^\d+[_-]+(.+)$", stem)
         if m:
             return m.group(1)
-        # New shape: `<run_name>_<step>__<prompt>__<seed>` — split around the
-        # zero-padded step we already identified, then take the chunk before
-        # the trailing seed.
+        # Old shape variant with single underscores between step and
+        # prompt, but still double-underscore before the seed.
+        m = re.match(r"^\d+[_-]+(.+?)__\d+$", stem)
+        if m:
+            return m.group(1)
+        # No seed appended — return whatever sits after the step prefix.
+        m = re.match(r"^\d+[_-]+(.+)$", stem)
+        if m:
+            return m.group(1)
+        # New shape: `<run_name>_<step>__<prompt>__<seed>`. Split around
+        # the step token, strip leading separators, then peel off the
+        # trailing `__<digits>` seed if present. Critically we only strip
+        # *double* underscores here — using `[_-]+` would also bite into
+        # prompt slugs that legitimately end with `_<n>` (e.g.
+        # `scene_1`, `scene_2`, `scene_3` — which then all bucket to
+        # `scene` and break the per-prompt grid row layout).
         for token in sorted(re.findall(r"\d+", stem), key=lambda x: -len(x)):
             if int(token) != step:
                 continue
             tail = stem.split(token, 1)[1].lstrip("_-")
             if not tail:
                 continue
-            tail = re.sub(r"[_-]+\d+$", "", tail)
+            tail = re.sub(r"__\d+$", "", tail)
             return tail or stem
         return stem
 
