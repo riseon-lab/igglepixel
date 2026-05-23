@@ -835,15 +835,21 @@ body::before {
   top: 0; right: 0; bottom: 0;
   width: 460px;
   max-width: 92vw;
-  background: rgba(12, 12, 14, 0.85);
-  backdrop-filter: blur(40px) saturate(160%);
-  -webkit-backdrop-filter: blur(40px) saturate(160%);
+  /* Reduced blur radius + raised base opacity. The body bg is already
+   * pre-blurred, so stacking another 40px just costs frames during the
+   * slide-in transition without changing the look. */
+  background: rgba(12, 12, 14, 0.92);
+  backdrop-filter: blur(18px) saturate(150%);
+  -webkit-backdrop-filter: blur(18px) saturate(150%);
   border-left: 1px solid var(--line-2);
   z-index: 110;
   display: flex;
   flex-direction: column;
   transform: translateX(100%);
   transition: transform 280ms var(--ease);
+  /* Promote to its own compositor layer so the transform animation
+   * doesn't repaint surrounding chrome each frame. */
+  will-change: transform;
 }
 .drawer.open { transform: translateX(0); }
 
@@ -1112,7 +1118,12 @@ body::before {
 .lora-row .del { width: 22px; height: 22px; display: grid; place-items: center; color: var(--t-3); border-radius: var(--r-sm); }
 .lora-row .del:hover { color: var(--bad); background: var(--hi); }
 
-/* ── Modal ─────────────────────────────────────────────────────────────── */
+/* ── Modal ───────────────────────────────────────────────────────────────
+ * Always rendered in the layout tree; opacity + pointer-events gate
+ * visibility and interaction so opening doesn't trigger a full
+ * display-flip layout flush + sudden backdrop-filter pop-in. The blur
+ * also transitions smoothly via the opacity property — visually the
+ * scrim fades in over 180ms instead of snapping. */
 .modal-scrim {
   position: fixed;
   inset: 0;
@@ -1120,22 +1131,41 @@ body::before {
   backdrop-filter: blur(8px);
   -webkit-backdrop-filter: blur(8px);
   z-index: 200;
-  display: none;
+  display: grid;
   place-items: center;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 180ms var(--ease);
 }
-.modal-scrim.open { display: grid; }
+.modal-scrim.open {
+  opacity: 1;
+  pointer-events: auto;
+}
 .modal {
   width: 520px;
   max-width: 92vw;
   max-height: 80vh;
   overflow: hidden;
-  background: rgba(12,12,14,0.92);
-  backdrop-filter: blur(40px) saturate(160%);
-  -webkit-backdrop-filter: blur(40px) saturate(160%);
+  /* 18px is plenty of glass — the original 40px sampled through the
+   * already-blurred body background, costing FPS on open with no
+   * visible improvement. */
+  background: rgba(12,12,14,0.94);
+  backdrop-filter: blur(18px) saturate(150%);
+  -webkit-backdrop-filter: blur(18px) saturate(150%);
   border: 1px solid var(--line-2);
   border-radius: var(--r-xl);
   display: flex;
   flex-direction: column;
+  /* Small entrance scale paired with the scrim's fade — covers the
+   * <100ms backdrop-filter promote-to-layer cost and prevents the
+   * "blur snaps in" perception even on slower GPUs. */
+  transform: scale(0.985);
+  transition: transform 220ms var(--ease);
+}
+.modal-scrim.open .modal { transform: scale(1); }
+@media (prefers-reduced-motion: reduce) {
+  .modal-scrim,
+  .modal { transition: none !important; }
 }
 .modal-head {
   padding: 14px 16px;

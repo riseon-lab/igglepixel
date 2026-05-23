@@ -1735,6 +1735,7 @@ function modelVramProfile(m) {
 
 function renderModels() {
   const grid = $('#modelGrid');
+  if (!grid) return;
   const search = $('#modelSearch').value.toLowerCase();
   const filtered = state.models.filter(m => {
     if (m.hidden) return false;
@@ -1743,10 +1744,23 @@ function renderModels() {
     return cat && q;
   });
   if (!filtered.length) {
-    grid.innerHTML = `<div class="empty" style="grid-column:1/-1">No models match.</div>`;
+    if (grid.dataset.modelSignature !== '__empty__') {
+      grid.dataset.modelSignature = '__empty__';
+      grid.innerHTML = `<div class="empty" style="grid-column:1/-1">No models match.</div>`;
+    }
     return;
   }
   const gpu = state.gpu;
+  // Signature gate: pollRunning() calls this every 3 seconds when the
+  // Models view is open. Without the gate, the entire grid rebuilt
+  // every poll and visibly flickered. Include the per-model state bits
+  // that actually change the rendered card (phase / ready / running).
+  const signature = filtered.map(m => {
+    const phase = drawerPhase(m.id);
+    return `${m.id}|${phase}|${(state.modelStates[m.id]?.ready ? 1 : 0)}|${(state.running?.[m.id] ? 1 : 0)}`;
+  }).join(',') + `|q=${search}|f=${state.filter}|gpu=${gpu?.type || ''}`;
+  if (grid.dataset.modelSignature === signature) return;
+  grid.dataset.modelSignature = signature;
   grid.innerHTML = filtered.map(m => {
     const vram = gpuVramGb(gpu);
     const vramProfile = modelVramProfile(m);
@@ -4433,52 +4447,85 @@ function renderRecents(modelId) {
   // as completed assets, but with a Cancel-only menu instead of Download/Delete.
   const queued = state.queue.filter(j => j.model_id === modelId && j.status !== 'done');
   const grid = $('#wsRecent');
+  if (!grid) return;
 
   if (!items.length && !queued.length) {
-    grid.innerHTML = `<div class="recent-empty"><span>No generations yet</span><small>Finished renders will pin here as selectable previews.</small></div>`;
+    if (grid.dataset.recentsSignature !== '__empty__') {
+      grid.dataset.recentsSignature = '__empty__';
+      grid.innerHTML = `<div class="recent-empty"><span>No generations yet</span><small>Finished renders will pin here as selectable previews.</small></div>`;
+    }
     return;
   }
 
-  const queuedHtml = queueCardsHtml(queued);
   const activeKey = assetKey(activePreviewAsset(modelId));
+  // Signature deliberately excludes activeKey — selection changes go
+  // through `updateRecentsActiveHighlight` and just toggle a class.
+  // Without this, clicking a recent thumb would have reflowed the entire
+  // strip (including in-progress `<video>` previews) just to move the
+  // .active class one tile over — that's the source of mid-generation
+  // recents-strip flicker.
+  const signature = `${modelId}|q=${queued.map(j => `${j.id}|${j.status}|${Math.round((j.progress || 0) * 100)}`).join('/')}|i=${items.map(a => assetKey(a)).join('/')}`;
+  if (grid.dataset.recentsSignature !== signature) {
+    grid.dataset.recentsSignature = signature;
+    const queuedHtml = queueCardsHtml(queued);
+    const recentHtml = items.slice().reverse().map((_, i) => {
+      const idx = items.length - 1 - i;
+      const a = items[idx];
+      const active = activeKey && assetKey(a) === activeKey ? ' active' : '';
+      return `<div class="asset${active}" data-recent-idx="${idx}" data-asset-key="${esc(assetKey(a))}">
+        ${assetMediaHtml(a, { lazy: true })}
+        <button class="asset-menu-btn" data-asset-menu="${idx}" data-asset-source="recent" title="Actions">
+          <svg><use href="#i-dots"/></svg>
+        </button>
+        <div class="asset-meta">${esc(a.name)}</div>
+      </div>`;
+    }).join('');
 
-  const recentHtml = items.slice().reverse().map((_, i) => {
-    const idx = items.length - 1 - i;
-    const a = items[idx];
-    const active = activeKey && assetKey(a) === activeKey ? ' active' : '';
-    return `<div class="asset${active}" data-recent-idx="${idx}">
-      ${assetMediaHtml(a, { lazy: true })}
-      <button class="asset-menu-btn" data-asset-menu="${idx}" data-asset-source="recent" title="Actions">
-        <svg><use href="#i-dots"/></svg>
-      </button>
-      <div class="asset-meta">${esc(a.name)}</div>
-    </div>`;
-  }).join('');
+    grid.innerHTML = queuedHtml + recentHtml;
 
-  grid.innerHTML = queuedHtml + recentHtml;
-
-  // Recent tile click → focus the hero preview; 3-dot → asset menu.
-  $$('.asset[data-recent-idx]', grid).forEach(el => el.addEventListener('click', async (e) => {
-    if (e.target.closest('[data-asset-menu]')) return;
-    if (e.target.closest('audio')) return;
-    const idx = Number(el.dataset.recentIdx);
-    const asset = await refreshAssetReference(items[idx]);
-    setActivePreview(modelId, asset);
-    await openWorkspacePreviewAsset(modelId, asset);
-  }));
-  $$('[data-asset-menu]', grid).forEach(b => b.addEventListener('click', (e) => {
-    e.stopPropagation();
-    const idx = Number(b.dataset.assetMenu);
-    showAssetMenu(items[idx], b);
-  }));
+    // Recent tile click → focus the hero preview; 3-dot → asset menu.
+    $$('.asset[data-recent-idx]', grid).forEach(el => el.addEventListener('click', async (e) => {
+      if (e.target.closest('[data-asset-menu]')) return;
+      if (e.target.closest('audio')) return;
+      const idx = Number(el.dataset.recentIdx);
+      const asset = await refreshAssetReference(items[idx]);
+      setActivePreview(modelId, asset);
+      await openWorkspacePreviewAsset(modelId, asset);
+    }));
+    $$('[data-asset-menu]', grid).forEach(b => b.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const idx = Number(b.dataset.assetMenu);
+      showAssetMenu(items[idx], b);
+    }));
+  } else {
+    updateRecentsActiveHighlight(activeKey);
+  }
   bindQueueCardMenus(grid);
+}
+
+function updateRecentsActiveHighlight(activeKey) {
+  const grid = $('#wsRecent');
+  if (!grid) return;
+  const wanted = activeKey || '';
+  grid.querySelectorAll('.asset[data-asset-key]').forEach((el) => {
+    el.classList.toggle('active', el.dataset.assetKey === wanted);
+  });
 }
 
 function assetMediaHtml(asset, opts = {}) {
   const u = esc(asset?.url || '');
   const n = esc(asset?.name || '');
+  // Inline aspect-ratio derived from server-known dimensions when we
+  // have them — this reserves the right amount of box space before the
+  // image decodes, so the grid doesn't pop/reflow as thumbs land.
+  // Falls back to a square box for asset-grid contexts (the parent
+  // grid cell is also square via CSS, so this just keeps it consistent
+  // during the brief pre-decode window).
+  const ratio = (asset?.width && asset?.height)
+    ? `style="aspect-ratio:${asset.width} / ${asset.height}"`
+    : `style="aspect-ratio:1 / 1"`;
   if (asset?.kind === 'video') {
-    return `<video src="${u}" muted playsinline preload="metadata"></video>`;
+    return `<video src="${u}" muted playsinline preload="metadata" ${ratio}></video>`;
   }
   if (asset?.kind === 'audio') {
     return `<div class="asset-audio">
@@ -4487,7 +4534,7 @@ function assetMediaHtml(asset, opts = {}) {
       <audio src="${u}" controls preload="metadata"></audio>
     </div>`;
   }
-  return `<img src="${u}" ${opts.lazy ? 'loading="lazy"' : ''} alt="${n}">`;
+  return `<img src="${u}" ${opts.lazy ? 'loading="lazy"' : ''} decoding="async" alt="${n}" ${ratio}>`;
 }
 
 function queueCardsHtml(jobs, opts = {}) {
@@ -5827,11 +5874,28 @@ async function pollRunning() {
 
 function renderRunning() {
   const list = $('#runList');
+  if (!list) return;
   const entries = Object.values(state.running || {});
+  // Signature gate: pollRunning() calls this every 3 seconds while the
+  // tab is visible. The previous code rebuilt innerHTML on every poll —
+  // which (a) flickered the cards, and (b) destroyed any open log
+  // EventSource by reattaching the listener but losing the appended
+  // lines. We only rebuild when the set of runners or their key fields
+  // actually changes; otherwise we just patch the few mutable bits in
+  // place.
+  const signature = entries
+    .map(r => `${r.model_id}|${r.name}|${r.status}|${r.pid}|${r.port}`)
+    .sort()
+    .join(',');
   if (!entries.length) {
-    list.innerHTML = `<div class="empty">Nothing running. Launch one from Models.</div>`;
+    if (list.dataset.runSignature !== '__empty__') {
+      list.dataset.runSignature = '__empty__';
+      list.innerHTML = `<div class="empty">Nothing running. Launch one from Models.</div>`;
+    }
     return;
   }
+  if (list.dataset.runSignature === signature) return;
+  list.dataset.runSignature = signature;
   list.innerHTML = entries.map(r => `
     <div class="run-card" data-id="${r.model_id}">
       <div class="run-head">
@@ -9466,6 +9530,7 @@ function refreshAssetsSoon() {
 
 function renderAssets() {
   const grid = $('#assetGrid');
+  if (!grid) return;
   const f = state.assetFilter;
   const queued = state.queue.filter(j => j.status !== 'done');
   const items = state.assets.filter(a => {
@@ -9474,35 +9539,50 @@ function renderAssets() {
     return a.source === f;
   });
   if (!items.length && !queued.length) {
-    grid.innerHTML = `<div class="empty" style="grid-column:1/-1">Nothing here yet.</div>`;
+    if (grid.dataset.assetSignature !== '__empty__') {
+      grid.dataset.assetSignature = '__empty__';
+      grid.innerHTML = `<div class="empty" style="grid-column:1/-1">Nothing here yet.</div>`;
+    }
     return;
   }
-  const queueHtml = queueCardsHtml(queued, { showModel: true });
-  const assetHtml = items.map((a, i) => {
-    const n = esc(a.name);
-    return `<div class="asset" data-asset-idx="${i}">
-      ${assetMediaHtml(a, { lazy: true })}
-      <span class="asset-kind">${esc(a.source)}</span>
-      <button class="asset-menu-btn" data-asset-menu="${i}" data-asset-source="library" title="Actions">
-        <svg><use href="#i-dots"/></svg>
-      </button>
-      <div class="asset-meta">${n}</div>
-    </div>`;
-  }).join('');
-  grid.innerHTML = queueHtml + assetHtml;
-  bindQueueCardMenus(grid);
-  // Click an asset → lightbox; click the 3-dot → menu
-  $$('.asset[data-asset-idx]', grid).forEach(el => el.addEventListener('click', async (e) => {
-    if (e.target.closest('[data-asset-menu]')) return;
-    if (e.target.closest('audio')) return;
-    const idx = Number(el.dataset.assetIdx);
-    await openAssetLightbox(items[idx], { list: items, index: idx });
-  }));
-  $$('[data-asset-menu]', grid).forEach(b => b.addEventListener('click', (e) => {
-    e.stopPropagation();
-    const idx = Number(b.dataset.assetMenu);
-    showAssetMenu(items[idx], b);
-  }));
+  // Signature gate: the assets view re-renders on every queue tick
+  // (progress changes) — but the asset cards themselves rarely move.
+  // Keep the queue cards in sync via the in-place queue updater,
+  // and only rebuild the asset HTML when the asset list shape actually
+  // changes. Stops `<img>` re-decodes on every queue progress update.
+  const assetSignature = items.map(a => `${a.path || a.url}|${a.kind}|${a.source}`).join(',') + `|f=${f}`;
+  if (grid.dataset.assetSignature !== assetSignature) {
+    grid.dataset.assetSignature = assetSignature;
+    const queueHtml = queueCardsHtml(queued, { showModel: true });
+    const assetHtml = items.map((a, i) => {
+      const n = esc(a.name);
+      return `<div class="asset" data-asset-idx="${i}">
+        ${assetMediaHtml(a, { lazy: true })}
+        <span class="asset-kind">${esc(a.source)}</span>
+        <button class="asset-menu-btn" data-asset-menu="${i}" data-asset-source="library" title="Actions">
+          <svg><use href="#i-dots"/></svg>
+        </button>
+        <div class="asset-meta">${n}</div>
+      </div>`;
+    }).join('');
+    grid.innerHTML = queueHtml + assetHtml;
+    bindQueueCardMenus(grid);
+    // Click an asset → lightbox; click the 3-dot → menu. Binding lives
+    // inside the rebuild branch — without this gate, every renderAssets
+    // call would stack a fresh listener on the same nodes, causing the
+    // lightbox to open N times on a single click.
+    $$('.asset[data-asset-idx]', grid).forEach(el => el.addEventListener('click', async (e) => {
+      if (e.target.closest('[data-asset-menu]')) return;
+      if (e.target.closest('audio')) return;
+      const idx = Number(el.dataset.assetIdx);
+      await openAssetLightbox(items[idx], { list: items, index: idx });
+    }));
+    $$('[data-asset-menu]', grid).forEach(b => b.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const idx = Number(b.dataset.assetMenu);
+      showAssetMenu(items[idx], b);
+    }));
+  }
 }
 
 async function uploadFiles(files) {
