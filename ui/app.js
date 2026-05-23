@@ -4332,18 +4332,19 @@ function generationStatusText(job) {
 }
 
 function generationHeroHtml(job) {
-  const pct = Math.max(0, Math.min(100, Math.round((job?.progress || 0) * 100)));
-  const prompt = esc((job?.params?.prompt || currentWorkspacePrompt() || 'Rendering generation').replace(/\s+/g, ' ').slice(0, 120));
   return `<div class="viewport-generating">
-    <div class="generating-aura" aria-hidden="true">
-      <span></span><span></span><span></span>
+    <div class="generating-magic">
+      <div class="magic-sphere magic-blue"></div>
+      <div class="magic-sphere magic-purple"></div>
+      <div class="magic-sphere magic-pink"></div>
+      <div class="magic-sphere magic-gold"></div>
+      <div class="magic-glass"></div>
+      <div class="magic-particles">
+        <span></span><span></span><span></span><span></span><span></span>
+        <span></span><span></span><span></span><span></span><span></span>
+        <span></span><span></span><span></span><span></span><span></span>
+      </div>
     </div>
-    <div class="generating-copy">
-      <strong>Rendering latent field</strong>
-      <span class="generating-prompt">${prompt}</span>
-    </div>
-    <div class="generating-progress" aria-hidden="true"><span style="width:${pct}%"></span></div>
-    <div class="generating-status">${esc(generationStatusText(job))}</div>
   </div>`;
 }
 
@@ -4353,14 +4354,6 @@ function updateGenerationHero(stage, job) {
     stage.innerHTML = generationHeroHtml(job);
     return;
   }
-  const pct = Math.max(0, Math.min(100, Math.round((job?.progress || 0) * 100)));
-  const prompt = (job?.params?.prompt || currentWorkspacePrompt() || 'Rendering generation').replace(/\s+/g, ' ').slice(0, 120);
-  const promptEl = root.querySelector('.generating-prompt');
-  const bar = root.querySelector('.generating-progress span');
-  const status = root.querySelector('.generating-status');
-  if (promptEl) promptEl.textContent = prompt;
-  if (bar) bar.style.width = `${pct}%`;
-  if (status) status.textContent = generationStatusText(job);
 }
 
 function renderHeroPreview(modelId, opts = {}) {
