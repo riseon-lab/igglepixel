@@ -10,7 +10,9 @@ Endpoints (bound to 127.0.0.1 only):
 
 from __future__ import annotations
 
+import atexit
 import importlib
+import signal
 import sys
 import threading
 import traceback
@@ -82,6 +84,31 @@ def main() -> None:
     module = importlib.import_module(runner_module_name)
     runner = module.Runner()
     print(f"[host] runner = {runner.model_id}", flush=True)
+
+    # Cleanup hook for runners that spawn their own GPU-holding
+    # subprocesses (e.g. Qwen captioner → vLLM). Without this, a SIGTERM
+    # from the launcher reaps the runner_host but its child server
+    # could be left orphaned, holding tens of GB of VRAM until pod
+    # restart. atexit + signal handlers both call it so we cover both
+    # graceful shutdowns and SIGTERM/SIGINT delivery.
+    def _cleanup_runner() -> None:
+        for method in ("terminate_vllm", "unload", "cleanup"):
+            fn = getattr(runner, method, None)
+            if callable(fn):
+                try:
+                    fn()
+                except Exception as e:
+                    print(f"[host] {method}() raised: {type(e).__name__}: {e}", flush=True)
+                break
+
+    def _signal_exit(signum, _frame):
+        print(f"[host] caught signal {signum}; releasing GPU resources", flush=True)
+        _cleanup_runner()
+        sys.exit(0)
+
+    atexit.register(_cleanup_runner)
+    signal.signal(signal.SIGTERM, _signal_exit)
+    signal.signal(signal.SIGINT, _signal_exit)
 
     app = FastAPI()
 

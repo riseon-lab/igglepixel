@@ -87,13 +87,19 @@ class Runner(RunnerBase):
             + " — vLLM will use this for HF Hub downloads",
             flush=True,
         )
-        # Direct logs straight to stdout so they stream into the runner's log file
+        # Direct logs straight to stdout so they stream into the runner's
+        # log file. Important: we DO NOT pass start_new_session=True here —
+        # if we did, vLLM would land in its own process group and survive
+        # the launcher's `killpg` sweep on Stop as an orphan still holding
+        # the GPU. Sharing the runner's session+group means SIGTERM from
+        # the launcher reaches vLLM too. (Defence in depth: runner_host
+        # also installs a SIGTERM hook that explicitly calls
+        # `terminate_vllm()` before exit — see backend/runner_host.py.)
         self._vllm_proc = subprocess.Popen(
             cmd,
             stdout=sys.stdout,
             stderr=sys.stderr,
             env=env,
-            start_new_session=True,
         )
 
         # Poll `/v1/models` until the API server is healthy and fully loaded.
