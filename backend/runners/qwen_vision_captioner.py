@@ -77,6 +77,16 @@ class Runner(RunnerBase):
         print(f"[runner] starting vLLM command: {' '.join(shlex.quote(x) for x in cmd)}", flush=True)
 
         env = os.environ.copy()
+        # Confirm the auth state without leaking the secret — vLLM logs an
+        # "unauthenticated requests" warning when HF_TOKEN is unset, which
+        # then rate-limits the weight download and silently stalls.
+        hf_tok = env.get("HF_TOKEN") or env.get("HUGGING_FACE_HUB_TOKEN")
+        print(
+            f"[runner] HF_TOKEN {'set' if hf_tok else 'unset'}"
+            + (f" (len={len(hf_tok)})" if hf_tok else "")
+            + " — vLLM will use this for HF Hub downloads",
+            flush=True,
+        )
         # Direct logs straight to stdout so they stream into the runner's log file
         self._vllm_proc = subprocess.Popen(
             cmd,
@@ -86,15 +96,25 @@ class Runner(RunnerBase):
             start_new_session=True,
         )
 
-        # Poll `/v1/models` until the API server is healthy and fully loaded
-        print(f"[runner] waiting for vLLM vision server to bind to port {self._vllm_port}…", flush=True)
+        # Poll `/v1/models` until the API server is healthy and fully loaded.
+        # First-launch weight download for Qwen2.5-VL-7B is ~16 GB, so even
+        # on a fast HF connection cold-start runs 4-6 min. The previous
+        # 2.5 min cap killed the runner mid-download. Overridable via
+        # IGGLEPIXEL_VISION_LOAD_TIMEOUT seconds for slow links / larger
+        # models.
+        load_timeout_s = int(os.environ.get("IGGLEPIXEL_VISION_LOAD_TIMEOUT", "900"))
+        print(
+            f"[runner] waiting up to {load_timeout_s}s for vLLM vision server to bind to port {self._vllm_port}…",
+            flush=True,
+        )
         ready = False
         start_time = time.time()
-        for i in range(150):  # Wait up to 2.5 minutes (vLLM cold-start with Qwen-VL can take ~1-2 min on fresh weights)
+        last_heartbeat = start_time
+        deadline = start_time + load_timeout_s
+        while time.time() < deadline:
             if self._vllm_proc.poll() is not None:
                 rc = self._vllm_proc.poll()
                 raise RuntimeError(f"vLLM server subprocess exited unexpectedly with code {rc}")
-            
             try:
                 res = httpx.get(f"http://127.0.0.1:{self._vllm_port}/v1/models", timeout=2.0)
                 if res.status_code == 200:
@@ -102,11 +122,18 @@ class Runner(RunnerBase):
                     break
             except Exception:
                 pass
+            now = time.time()
+            if now - last_heartbeat >= 30:
+                print(
+                    f"[runner] still waiting for vLLM ({now - start_time:.0f}s elapsed of {load_timeout_s}s budget) — vLLM is downloading/loading weights",
+                    flush=True,
+                )
+                last_heartbeat = now
             time.sleep(1.0)
 
         if not ready:
             self.terminate_vllm()
-            raise RuntimeError(f"vLLM vision server failed to respond within timeout (elapsed: {time.time() - start_time:.1f}s)")
+            raise RuntimeError(f"vLLM vision server failed to respond within {load_timeout_s}s (elapsed: {time.time() - start_time:.1f}s)")
 
         print(f"[runner] vLLM vision server is ready and serving on port {self._vllm_port}", flush=True)
 
