@@ -593,6 +593,15 @@ const api = {
   trainJob:      (id) => json(apiCall(`/api/train-jobs/${encodeURIComponent(id)}`)),
   cancelTrainJob:(id) => json(apiCall(`/api/train-jobs/${encodeURIComponent(id)}`, { method: 'DELETE' })),
   trainJobSamples:(id) => json(apiCall(`/api/train-jobs/${encodeURIComponent(id)}/samples`)),
+  trainJobStorage: () => json(apiCall('/api/train-jobs/storage')),
+  cleanupTrainJobArtifacts: (id, force = false) => {
+    const qs = force ? '?force=true' : '';
+    return json(apiCall(`/api/train-jobs/${encodeURIComponent(id)}/artifacts${qs}`, { method: 'DELETE' }));
+  },
+  cleanupTrainArtifacts: (scope = 'finished', force = false) => {
+    const qs = new URLSearchParams({ scope, force: force ? 'true' : 'false' });
+    return json(apiCall(`/api/train-jobs/artifacts?${qs}`, { method: 'DELETE' }));
+  },
   // Lifecycle
   launch:        (b) => json(apiCall('/api/launch', jsonBody(b))),
   stop:          (id) => json(apiCall(`/api/stop/${id}`, { method: 'POST' })),
@@ -6777,6 +6786,7 @@ function bindTrainerWizard() {
     setTrainerWizardStep(0);
     toast('Trainer wizard reset', 'info');
   });
+  $('#trainerCleanupBtn')?.addEventListener('click', cleanFinishedTrainerArtifacts);
   $$('#trainerStepper .px-step').forEach(btn => {
     btn.addEventListener('click', () => {
       const idx = Number(btn.dataset.step);
@@ -8735,7 +8745,9 @@ function renderTrainerJobs() {
       : `${progress.toFixed(progress % 1 ? 1 : 0)}%`;
     const action = ['queued', 'running'].includes(j.status)
       ? `<button class="btn sm danger" data-train-cancel="${esc(j.id)}">Cancel</button>`
-      : `<button class="btn sm" data-train-dismiss="${esc(j.id)}">Dismiss</button>`;
+      : `
+        ${j.artifact_cleaned ? `<span class="trainer-cleaned">Files cleaned</span>` : `<button class="btn sm" data-train-clean="${esc(j.id)}">Clean files</button>`}
+        <button class="btn sm" data-train-dismiss="${esc(j.id)}">Dismiss</button>`;
     return `<div class="trainer-job" data-train-open="${esc(j.id)}" style="cursor:pointer">
       <div class="trainer-job-head">
         <div class="trainer-job-name" title="${esc(j.output_name || j.id)}">${esc(j.output_name || j.id)}</div>
@@ -8758,8 +8770,16 @@ function renderTrainerJobs() {
   // button stops propagation in its own handler below.
   root.querySelectorAll('[data-train-open]').forEach(card => {
     card.addEventListener('click', (e) => {
-      if (e.target.closest('[data-train-cancel],[data-train-dismiss]')) return;
+      if (e.target.closest('[data-train-cancel],[data-train-dismiss],[data-train-clean]')) return;
       openTrainerRunningView(card.dataset.trainOpen);
+    });
+  });
+  root.querySelectorAll('[data-train-clean]').forEach(btn => {
+    btn.addEventListener('click', async (ev) => {
+      ev.stopPropagation();
+      const id = btn.dataset.trainClean;
+      if (!id) return;
+      await cleanTrainerJobArtifacts(id);
     });
   });
   root.querySelectorAll('[data-train-cancel],[data-train-dismiss]').forEach(btn => {
@@ -8780,6 +8800,75 @@ function renderTrainerJobs() {
       }
     });
   });
+}
+
+async function cleanTrainerJobArtifacts(id) {
+  const job = (state.trainJobs || []).find(j => j.id === id);
+  const outputOnly = job?.imported_to_library === false && ((job.lora_filenames || []).length || job.lora_filename);
+  const title = outputOnly ? 'Delete Output Checkpoints' : 'Clean Training Files';
+  const detail = outputOnly
+    ? `This run was not imported to the LoRA library. Cleaning will delete its training folder and output checkpoints for <b>${esc(job?.output_name || id)}</b>.`
+    : `Delete cached latents, curated dataset copies, samples, logs, and intermediate trainer files for <b>${esc(job?.output_name || id)}</b>? Imported LoRAs in the library are kept.`;
+  if (!await confirmModal(title, detail, outputOnly ? 'Delete files' : 'Clean files', true)) return;
+
+  if (state.preview) {
+    state.trainJobs = (state.trainJobs || []).map(j => j.id === id ? { ...j, artifact_cleaned: true, artifact_freed_bytes: 2.4 * 1024 * 1024 * 1024 } : j);
+    renderTrainerJobs();
+    toast('Training files cleaned · 2.40 GB freed', 'success');
+    return;
+  }
+
+  try {
+    const res = await api.cleanupTrainJobArtifacts(id, !!outputOnly);
+    const cleaned = res.status !== 'partial' && !res.error;
+    state.trainJobs = (state.trainJobs || []).map(j => j.id === id ? { ...j, artifact_cleaned: cleaned, artifact_freed_bytes: res.freed_bytes || 0 } : j);
+    renderTrainerJobs();
+    if (runJobId === id && trainerRunJob) {
+      trainerRunJob = { ...trainerRunJob, artifact_cleaned: cleaned, artifact_freed_bytes: res.freed_bytes || 0 };
+      renderTrainerRunning();
+    }
+    toast(
+      cleaned
+        ? `Training files cleaned · ${formatBytes(res.freed_bytes || 0)} freed`
+        : `Partial cleanup · ${formatBytes(res.freed_bytes || 0)} freed · ${res.error || 'see logs'}`,
+      cleaned ? 'success' : 'error'
+    );
+  } catch (e) {
+    toast(`Cleanup failed: ${e.message || 'unknown error'}`, 'error');
+  }
+}
+
+async function cleanFinishedTrainerArtifacts() {
+  const ok = await confirmModal(
+    'Clean Finished Training Files',
+    'Delete finished and orphaned training artifact folders under <span style="font-family:var(--font-mono)">/workspace/training</span>. Imported LoRAs stay in the library; output-only checkpoints are skipped.',
+    'Clean finished files',
+    true
+  );
+  if (!ok) return;
+  const btn = $('#trainerCleanupBtn');
+  if (btn) btn.disabled = true;
+  if (state.preview) {
+    state.trainJobs = (state.trainJobs || []).map(j => ['done', 'error', 'cancelled'].includes(j.status) ? { ...j, artifact_cleaned: true } : j);
+    renderTrainerJobs();
+    toast('Finished training files cleaned · 3.10 GB freed', 'success');
+    if (btn) btn.disabled = false;
+    return;
+  }
+  try {
+    const res = await api.cleanupTrainArtifacts('finished', false);
+    const cleaned = new Set((res.removed || []).map(item => item.job_id));
+    if (cleaned.size) {
+      state.trainJobs = (state.trainJobs || []).map(j => cleaned.has(j.id) ? { ...j, artifact_cleaned: true } : j);
+    }
+    renderTrainerJobs();
+    const skipped = (res.skipped || []).length ? ` · ${res.skipped.length} skipped` : '';
+    toast(`Finished training files cleaned · ${formatBytes(res.freed_bytes || 0)} freed${skipped}`, res.errors?.length ? 'error' : 'success');
+  } catch (e) {
+    toast(`Cleanup failed: ${e.message || 'unknown error'}`, 'error');
+  } finally {
+    if (btn) btn.disabled = false;
+  }
 }
 
 async function refreshTrainerJobs() {

@@ -4549,6 +4549,117 @@ def _trainer_output_records(output_dir: Path, output_name: str, total_steps: int
     return records
 
 
+def _train_job_is_active(job: Optional[dict]) -> bool:
+    return bool(job and job.get("status") in ("queued", "running"))
+
+
+def _resolve_train_output_dir(job_id: str, job: Optional[dict] = None) -> Path:
+    raw = Path((job or {}).get("output_dir") or (TRAINING_DIR / job_id))
+    path = raw if raw.is_absolute() else TRAINING_DIR / raw
+    path = path.resolve()
+    training_root = TRAINING_DIR.resolve()
+    try:
+        path.relative_to(training_root)
+    except ValueError:
+        raise HTTPException(400, "Training artifact path must stay inside /workspace/training")
+    if path == training_root:
+        raise HTTPException(400, "Refusing to delete the training root folder")
+    return path
+
+
+def _orphaned_train_artifact_protection_reason(output_dir: Optional[Path], force: bool = False) -> Optional[str]:
+    if force or not output_dir:
+        return None
+    manifest_path = output_dir / "manifest.json"
+    if not manifest_path.exists():
+        return None
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    if manifest.get("auto_import_lora") is not False:
+        return None
+    has_checkpoint = any(
+        p.is_file() and p.suffix.lower() == ".safetensors" and not _is_trainer_aux_safetensor(p)
+        for p in output_dir.rglob("*.safetensors")
+    )
+    if has_checkpoint:
+        return "This orphaned run was not imported to the LoRA library; cleanup would delete its output checkpoint"
+    return None
+
+
+def _train_artifact_protection_reason(
+    job: Optional[dict],
+    force: bool = False,
+    output_dir: Optional[Path] = None,
+) -> Optional[str]:
+    if not job:
+        return _orphaned_train_artifact_protection_reason(output_dir, force=force)
+    if force:
+        return None
+    if _train_job_is_active(job):
+        return "Training job is still active"
+    if job.get("imported_to_library") is False and (job.get("lora_paths") or job.get("lora_filenames")):
+        return "This job was not imported to the LoRA library; cleanup would delete its output checkpoint"
+    return None
+
+
+def _trainer_artifact_entry(path: Path, job: Optional[dict] = None, force: bool = False) -> dict:
+    reason = _train_artifact_protection_reason(job, force=force, output_dir=path)
+    size = _dir_size_bytes(path)
+    return {
+        "job_id": path.name,
+        "path": str(path),
+        "exists": path.exists(),
+        "size_bytes": size,
+        "size_mb": round(size / 1024 / 1024, 1),
+        "status": job.get("status") if job else "orphaned",
+        "output_name": job.get("output_name") if job else None,
+        "imported_to_library": job.get("imported_to_library") if job else None,
+        "active": _train_job_is_active(job),
+        "cleanup_allowed": path.exists() and not reason,
+        "protected_reason": reason,
+        "known_job": bool(job),
+    }
+
+
+def _cleanup_train_artifacts(job_id: str, force: bool = False) -> dict:
+    job = train_jobs.get(job_id)
+    output_dir = _resolve_train_output_dir(job_id, job)
+    if not output_dir.exists():
+        if job:
+            job["artifact_cleaned"] = True
+            job["artifact_freed_bytes"] = 0
+        return {
+            "status": "missing",
+            "job_id": job_id,
+            "path": str(output_dir),
+            "freed_bytes": 0,
+            "freed_mb": 0,
+            "error": None,
+        }
+
+    reason = _train_artifact_protection_reason(job, force=force, output_dir=output_dir)
+    if reason:
+        raise HTTPException(409, reason)
+
+    freed, err = _purge_dir(output_dir)
+    if job:
+        job["artifact_cleaned"] = err is None
+        job["artifact_freed_bytes"] = freed
+        tail = job.setdefault("log_tail", [])
+        tail.append(f"Training artifacts cleaned: {round(freed / 1024 / 1024, 1)} MB freed")
+        job["log_tail"] = tail[-120:]
+    return {
+        "status": "cleaned" if err is None else "partial",
+        "job_id": job_id,
+        "path": str(output_dir),
+        "freed_bytes": freed,
+        "freed_mb": round(freed / 1024 / 1024, 1),
+        "error": err,
+    }
+
+
 def _finish_train_job_with_latest_checkpoint(job: dict, req: TrainJobRequest, output_dir: Path) -> bool:
     """Stop a trainer run and promote the newest saved checkpoint.
 
@@ -5035,6 +5146,67 @@ def list_train_jobs():
     return {"jobs": [_public_train_job(j) for j in items]}
 
 
+@app.get("/api/train-jobs/storage")
+def list_train_job_storage():
+    _require_unlocked()
+    TRAINING_DIR.mkdir(parents=True, exist_ok=True)
+    entries = []
+    for path in sorted((p for p in TRAINING_DIR.iterdir() if p.is_dir()), key=lambda p: p.stat().st_mtime, reverse=True):
+        job = train_jobs.get(path.name)
+        entries.append(_trainer_artifact_entry(path, job))
+    total = sum(item["size_bytes"] for item in entries)
+    reclaimable = sum(item["size_bytes"] for item in entries if item["cleanup_allowed"])
+    return {
+        "root": str(TRAINING_DIR),
+        "total_bytes": total,
+        "total_mb": round(total / 1024 / 1024, 1),
+        "reclaimable_bytes": reclaimable,
+        "reclaimable_mb": round(reclaimable / 1024 / 1024, 1),
+        "entries": entries,
+    }
+
+
+@app.delete("/api/train-jobs/artifacts")
+def cleanup_finished_train_artifacts(
+    scope: str = Query("finished"),
+    force: bool = Query(False),
+):
+    _require_unlocked()
+    if scope not in ("finished", "orphaned", "all"):
+        raise HTTPException(400, "Scope must be finished, orphaned, or all")
+    TRAINING_DIR.mkdir(parents=True, exist_ok=True)
+    removed = []
+    skipped = []
+    errors = []
+    freed_bytes = 0
+    for path in sorted(p for p in TRAINING_DIR.iterdir() if p.is_dir()):
+        job = train_jobs.get(path.name)
+        if scope == "orphaned" and job:
+            continue
+        if scope == "finished" and job and job.get("status") not in ("done", "error", "cancelled"):
+            continue
+        if _train_job_is_active(job):
+            skipped.append({"job_id": path.name, "path": str(path), "reason": "Training job is still active"})
+            continue
+        reason = _train_artifact_protection_reason(job, force=force, output_dir=path)
+        if reason:
+            skipped.append({"job_id": path.name, "path": str(path), "reason": reason})
+            continue
+        result = _cleanup_train_artifacts(path.name, force=force)
+        removed.append(result)
+        freed_bytes += result.get("freed_bytes", 0)
+        if result.get("error"):
+            errors.append(result["error"])
+    return {
+        "status": "cleaned" if not errors else "partial",
+        "removed": removed,
+        "skipped": skipped,
+        "freed_bytes": freed_bytes,
+        "freed_mb": round(freed_bytes / 1024 / 1024, 1),
+        "errors": errors,
+    }
+
+
 @app.get("/api/train-jobs/{job_id}")
 def get_train_job(job_id: str):
     job = train_jobs.get(job_id)
@@ -5193,6 +5365,12 @@ def finish_train_job_latest_checkpoint(job_id: str):
 
     _finish_train_job_with_latest_checkpoint(job, req, output_dir)
     return _public_train_job(job)
+
+
+@app.delete("/api/train-jobs/{job_id}/artifacts")
+def cleanup_train_job_artifacts(job_id: str, force: bool = Query(False)):
+    _require_unlocked()
+    return _cleanup_train_artifacts(job_id, force=force)
 
 
 @app.delete("/api/train-jobs/{job_id}")

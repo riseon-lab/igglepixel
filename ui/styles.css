@@ -1418,6 +1418,7 @@ body::before {
 .trainer-actions {
   justify-content: flex-end;
   margin-top: 14px;
+  flex-wrap: wrap;
 }
 .trainer-side {
   display: flex;
@@ -1460,6 +1461,12 @@ body::before {
   margin-top: 9px;
   color: var(--ok);
   font-size: 11.5px;
+}
+.trainer-cleaned {
+  align-self: center;
+  color: var(--ok);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
 }
 .trainer-job {
   border: 1px solid var(--line-1);
