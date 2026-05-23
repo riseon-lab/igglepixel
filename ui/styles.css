@@ -7857,12 +7857,17 @@ select,
 .viewport-stage {
   position: relative !important;
   z-index: 2 !important;
+  box-sizing: border-box !important;
   width: 100% !important;
   height: 100% !important;
   min-height: inherit !important;
   display: grid !important;
   place-items: center !important;
   padding: clamp(14px, 2.4vw, 28px) !important;
+}
+
+.ws-viewport-canvas.is-ready .viewport-stage {
+  padding-bottom: clamp(86px, 11vh, 116px) !important;
 }
 
 .viewport-stage > * {
@@ -7885,11 +7890,12 @@ select,
   min-height: 320px !important;
   display: grid !important;
   place-items: center !important;
+  cursor: zoom-in !important;
 }
 
 .viewport-media {
   max-width: min(94%, 1000px) !important;
-  max-height: calc(100dvh - 250px) !important;
+  max-height: min(100%, calc(100dvh - 280px)) !important;
 }
 
 .ws-viewport-canvas .viewport-audio {
@@ -8015,20 +8021,20 @@ select,
 /* Floating Viewport HUD */
 .viewport-hud {
   position: absolute !important;
-  bottom: clamp(12px, 2vh, 20px) !important;
+  bottom: clamp(14px, 2vh, 22px) !important;
   left: 50% !important;
   transform: translateX(-50%) !important;
   display: flex !important;
   align-items: center !important;
   gap: 24px !important;
-  background: rgba(8, 8, 10, 0.82) !important;
+  background: rgba(8, 8, 10, 0.74) !important;
   backdrop-filter: blur(20px) saturate(140%) !important;
   -webkit-backdrop-filter: blur(20px) saturate(140%) !important;
   border: 1px solid rgba(255, 255, 255, 0.08) !important;
   border-radius: var(--r-md) !important;
   padding: 8px 18px !important;
   z-index: 5 !important;
-  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.6) !important;
+  box-shadow: 0 10px 34px rgba(0, 0, 0, 0.46) !important;
   pointer-events: auto !important;
   min-width: 0 !important;
   width: min(520px, calc(100% - 32px)) !important;

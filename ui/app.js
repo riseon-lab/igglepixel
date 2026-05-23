@@ -1067,7 +1067,7 @@ function bindShell() {
   $('#wsViewportLightbox')?.addEventListener('click', async () => {
     const asset = activePreviewAsset(state.workspace);
     if (!asset) return;
-    await openAssetLightbox(asset, { list: state.recents[state.workspace] || [asset], index: Math.max(0, (state.recents[state.workspace] || []).indexOf(asset)) });
+    await openWorkspacePreviewAsset(state.workspace, asset);
   });
   $('#wsViewportDownload')?.addEventListener('click', () => {
     const asset = activePreviewAsset(state.workspace);
@@ -4250,6 +4250,13 @@ function setActivePreview(modelId, asset, opts = {}) {
   renderRecents(modelId);
 }
 
+async function openWorkspacePreviewAsset(modelId, asset) {
+  if (!modelId || !asset) return;
+  const items = state.recents[modelId] || [asset];
+  const idx = Math.max(0, items.findIndex(item => sameAsset(item, asset)));
+  await openAssetLightbox(asset, { list: items.length ? items : [asset], index: idx });
+}
+
 function viewportIdleHtml() {
   return `<div class="viewport-idle">
     <div class="idle-core" aria-hidden="true">
@@ -4290,6 +4297,15 @@ function bindHeroMediaRecovery(modelId, asset) {
       renderHeroPreview(modelId, { asset });
     }
   }, { once: true });
+}
+
+function bindHeroPreviewClick(modelId, asset) {
+  const wrap = $('#wsViewportStage')?.querySelector('.viewport-asset-wrap');
+  if (!wrap || !asset) return;
+  wrap.addEventListener('click', async (e) => {
+    if (e.target.closest('audio, button, a')) return;
+    await openWorkspacePreviewAsset(modelId, asset);
+  });
 }
 
 function heroMetaText(asset) {
@@ -4362,6 +4378,7 @@ function renderHeroPreview(modelId, opts = {}) {
   if (asset) {
     stage.innerHTML = `<div class="viewport-asset-wrap">${heroAssetHtml(asset)}</div>`;
     bindHeroMediaRecovery(modelId, asset);
+    bindHeroPreviewClick(modelId, asset);
     if (meta) meta.textContent = heroMetaText(asset);
     if (hud) hud.style.removeProperty('display');
     return;
@@ -4414,6 +4431,7 @@ function renderRecents(modelId) {
     const idx = Number(el.dataset.recentIdx);
     const asset = await refreshAssetReference(items[idx]);
     setActivePreview(modelId, asset);
+    await openWorkspacePreviewAsset(modelId, asset);
   }));
   $$('[data-asset-menu]', grid).forEach(b => b.addEventListener('click', (e) => {
     e.stopPropagation();
