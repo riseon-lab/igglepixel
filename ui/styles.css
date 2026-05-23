@@ -78,7 +78,14 @@ body {
   -moz-osx-font-smoothing: grayscale;
 }
 
-/* Beautiful breathing background atmosphere with high-fidelity, high-contrast blooms */
+/* Beautiful breathing background atmosphere with high-fidelity, high-contrast blooms.
+ * Performance: this sits *behind* every backdrop-filter on the page, so when
+ * it repaints the entire app re-rasters. Three guards keep it cheap:
+ *  - blur(30px) instead of 60px: visually similar, ~4x cheaper to filter.
+ *  - will-change + translateZ promotes it to its own compositor layer so
+ *    backdrop-filter samples a static bitmap instead of re-running the
+ *    blur every frame.
+ *  - prefers-reduced-motion disables the loop entirely. */
 body::before {
   content: '';
   position: fixed;
@@ -90,8 +97,14 @@ body::before {
     radial-gradient(70vw 70vw at 90% 85%, rgba(214, 138, 163, 0.14) 0%, transparent 75%),
     radial-gradient(60vw 60vw at 75% 20%, rgba(125, 200, 169, 0.10) 0%, transparent 70%),
     radial-gradient(55vw 55vw at 25% 80%, rgba(214, 185, 125, 0.10) 0%, transparent 70%);
-  filter: blur(60px);
+  filter: blur(30px);
+  transform: translateZ(0);
+  will-change: transform;
   animation: bodyGlowBreathe 45s ease infinite alternate;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  body::before { animation: none !important; }
 }
 
 @keyframes bodyGlowBreathe {
@@ -7531,6 +7544,10 @@ select,
   min-height: 0;
   padding-right: 4px;
   margin-top: 4px;
+  /* Isolate the scroll container so the grid items' content-visibility
+   * culling actually kicks in — without `contain` the browser can't be
+   * sure that off-screen cells don't affect ancestor layout. */
+  contain: layout paint style;
 }
 
 .dataset-grid-item {
@@ -7542,6 +7559,12 @@ select,
   border: 1px solid var(--line-1) !important;
   cursor: pointer;
   transition: all 140ms var(--ease) !important;
+  /* Skip painting + layout for cells scrolled out of view; the browser
+   * keeps the geometry from contain-intrinsic-size so the scrollbar
+   * stays accurate. Massive win for datasets with 100+ images. */
+  content-visibility: auto;
+  contain-intrinsic-size: 240px 240px;
+  contain: layout paint style;
 }
 
 .dataset-grid-item:hover {
@@ -7589,7 +7612,11 @@ select,
   overflow: hidden;
   padding: 4px 7px;
   border-radius: 999px;
-  background: rgba(7, 10, 16, 0.72);
+  /* Slightly more opaque solid replaces backdrop-filter — on a 100-image
+   * dataset the per-cell blur created 200 composite layers that all
+   * had to re-rasterize on every scroll. Visually identical against
+   * the dark image cell background. */
+  background: rgba(7, 10, 16, 0.88);
   color: var(--t-1);
   border: 1px solid rgba(255, 255, 255, 0.12);
   font-size: 9.5px;
@@ -7597,8 +7624,6 @@ select,
   line-height: 1;
   text-overflow: ellipsis;
   white-space: nowrap;
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
 }
 
 .dataset-tile-badge {
@@ -7833,16 +7858,24 @@ select,
   flex: none !important;
   position: relative !important;
   border-radius: var(--r-xl) !important;
-  backdrop-filter: blur(32px) saturate(160%) !important;
-  -webkit-backdrop-filter: blur(32px) saturate(160%) !important;
+  /* 18px is visually indistinguishable from 32px for this glass effect
+   * but the GPU samples ~4x fewer pixels per frame on scroll. The body
+   * background is already pre-blurred, so stacking blur on blur past
+   * ~16px is purely throwing performance away. */
+  backdrop-filter: blur(18px) saturate(150%) !important;
+  -webkit-backdrop-filter: blur(18px) saturate(150%) !important;
   border: 1px solid rgba(255, 255, 255, 0.05) !important;
-  background: rgba(4, 4, 5, 0.4) !important;
+  background: rgba(4, 4, 5, 0.55) !important;
   box-shadow: inset 0 0 40px rgba(0,0,0,0.4), var(--accent-glow) !important;
   display: flex !important;
   flex-direction: column !important;
   align-items: stretch !important;
   justify-content: flex-start !important;
   overflow: hidden !important;
+  /* Isolate the canvas from the rest of the page so animated children
+   * (the field/particle pseudo-elements + image swaps) don't invalidate
+   * surrounding layout. */
+  contain: layout paint style !important;
   /* The stage carries the aspect-ratio derived from the asset (see
    * --asset-ratio below), so the canvas reflows to match the image's
    * orientation instead of locking it inside a fixed landscape box.
@@ -7895,6 +7928,11 @@ select,
 .ws-viewport-canvas.is-generating::after {
   opacity: 0.30 !important;
   animation-duration: 24s !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ws-viewport-canvas::before,
+  .ws-viewport-canvas::after { animation: none !important; }
 }
 
 .viewport-stage {

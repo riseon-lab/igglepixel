@@ -6244,24 +6244,47 @@ function renderDatasetGrid() {
     grid.innerHTML = `<div class="empty dataset-grid-empty"><span>${emptyText}</span></div>`;
     return;
   }
-  grid.innerHTML = rows.map((item) => {
+  // Rebuild only when the visible row set actually changes. Selecting a
+  // tile (the most common interaction) goes through the lighter
+  // `updateDatasetGridSelection` path below — full innerHTML replacement
+  // would otherwise destroy every <img>'s lazy-load state and force the
+  // browser to re-decode every visible thumbnail.
+  const signature = rows.map((item) => {
     const idx = state.datasetItems.indexOf(item);
-    const cap = (item.caption || '').trim();
-    const flags = item.flags || [];
-    const status = item.excluded ? 'Excluded' : cap ? 'Captioned' : 'Needs caption';
-    return `
-      <button class="dataset-grid-item ${idx === state.datasetSelected ? 'active' : ''} ${item.excluded ? 'excluded' : ''} ${cap ? 'captioned' : 'needs-caption'}" data-dataset-index="${idx}" type="button">
-        <img src="${esc(item.url || item.object_url || '')}" alt="${esc(item.image || 'dataset image')}" loading="lazy">
-        <span class="dataset-tile-badge">${esc(status)}</span>
-        ${flags.length ? `<span class="dataset-tile-flag">${esc(flags[0].label || 'flag')}</span>` : ''}
-      </button>`;
-  }).join('');
-  $$('[data-dataset-index]', grid).forEach(tile => {
-    tile.addEventListener('click', () => {
-      state.datasetSelected = Number(tile.dataset.datasetIndex);
-      renderDatasetGrid();
-      renderDatasetInspector();
+    return `${idx}|${(item.url || item.object_url || '')}|${item.excluded ? 1 : 0}|${(item.caption || '').trim() ? 1 : 0}|${(item.flags || [])[0]?.label || ''}`;
+  }).join(',');
+  if (grid.dataset.gridSignature !== signature) {
+    grid.dataset.gridSignature = signature;
+    grid.innerHTML = rows.map((item) => {
+      const idx = state.datasetItems.indexOf(item);
+      const cap = (item.caption || '').trim();
+      const flags = item.flags || [];
+      const status = item.excluded ? 'Excluded' : cap ? 'Captioned' : 'Needs caption';
+      return `
+        <button class="dataset-grid-item ${idx === state.datasetSelected ? 'active' : ''} ${item.excluded ? 'excluded' : ''} ${cap ? 'captioned' : 'needs-caption'}" data-dataset-index="${idx}" type="button">
+          <img src="${esc(item.url || item.object_url || '')}" alt="${esc(item.image || 'dataset image')}" loading="lazy" decoding="async">
+          <span class="dataset-tile-badge">${esc(status)}</span>
+          ${flags.length ? `<span class="dataset-tile-flag">${esc(flags[0].label || 'flag')}</span>` : ''}
+        </button>`;
+    }).join('');
+    $$('[data-dataset-index]', grid).forEach(tile => {
+      tile.addEventListener('click', () => {
+        state.datasetSelected = Number(tile.dataset.datasetIndex);
+        updateDatasetGridSelection();
+        renderDatasetInspector();
+      });
     });
+  } else {
+    updateDatasetGridSelection();
+  }
+}
+
+function updateDatasetGridSelection() {
+  const grid = $('#datasetWorkspaceGrid');
+  if (!grid) return;
+  const selected = String(state.datasetSelected);
+  $$('[data-dataset-index]', grid).forEach((tile) => {
+    tile.classList.toggle('active', tile.dataset.datasetIndex === selected);
   });
 }
 
