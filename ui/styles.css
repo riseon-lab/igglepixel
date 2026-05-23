@@ -7832,8 +7832,9 @@ select,
   background: rgba(4, 4, 5, 0.4) !important;
   box-shadow: inset 0 0 40px rgba(0,0,0,0.4), var(--accent-glow) !important;
   display: flex !important;
-  align-items: center !important;
-  justify-content: center !important;
+  flex-direction: column !important;
+  align-items: stretch !important;
+  justify-content: space-between !important;
   overflow: hidden !important;
   min-height: clamp(460px, 58dvh, 680px) !important;
   height: clamp(520px, calc(100dvh - var(--topbar-h) - 150px), 760px) !important;
@@ -7886,18 +7887,19 @@ select,
 
 .viewport-stage {
   position: relative !important;
-  z-index: 2 !important;
-  box-sizing: border-box !important;
+  flex: 1 !important;
   width: 100% !important;
   height: 100% !important;
-  min-height: inherit !important;
+  min-height: 0 !important;
+  z-index: 2 !important;
+  box-sizing: border-box !important;
   display: grid !important;
   place-items: center !important;
-  padding: clamp(14px, 2.4vw, 28px) !important;
+  padding: clamp(14px, 2vw, 24px) !important;
 }
 
 .ws-viewport-canvas.is-ready .viewport-stage {
-  padding-bottom: clamp(86px, 11vh, 116px) !important;
+  padding-bottom: clamp(14px, 2vw, 24px) !important;
 }
 
 .viewport-stage > * {
@@ -7906,8 +7908,8 @@ select,
 
 .ws-viewport-canvas img,
 .ws-viewport-canvas video {
-  max-width: 92% !important;
-  max-height: 92% !important;
+  max-width: 100% !important;
+  max-height: 100% !important;
   object-fit: contain !important;
   border-radius: var(--r-md) !important;
   box-shadow: 0 16px 48px rgba(0, 0, 0, 0.6), 0 0 1px rgba(255, 255, 255, 0.2) !important;
@@ -8048,26 +8050,28 @@ select,
   font-size: 12.5px !important;
 }
 
-/* Floating Viewport HUD */
+/* Docked Viewport HUD */
 .viewport-hud {
-  position: absolute !important;
-  bottom: clamp(14px, 2vh, 22px) !important;
-  left: 50% !important;
-  transform: translateX(-50%) !important;
-  display: flex !important;
-  align-items: center !important;
-  gap: 24px !important;
-  background: rgba(8, 8, 10, 0.74) !important;
+  position: relative !important;
+  bottom: auto !important;
+  left: auto !important;
+  transform: none !important;
+  width: 100% !important;
+  min-height: 46px !important;
+  border-radius: 0 !important;
+  border: none !important;
+  border-top: 1px solid rgba(255, 255, 255, 0.05) !important;
+  background: rgba(8, 8, 10, 0.85) !important;
   backdrop-filter: blur(20px) saturate(140%) !important;
   -webkit-backdrop-filter: blur(20px) saturate(140%) !important;
-  border: 1px solid rgba(255, 255, 255, 0.08) !important;
-  border-radius: var(--r-md) !important;
-  padding: 8px 18px !important;
+  padding: 8px 24px !important;
   z-index: 5 !important;
-  box-shadow: 0 10px 34px rgba(0, 0, 0, 0.46) !important;
+  box-shadow: 0 -4px 20px rgba(0, 0, 0, 0.25) !important;
   pointer-events: auto !important;
-  min-width: 0 !important;
-  width: min(520px, calc(100% - 32px)) !important;
+  box-sizing: border-box !important;
+  margin: 0 !important;
+  display: flex !important;
+  align-items: center !important;
   justify-content: space-between !important;
 }
 
@@ -8156,15 +8160,24 @@ select,
 }
 
 .ws-recent {
-  grid-template-columns: repeat(auto-fill, minmax(132px, 1fr)) !important;
-  gap: 12px !important;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)) !important;
+  gap: 14px !important;
   align-items: start !important;
+}
+
+@media (max-width: 768px) {
+  .ws-recent {
+    grid-template-columns: repeat(auto-fill, minmax(132px, 1fr)) !important;
+  }
 }
 
 .ws-recent .asset {
   aspect-ratio: 4 / 3 !important;
   min-height: 112px !important;
   border-radius: var(--r-md) !important;
+  background: var(--bg-0) !important;
+  overflow: hidden !important;
+  border: 1px solid var(--line-1) !important;
   transition: transform 180ms var(--ease), border-color 180ms var(--ease), box-shadow 180ms var(--ease), background 180ms var(--ease) !important;
 }
 
@@ -8176,6 +8189,10 @@ select,
 
 .ws-recent .asset img,
 .ws-recent .asset video {
+  width: 100% !important;
+  height: 100% !important;
+  object-fit: contain !important;
+  background: var(--bg-0) !important;
   transition: transform 240ms var(--ease), filter 240ms var(--ease) !important;
 }
 
