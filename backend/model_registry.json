@@ -147,8 +147,9 @@
       "id": "vision-vllm",
       "label": "Vision vLLM runtime",
       "python": "3.12",
+      "pip_extra_args": ["--torch-backend=cu128"],
       "pip": [
-        "vllm>=0.10.2",
+        "vllm>=0.10.2,<0.12",
         "qwen-vl-utils",
         "fastapi",
         "uvicorn[standard]",

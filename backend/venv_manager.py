@@ -323,11 +323,15 @@ def _create_venv(runtime_id: str, python_version: Optional[str], log: Callable[[
         raise RuntimeError(f"python -m venv and virtualenv failed for runtime '{runtime_id}'")
 
 
-def _pip_install(runtime_id: str, packages: list[str], log: Callable[[str], None]) -> None:
+def _pip_install(runtime_id: str, packages: list[str], log: Callable[[str], None], extra_args: Optional[list[str]] = None) -> None:
     """Install pip packages into the venv.
 
     `packages` is a flat list passed as-is to pip (so the registry can
     include `-e /path/to/local`, version pins, etc. transparently).
+    `extra_args` are flags injected right after the install subcommand —
+    use this for things like `--torch-backend=cu128` (uv) or
+    `--extra-index-url=...` (pip) when a runtime needs to pin against a
+    specific CUDA toolchain.
     """
     if not packages:
         return
@@ -347,18 +351,34 @@ def _pip_install(runtime_id: str, packages: list[str], log: Callable[[str], None
             return
 
     py = _venv_python(runtime_id)
+    args = list(extra_args or [])
     if _has_uv():
         # uv pip install --python <venv_py> uses the venv as the install
         # target without activating it.
-        cmd = ["uv", "pip", "install", "--python", str(py), *packages]
+        cmd = ["uv", "pip", "install", "--python", str(py), *args, *packages]
     else:
-        cmd = [str(py), "-m", "pip", "install", *packages]
+        # Fall back to plain pip — uv-specific flags like --torch-backend
+        # aren't valid pip flags, so we translate them to the pip
+        # equivalent (--extra-index-url=https://download.pytorch.org/whl/<X>)
+        # rather than crash. Other flags pass through verbatim.
+        pip_args: list[str] = []
+        for a in args:
+            if a.startswith("--torch-backend="):
+                backend = a.split("=", 1)[1]
+                pip_args.append(f"--extra-index-url=https://download.pytorch.org/whl/{backend}")
+            elif a == "--torch-backend" or a.startswith("--torch-backend "):
+                # Not handling --torch-backend with space-separated value
+                # in pip-fallback for now; uv is the supported path.
+                log(f"WARN: skipping uv-specific flag in pip fallback: {a}")
+            else:
+                pip_args.append(a)
+        cmd = [str(py), "-m", "pip", "install", *pip_args, *packages]
     rc = _run(cmd, log)
     if rc != 0:
         raise RuntimeError(f"pip install failed for runtime '{runtime_id}'")
 
 
-def _pip_install_optional(runtime_id: str, packages: list[str], log: Callable[[str], None]) -> None:
+def _pip_install_optional(runtime_id: str, packages: list[str], log: Callable[[str], None], extra_args: Optional[list[str]] = None) -> None:
     """Install optional packages only when referenced local requirement files exist."""
     if not packages:
         return
@@ -372,7 +392,7 @@ def _pip_install_optional(runtime_id: str, packages: list[str], log: Callable[[s
             i += 2
             continue
         i += 1
-    _pip_install(runtime_id, packages, log)
+    _pip_install(runtime_id, packages, log, extra_args=extra_args)
 
 
 def _verify_imports(runtime_id: str, imports: list[str], log: Callable[[str], None]) -> None:
@@ -449,16 +469,22 @@ def ensure_runtime(spec: dict, log: Callable[[str], None] = print) -> Path:
     log(f"== venv: {runtime_id} (python={spec.get('python', 'system')}) ==")
     _create_venv(runtime_id, spec.get("python"), log)
 
-    # Step 3: pip install.
+    # Step 3: pip install. `pip_extra_args` is a list of CLI flags to
+    # inject between `install` and the package list — used for things
+    # like pinning torch to the pod's CUDA toolchain (e.g.
+    # --torch-backend=cu128) without changing the package list itself.
+    pip_extra_args = list(spec.get("pip_extra_args") or [])
     pip_packages = spec.get("pip") or []
     if pip_packages:
         log(f"== pip: {len(pip_packages)} package(s) ==")
-        _pip_install(runtime_id, pip_packages, log)
+        if pip_extra_args:
+            log(f"   extra args: {' '.join(pip_extra_args)}")
+        _pip_install(runtime_id, pip_packages, log, extra_args=pip_extra_args)
 
     optional_pip_packages = spec.get("pip_optional") or []
     if optional_pip_packages:
         log(f"== optional pip: {len(optional_pip_packages)} package(s) ==")
-        _pip_install_optional(runtime_id, optional_pip_packages, log)
+        _pip_install_optional(runtime_id, optional_pip_packages, log, extra_args=pip_extra_args)
 
     verify_imports = spec.get("verify_imports") or []
     if verify_imports:
