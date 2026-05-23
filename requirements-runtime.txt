@@ -53,18 +53,10 @@
 #   images while preserving the lower-VRAM INT8 path.
 #
 # Why torch/torchvision/torchaudio pins here:
-#   The runtime deps button can install vLLM after the pod has already booted.
-#   Keep the shared backend Python on the same CUDA 12.8 PyTorch stack as the
-#   image so post-hoc vLLM installs cannot drift torch to a CUDA 12.9 wheel and
-#   break trainer venvs that were created with system-site-packages.
-#
-# Why vllm + qwen-vl-utils:
-#   Dataset Studio's pod captioner starts an OpenAI-compatible local vision
-#   server for Qwen2.5-VL. The UI already has a runtime deps button, so these
-#   live here instead of requiring terminal access on the pod. The backend
-#   installer uses `uv pip install --torch-backend=cu128` by default because
-#   the current RunPod CUDA runtime is 12.8. Pin vLLM to a CUDA-12.8 release
-#   that supports Qwen2.5-VL instead of taking newer CUDA-13 wheels.
+#   Keep the shared backend Python on a single CUDA 12.8 PyTorch stack so
+#   post-hoc installs cannot drift torch and torchaudio onto different CUDA
+#   builds. Qwen/vLLM vision is intentionally isolated in its runtime profile;
+#   do not install vLLM into the backend manager process from this file.
 
 diffusers>=0.38.0
 peft
@@ -74,9 +66,7 @@ imageio-ffmpeg
 uv
 virtualenv
 bitsandbytes>=0.46
-torch>=2.0.0
-torchvision>=0.15.0
-torchaudio>=2.0.0
+torch==2.8.0
+torchvision==0.23.0
+torchaudio==2.8.0
 torchao>=0.15
-vllm>=0.10.2
-qwen-vl-utils

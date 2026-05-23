@@ -961,14 +961,12 @@ def _runtime_deps_status_payload() -> dict:
     req_path = _runtime_deps_requirement_path()
     latest = _latest_app_runtime_job()
     torchao_available = importlib.util.find_spec("torchao") is not None
-    vllm_available = _vllm_available()
     return {
         "available": req_path.exists(),
         "requirements_path": str(req_path),
         "python_path": sys.executable,
         "torchao_available": torchao_available,
-        "vllm_available": vllm_available,
-        "deps_ready": torchao_available and vllm_available,
+        "deps_ready": torchao_available,
         "latest_job": latest,
     }
 
@@ -1036,7 +1034,6 @@ def _run_app_runtime_install_job(job_id: str) -> None:
             "--python", sys.executable,
             f"--torch-backend={torch_backend}",
             "--upgrade",
-            "--reinstall-package", "vllm",
             "-r", str(req_path),
         ]
         job["torch_backend"] = torch_backend
@@ -1046,16 +1043,13 @@ def _run_app_runtime_install_job(job_id: str) -> None:
         job["returncode"] = return_code
         if return_code == 0:
             job["torchao_available"] = importlib.util.find_spec("torchao") is not None
-            job["vllm_available"] = _vllm_available()
-            job["deps_ready"] = job["torchao_available"] and job["vllm_available"]
+            job["deps_ready"] = job["torchao_available"]
             if job["deps_ready"]:
                 job["status"] = "done"
             else:
                 missing = []
                 if not job["torchao_available"]:
                     missing.append("torchao")
-                if not job["vllm_available"]:
-                    missing.append("vllm._C")
                 job["status"] = "error"
                 job["error"] = "Install finished, but readiness checks failed: " + ", ".join(missing)
         else:
@@ -3038,9 +3032,9 @@ class TrainerVisionProxyRequest(BaseModel):
 
 
 class TrainerVisionRuntimeRequest(BaseModel):
-    provider: str = "openai"
-    endpoint: str = "http://127.0.0.1:8000/v1/chat/completions"
-    model: str = "Qwen/Qwen2.5-VL-7B-Instruct"
+    provider: str = "ollama"
+    endpoint: str = "http://127.0.0.1:11434/api/chat"
+    model: str = "llama3.2-vision:11b"
     command: Optional[str] = None
 
 
@@ -3669,11 +3663,18 @@ def _read_vision_runtime(proc: subprocess.Popen) -> None:
         _vision_runtime_append(f"vision runtime exited with code {rc}")
 
 
+def _ollama_url(endpoint: str, route: str) -> str:
+    base = (endpoint or "http://127.0.0.1:11434").strip().rstrip("/")
+    if "/api/" in base:
+        return re.sub(r"/api/[^/]+$", f"/api/{route}", base)
+    return f"{base}/api/{route}"
+
+
 def _vision_probe(provider: str, endpoint: str) -> dict:
-    provider = (provider or "openai").strip().lower()
+    provider = (provider or "ollama").strip().lower()
     try:
         if provider == "ollama":
-            tags_url = endpoint.replace("/api/chat", "/api/tags")
+            tags_url = _ollama_url(endpoint, "tags")
             res = httpx.get(tags_url, timeout=2.5)
         else:
             models_url = endpoint.replace("/chat/completions", "/models")
@@ -3685,11 +3686,35 @@ def _vision_probe(provider: str, endpoint: str) -> dict:
         return {"ready": False, "error": str(e)}
 
 
+async def _ollama_unload_model(endpoint: str, model: str) -> dict:
+    """Ask Ollama to unload a model from memory without killing the server."""
+    endpoint = (endpoint or "http://127.0.0.1:11434/api/chat").strip()
+    model = (model or "").strip()
+    if not model:
+        raise HTTPException(400, "Ollama model name is required to unload")
+
+    attempts = [
+        (_ollama_url(endpoint, "generate"), {"model": model, "prompt": "", "stream": False, "keep_alive": 0}),
+        (_ollama_url(endpoint, "chat"), {"model": model, "messages": [], "stream": False, "keep_alive": 0}),
+    ]
+    errors: list[str] = []
+    async with httpx.AsyncClient(timeout=12.0) as client:
+        for url, body in attempts:
+            try:
+                res = await client.post(url, json=body)
+                if res.status_code < 400:
+                    return {"ok": True, "url": url, "status_code": res.status_code}
+                errors.append(f"{url}: HTTP {res.status_code} {res.text[:240]}")
+            except Exception as e:
+                errors.append(f"{url}: {e}")
+    raise HTTPException(502, "Ollama unload failed: " + " | ".join(errors))
+
+
 @app.get("/api/trainers/dataset/vision-runtime/status")
 async def vision_runtime_status(
-    provider: str = Query("openai"),
-    endpoint: str = Query("http://127.0.0.1:8000/v1/chat/completions"),
-    model: str = Query("Qwen/Qwen2.5-VL-7B-Instruct"),
+    provider: str = Query("ollama"),
+    endpoint: str = Query("http://127.0.0.1:11434/api/chat"),
+    model: str = Query("llama3.2-vision:11b"),
 ):
     _require_unlocked()
     is_managed_model = (provider.strip().lower() == "openai" and model.strip().lower() in ("qwen/qwen2.5-vl-7b-instruct", "qwen2.5-vl-7b-instruct", "qwen25-vl-captioner"))
@@ -3912,8 +3937,29 @@ async def start_vision_runtime(req: TrainerVisionRuntimeRequest):
 
 
 @app.post("/api/trainers/dataset/vision-runtime/stop")
-async def stop_vision_runtime():
+async def stop_vision_runtime(
+    provider: str = Query("openai"),
+    endpoint: str = Query(""),
+    model: str = Query(""),
+):
     _require_unlocked()
+
+    if provider.strip().lower() == "ollama":
+        result = await _ollama_unload_model(endpoint, model)
+        return {
+            "managed": False,
+            "running": False,
+            "ready": False,
+            "pid": None,
+            "returncode": 0,
+            "provider": "ollama",
+            "endpoint": endpoint,
+            "model": model,
+            "command": "ollama keep_alive=0",
+            "log": [f"Unloaded {model} from Ollama memory via {result.get('url')}"],
+            "status": "unloaded",
+            "state": "stopped",
+        }
 
     info = launcher.get("qwen25-vl-captioner")
     if info:

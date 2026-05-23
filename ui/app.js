@@ -584,7 +584,10 @@ const api = {
     return json(apiCall(`/api/trainers/dataset/vision-runtime/status?${qs}`));
   },
   datasetVisionRuntimeStart:  (b) => json(apiCall('/api/trainers/dataset/vision-runtime/start', jsonBody(b))),
-  datasetVisionRuntimeStop:   ()  => json(apiCall('/api/trainers/dataset/vision-runtime/stop', { method: 'POST' })),
+  datasetVisionRuntimeStop:   (b) => {
+    const qs = new URLSearchParams(b || {});
+    return json(apiCall(`/api/trainers/dataset/vision-runtime/stop?${qs}`, { method: 'POST' }));
+  },
   trainJobs:     () => json(apiCall('/api/train-jobs')),
   startTrainJob: (b) => json(apiCall('/api/train-jobs', jsonBody(b))),
   trainJob:      (id) => json(apiCall(`/api/train-jobs/${encodeURIComponent(id)}`)),
@@ -1389,8 +1392,7 @@ function renderRuntimeDepsResult(payload = {}) {
   const done = status === 'done';
   const error = status === 'error' || status === 'missing';
   const torchaoReady = payload.torchao_available ?? job?.torchao_available;
-  const vllmReady = payload.vllm_available ?? job?.vllm_available;
-  const depsReady = payload.deps_ready ?? job?.deps_ready ?? (torchaoReady && vllmReady);
+  const depsReady = payload.deps_ready ?? job?.deps_ready ?? torchaoReady;
 
   pill.dataset.state = done || depsReady ? 'on' : error ? 'off' : running ? 'loading' : 'unknown';
   if (running) {
@@ -1412,13 +1414,9 @@ function renderRuntimeDepsResult(payload = {}) {
   } else if (done) {
     line.textContent = 'Install complete. Stop and relaunch affected models before testing.';
   } else if (depsReady) {
-    line.textContent = 'TorchAO and vLLM are importable in this Python environment.';
-  } else if (torchaoReady && !vllmReady) {
-    line.textContent = 'TorchAO is ready. vLLM is still missing for the Dataset Studio pod captioner.';
-  } else if (!torchaoReady && vllmReady) {
-    line.textContent = 'vLLM is ready. TorchAO is still missing for Qwen INT8.';
+    line.textContent = 'TorchAO is importable in this Python environment. Qwen/vLLM vision stays isolated in its runtime profile.';
   } else {
-    line.textContent = 'Ready to install TorchAO, vLLM, and other packages added by the latest app update.';
+    line.textContent = 'Ready to install TorchAO and other shared packages added by the latest app update.';
   }
 
   const chunks = [];
@@ -6335,7 +6333,7 @@ function fileToDataUrl(file) {
 
 function datasetVisionSettings() {
   return {
-    provider: $('#captionProvider')?.value || 'openai',
+    provider: $('#captionProvider')?.value || 'ollama',
     endpoint: ($('#captionEndpoint')?.value || '').trim(),
     model: ($('#captionModel')?.value || '').trim(),
     temperature: Number($('#captionTemp')?.value || 0.1),
@@ -6354,8 +6352,8 @@ const DATASET_VISION_DEFAULTS = {
 };
 
 function applyDatasetVisionProviderDefaults({ force = false } = {}) {
-  const provider = $('#captionProvider')?.value || 'openai';
-  const defaults = DATASET_VISION_DEFAULTS[provider] || DATASET_VISION_DEFAULTS.openai;
+  const provider = $('#captionProvider')?.value || 'ollama';
+  const defaults = DATASET_VISION_DEFAULTS[provider] || DATASET_VISION_DEFAULTS.ollama;
   const endpoint = $('#captionEndpoint');
   const model = $('#captionModel');
   if (endpoint && (force || !endpoint.value.trim())) endpoint.value = defaults.endpoint;
@@ -6369,26 +6367,30 @@ function renderDatasetVisionRuntime(payload = {}) {
   const start = $('#btnStartCaptionRuntime');
   const stop = $('#btnStopCaptionRuntime');
   if (!pill || !status) return;
-  const provider = $('#captionProvider')?.value || 'openai';
-  const externalOnly = provider !== 'openai';
+  const provider = $('#captionProvider')?.value || 'ollama';
+  const isOllama = provider === 'ollama';
   const stateName = payload.state || (payload.ready ? 'ready' : payload.running ? 'starting' : 'stopped');
   const loading = stateName === 'starting' || payload.status === 'starting';
   pill.dataset.state = payload.ready ? 'on' : loading ? 'loading' : stateName === 'exited' ? 'off' : 'unknown';
   pill.textContent = payload.ready
-    ? (stateName === 'external' ? 'Vision: external ready' : 'Vision: ready')
-    : loading ? 'Vision: starting'
+    ? (isOllama ? 'Ollama: ready' : (stateName === 'external' ? 'Vision: external ready' : 'Vision: ready'))
+    : loading ? (isOllama ? 'Ollama: checking' : 'Vision: starting')
       : stateName === 'exited' ? 'Vision: exited'
-        : 'Vision: stopped';
+        : isOllama ? 'Ollama: stopped' : 'Vision: stopped';
   if (payload.ready) {
-    status.textContent = `${payload.model || 'vision model'} is reachable at ${payload.endpoint || 'endpoint'}.`;
+    status.textContent = isOllama
+      ? `${payload.model || 'Ollama vision model'} is reachable. Stop unloads it from memory without closing Ollama.`
+      : `${payload.model || 'vision model'} is reachable at ${payload.endpoint || 'endpoint'}.`;
   } else if (loading) {
-    status.textContent = 'Starting the pod vision server. First load can take a few minutes.';
+    status.textContent = isOllama
+      ? 'Checking the Ollama server. First caption may still load the model.'
+      : 'Starting the pod vision server. First load can take a few minutes.';
   } else if (payload.probe?.error) {
     status.textContent = payload.probe.error;
   } else if (payload.returncode != null) {
     status.textContent = `Managed server exited with code ${payload.returncode}.`;
-  } else if (externalOnly) {
-    status.textContent = 'Ollama fallback uses an already-running local Ollama server. Start it outside the app, then click Check.';
+  } else if (isOllama) {
+    status.textContent = 'Ollama is not reachable yet. Start Ollama, then click Check Ollama.';
   } else {
     status.textContent = 'No vision server is reachable yet.';
   }
@@ -6398,11 +6400,15 @@ function renderDatasetVisionRuntime(payload = {}) {
     log.style.display = lines.length ? '' : 'none';
   }
   if (start) {
-    start.disabled = externalOnly || loading || payload.ready;
-    start.textContent = externalOnly ? 'External only' : 'Start model';
-    start.title = externalOnly ? 'Start Ollama outside IgglePixel, then click Check.' : '';
+    start.disabled = loading || (!isOllama && payload.ready);
+    start.textContent = isOllama ? 'Check Ollama' : 'Start model';
+    start.title = isOllama ? 'Checks the configured Ollama endpoint. Ollama itself should already be running.' : '';
   }
-  if (stop) stop.disabled = !payload.running;
+  if (stop) {
+    stop.disabled = isOllama ? !payload.ready : !payload.running;
+    stop.textContent = isOllama ? 'Unload' : 'Stop';
+    stop.title = isOllama ? 'Unload the Ollama model from memory using keep_alive: 0.' : '';
+  }
 }
 
 async function checkDatasetVisionRuntime({ quiet = false } = {}) {
@@ -6425,9 +6431,14 @@ async function checkDatasetVisionRuntime({ quiet = false } = {}) {
 async function startDatasetVisionRuntime() {
   const settings = datasetVisionSettings();
   if (!settings.endpoint || !settings.model) return toast('Set the vision endpoint and model first.', 'error');
-  if (settings.provider !== 'openai') {
-    renderDatasetVisionRuntime({ state: 'stopped', model: settings.model, endpoint: settings.endpoint });
-    return toast('Ollama fallback cannot be launched from the pod. Start Ollama locally, then click Check.', 'info');
+  if (settings.provider === 'ollama') {
+    const payload = await checkDatasetVisionRuntime({ quiet: true });
+    if (payload?.ready) {
+      toast('Ollama is reachable', 'success');
+    } else {
+      toast('Ollama is not reachable yet. Start Ollama, then check again.', 'info');
+    }
+    return;
   }
   const btn = $('#btnStartCaptionRuntime');
   if (btn) btn.disabled = true;
@@ -6450,12 +6461,13 @@ async function startDatasetVisionRuntime() {
 
 async function stopDatasetVisionRuntime() {
   const btn = $('#btnStopCaptionRuntime');
+  const settings = datasetVisionSettings();
   if (btn) btn.disabled = true;
   try {
-    const payload = state.preview ? { state: 'stopped', ready: false } : await api.datasetVisionRuntimeStop();
+    const payload = state.preview ? { state: 'stopped', ready: false } : await api.datasetVisionRuntimeStop(settings);
     renderDatasetVisionRuntime(payload);
-    datasetLog('Vision runtime stopped.');
-    toast('Vision model stopped', 'success');
+    datasetLog(settings.provider === 'ollama' ? 'Ollama model unloaded from memory.' : 'Vision runtime stopped.');
+    toast(settings.provider === 'ollama' ? 'Ollama model unloaded' : 'Vision model stopped', 'success');
   } catch (e) {
     toast(`Vision stop failed: ${e.message || 'unknown error'}`, 'error');
   } finally {
@@ -6482,7 +6494,9 @@ async function runDatasetPipeline() {
   const runtime = await checkDatasetVisionRuntime({ quiet: true });
   if (!runtime?.ready) {
     toggleDatasetDrawer(true);
-    return toast('Start the pod vision model before running the dataset pipeline.', 'error');
+    return toast(settings.provider === 'ollama'
+      ? 'Start Ollama before running the dataset pipeline.'
+      : 'Start the pod vision model before running the dataset pipeline.', 'error');
   }
 
   datasetPipelineCancel = false;

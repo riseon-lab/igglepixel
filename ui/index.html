@@ -1358,36 +1358,36 @@
           <!-- Left Panel: Auto-Caption Options & Log Console -->
           <div class="studio-drawer" id="datasetCaptionDrawer" style="display:none">
             <div class="drawer-header">
-              <span>Pod vision pipeline</span>
+              <span>Vision caption pipeline</span>
               <button class="icon-btn" id="btnCloseCaptionDrawer"><svg><use href="#i-x"/></svg></button>
             </div>
             <div class="drawer-scroll">
               <div class="field">
                 <label>Provider</label>
                 <select class="input select" id="captionProvider">
-                  <option value="openai" selected>OpenAI compatible pod vision</option>
-                  <option value="ollama">Ollama fallback</option>
+                  <option value="ollama" selected>Ollama local vision</option>
+                  <option value="openai">Qwen/vLLM pod vision</option>
                 </select>
               </div>
 
               <div class="field">
                 <label>Endpoint URL</label>
-                <input class="input" id="captionEndpoint" value="http://127.0.0.1:8000/v1/chat/completions">
+                <input class="input" id="captionEndpoint" value="http://127.0.0.1:11434/api/chat">
               </div>
 
               <div class="field">
                 <label>Model Name</label>
-                <input class="input" id="captionModel" value="Qwen/Qwen2.5-VL-7B-Instruct" placeholder="e.g. Qwen/Qwen2.5-VL-7B-Instruct">
+                <input class="input" id="captionModel" value="llama3.2-vision:11b" placeholder="e.g. llama3.2-vision:11b">
               </div>
 
               <div class="caption-runtime-card">
                 <div class="caption-runtime-head">
                   <span class="status-pill" id="captionRuntimePill" data-state="unknown">Vision: not checked</span>
-                  <span class="px-mute" id="captionRuntimeStatus">Start or check the pod vision server before batch captioning.</span>
+                  <span class="px-mute" id="captionRuntimeStatus">Check Ollama before batch captioning. Stop unloads the model from memory.</span>
                 </div>
                 <div class="caption-runtime-actions">
                   <button class="btn secondary" id="btnCheckCaptionRuntime" type="button">Check</button>
-                  <button class="btn" id="btnStartCaptionRuntime" type="button">Start model</button>
+                  <button class="btn" id="btnStartCaptionRuntime" type="button">Check Ollama</button>
                   <button class="btn danger" id="btnStopCaptionRuntime" type="button">Stop</button>
                 </div>
                 <pre class="caption-runtime-log" id="captionRuntimeLog" style="display:none"></pre>
