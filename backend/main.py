@@ -4707,6 +4707,68 @@ async def stop_vision_runtime(
     return {**_vision_runtime_public(), "status": "stopped", "state": "stopped"}
 
 
+@app.post("/api/trainers/dataset/vision-runtime/delete-weights")
+async def delete_vision_weights(req: TrainerVisionRuntimeRequest):
+    """Free disk by removing this captioner's model weights.
+
+    For the managed Qwen2.5-VL captioner this funnels into the same
+    `/api/models/{id}` DELETE flow every other registry-backed runner
+    uses — stops the runner, purges the HF cache for `Qwen/Qwen2.5-VL-7B-Instruct`,
+    returns bytes freed. For Ollama we hit Ollama's own `/api/delete`
+    (it knows which blobs are shared between models, so it'll only
+    free what's safe). Both flows are best-effort: a clear error
+    surfaces in the toast if the provider isn't reachable.
+    """
+    _require_unlocked()
+    provider = (req.provider or "").strip().lower()
+    is_managed_model = (
+        provider == "openai"
+        and req.model.strip().lower() in (
+            "qwen/qwen2.5-vl-7b-instruct",
+            "qwen2.5-vl-7b-instruct",
+            "qwen25-vl-captioner",
+        )
+    )
+
+    if is_managed_model:
+        # Reuse the standard runner-weights-delete flow — identical to
+        # clicking Delete Weights on any other model card. Stops the
+        # captioner first so rm doesn't trip over open handles.
+        return await delete_model_weights("qwen25-vl-captioner")
+
+    if provider == "ollama":
+        endpoint = (req.endpoint or "http://127.0.0.1:11434/api/chat").strip()
+        model = (req.model or "").strip()
+        if not model:
+            raise HTTPException(400, "Ollama model name is required to delete weights")
+        delete_url = _ollama_url(endpoint, "delete")
+        try:
+            async with httpx.AsyncClient(timeout=60.0) as c:
+                # Ollama's delete endpoint accepts both DELETE-with-body
+                # (older) and POST (newer); DELETE is the documented one.
+                r = await c.request("DELETE", delete_url, json={"name": model})
+        except httpx.RequestError as e:
+            raise HTTPException(
+                502,
+                f"Could not reach Ollama at {delete_url} to delete '{model}': {e}. "
+                "Start Ollama before deleting weights.",
+            )
+        if r.status_code >= 400:
+            raise HTTPException(
+                r.status_code,
+                f"Ollama refused to delete '{model}': HTTP {r.status_code} {r.text[:240]}",
+            )
+        _vision_runtime_append(f"deleted Ollama model: {model}")
+        return {
+            "status":   "deleted",
+            "provider": "ollama",
+            "model":    model,
+            "endpoint": endpoint,
+        }
+
+    raise HTTPException(400, f"Delete weights is not supported for provider: {req.provider}")
+
+
 def _public_train_job(job: dict) -> dict:
     out = {k: v for k, v in job.items() if not k.startswith("_")}
     out["log_tail"] = out.get("log_tail", [])[-80:]

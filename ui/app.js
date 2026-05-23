@@ -588,6 +588,7 @@ const api = {
     const qs = new URLSearchParams(b || {});
     return json(apiCall(`/api/trainers/dataset/vision-runtime/stop?${qs}`, { method: 'POST' }));
   },
+  datasetVisionRuntimeDeleteWeights: (b) => json(apiCall('/api/trainers/dataset/vision-runtime/delete-weights', jsonBody(b))),
   trainJobs:     () => json(apiCall('/api/train-jobs')),
   startTrainJob: (b) => json(apiCall('/api/train-jobs', jsonBody(b))),
   trainJob:      (id) => json(apiCall(`/api/train-jobs/${encodeURIComponent(id)}`)),
@@ -5902,6 +5903,7 @@ function bindDatasetStudio() {
   $('#btnCheckCaptionRuntime')?.addEventListener('click', () => checkDatasetVisionRuntime({ quiet: false }));
   $('#btnStartCaptionRuntime')?.addEventListener('click', startDatasetVisionRuntime);
   $('#btnStopCaptionRuntime')?.addEventListener('click', stopDatasetVisionRuntime);
+  $('#btnDeleteCaptionWeights')?.addEventListener('click', deleteDatasetVisionWeights);
   $('#captionProvider')?.addEventListener('change', () => {
     applyDatasetVisionProviderDefaults({ force: true });
     renderDatasetVisionRuntime({});
@@ -6513,6 +6515,36 @@ async function stopDatasetVisionRuntime() {
     toast(settings.provider === 'ollama' ? 'Ollama model unloaded' : 'Vision model stopped', 'success');
   } catch (e) {
     toast(`Vision stop failed: ${e.message || 'unknown error'}`, 'error');
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+async function deleteDatasetVisionWeights() {
+  const btn = $('#btnDeleteCaptionWeights');
+  const settings = datasetVisionSettings();
+  if (!settings.model) return toast('Set the vision model first.', 'error');
+  const label = settings.provider === 'ollama'
+    ? `the Ollama model "${settings.model}"`
+    : `the Qwen2.5-VL captioner weights`;
+  const ok = await confirmModal(
+    'Delete weights',
+    `This will remove ${label} from disk. The next Start will re-download them. Continue?`,
+    'Delete weights',
+  );
+  if (!ok) return;
+  if (btn) btn.disabled = true;
+  try {
+    const res = state.preview
+      ? { status: 'deleted', freed_mb: 0 }
+      : await api.datasetVisionRuntimeDeleteWeights(settings);
+    const sizeBit = (res.freed_mb != null) ? ` (~${res.freed_mb} MB freed)` : '';
+    datasetLog(`Deleted ${settings.model} weights${sizeBit}.`);
+    toast(`Weights deleted${sizeBit}`, 'success');
+    // Refresh runtime panel so the pill drops back to "stopped".
+    checkDatasetVisionRuntime({ quiet: true });
+  } catch (e) {
+    toast(`Delete failed: ${e.message || 'unknown error'}`, 'error');
   } finally {
     if (btn) btn.disabled = false;
   }
