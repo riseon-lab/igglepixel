@@ -6371,6 +6371,10 @@ function datasetVisionSettings() {
     endpoint: ($('#captionEndpoint')?.value || '').trim(),
     model: ($('#captionModel')?.value || '').trim(),
     temperature: Number($('#captionTemp')?.value || 0.1),
+    // Forward the HF token the operator pasted in Settings so the
+    // managed Qwen2.5-VL captioner can authenticate against HF Hub
+    // when vLLM pulls weights on first launch.
+    hf_token: state.settings?.hf_token || null,
   };
 }
 

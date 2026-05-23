@@ -2581,7 +2581,7 @@ def _run_runtime_install_job(job_id: str, spec: dict) -> None:
         job["finished_at"] = time.time()
 
 
-def _ensure_managed_captioner_install_job(model_entry: dict) -> tuple[str, dict]:
+def _ensure_managed_captioner_install_job(model_entry: dict, hf_token: Optional[str] = None) -> tuple[str, dict]:
     """Idempotently start a runtime-install job for the managed Qwen
     captioner, with a follow-up that auto-launches the runner once the
     venv is ready. Without this, Dataset Studio's Start button would
@@ -2600,6 +2600,10 @@ def _ensure_managed_captioner_install_job(model_entry: dict) -> tuple[str, dict]
             and existing.get("runtime") == runtime_id
             and existing.get("status") in ("queued", "running")
         ):
+            # Refresh the token on an existing job so a later Start
+            # carrying a token isn't silently ignored.
+            if hf_token:
+                existing["hf_token"] = hf_token
             return existing["id"], existing
     job_id = secrets.token_urlsafe(12)
     job = {
@@ -2608,6 +2612,7 @@ def _ensure_managed_captioner_install_job(model_entry: dict) -> tuple[str, dict]
         "runtime":    runtime_id,
         "status":     "queued",
         "created_at": time.time(),
+        "hf_token":   hf_token,
     }
     runtime_install_jobs[job_id] = job
     threading.Thread(
@@ -2634,7 +2639,11 @@ def _install_then_launch_managed_captioner(job_id: str, spec: dict, model_id: st
             job["auto_launch_error"] = f"model '{model_id}' missing from registry"
             return
         entry = _with_resolved_runtime(registry, entry)
-        hf_token = os.environ.get("HF_TOKEN")
+        # Prefer the token the operator pasted into the UI Settings
+        # (forwarded on the Start request); fall back to whatever the
+        # backend was booted with. Without a token, HF Hub downloads
+        # run unauthenticated (rate-limited + can't see gated repos).
+        hf_token = job.get("hf_token") or os.environ.get("HF_TOKEN")
         loop = asyncio.new_event_loop()
         try:
             res = loop.run_until_complete(launcher.launch(entry, loras=[], hf_token=hf_token))
@@ -3199,6 +3208,11 @@ class TrainerVisionRuntimeRequest(BaseModel):
     endpoint: str = "http://127.0.0.1:11434/api/chat"
     model: str = "llama3.2-vision:11b"
     command: Optional[str] = None
+    # Optional HF token for the managed Qwen2.5-VL captioner. The UI keeps
+    # the token in browser state and forwards it on each call rather than
+    # storing it server-side, so any path that triggers a runner subprocess
+    # needs to accept it on the request.
+    hf_token: Optional[str] = None
 
 
 vision_runtime_lock = threading.Lock()
@@ -4315,13 +4329,13 @@ async def start_vision_runtime(req: TrainerVisionRuntimeRequest):
                 "state": state,
             }
 
-        hf_token = os.environ.get("HF_TOKEN")
+        hf_token = (req.hf_token or "").strip() or os.environ.get("HF_TOKEN")
         res = await launcher.launch(model_entry, loras=[], hf_token=hf_token)
         if res.get("status") == "needs_runtime":
             # Auto-prepare the runtime profile and chain-launch the runner
             # when it finishes. Without this the operator would have to
             # discover the runtime-install endpoint and click Start twice.
-            install_job_id, install_job = _ensure_managed_captioner_install_job(model_entry)
+            install_job_id, install_job = _ensure_managed_captioner_install_job(model_entry, hf_token=hf_token)
             install_log = list(install_job.get("log") or [])
             log_lines = [
                 f"Preparing runtime profile '{install_job['runtime']}' (one-time, ~5 min).",
