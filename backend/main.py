@@ -1480,7 +1480,7 @@ HF_WEIGHT_EXTENSIONS = {".safetensors", ".ckpt", ".bin", ".gguf", ".pth", ".pt"}
 
 # Allowed target dirs for downloaded files. Restricting prevents path-
 # traversal trickery via `../` in `target_dir` payloads.
-HF_TARGET_DIRS = {"loras", "models", "checkpoints", "components"}
+HF_TARGET_DIRS = {"datasets", "loras", "models", "checkpoints", "components"}
 
 # In-memory job table. Keyed by job_id. We cap at the most recent 200 jobs
 # so a long-running session doesn't grow unbounded.
@@ -3363,6 +3363,32 @@ def create_trainer_dataset(req: TrainerDatasetCreateRequest):
         "dataset_path": rel,
         "path": str(target_dir)
     }
+
+
+@app.delete("/api/trainers/dataset")
+def delete_trainer_dataset(dataset_path: str = Query(...)):
+    """Delete a dataset folder from WORKSPACE/datasets."""
+    _require_unlocked()
+    dataset_dir = _resolve_training_path(dataset_path)
+    datasets_root = DATASETS_DIR.resolve()
+    try:
+        dataset_dir.relative_to(datasets_root)
+    except ValueError:
+        raise HTTPException(400, "Dataset delete target must be inside /workspace/datasets")
+
+    if dataset_dir in {datasets_root, (datasets_root / "uploads").resolve()}:
+        raise HTTPException(400, "Refusing to delete the datasets root folder")
+    if not dataset_dir.exists():
+        raise HTTPException(404, "Dataset not found")
+    if not dataset_dir.is_dir():
+        raise HTTPException(400, "Dataset delete target must be a folder")
+
+    shutil.rmtree(dataset_dir)
+    try:
+        rel = dataset_dir.relative_to(WORKSPACE.resolve()).as_posix()
+    except ValueError:
+        rel = str(dataset_dir)
+    return {"status": "deleted", "dataset_path": rel}
 
 
 @app.post("/api/trainers/dataset/vision-proxy")

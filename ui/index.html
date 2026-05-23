@@ -1345,6 +1345,9 @@
             <button class="btn secondary" id="btnToggleCaptionDrawer">
               <svg><use href="#i-llm"/></svg>Auto review + caption
             </button>
+            <button class="btn danger" id="btnDeleteDataset">
+              Delete Dataset
+            </button>
             <button class="btn" id="btnSendToTrainer" style="background:var(--accent-solid); color:#fff">
               <svg><use href="#i-bolt"/></svg>Send to Trainer
             </button>
@@ -1619,10 +1622,8 @@ Do not use the subject's name, trigger tags, gender nouns, guessed age, ethnicit
               <div class="field">
                 <label class="field-label">Save under</label>
                 <select class="select" id="hfTargetDir">
-                  <option value="loras">loras</option>
-                  <option value="models" selected>models</option>
-                  <option value="checkpoints">checkpoints</option>
-                  <option value="components">components</option>
+                  <option value="datasets">datasets</option>
+                  <option value="loras" selected>loras</option>
                 </select>
               </div>
               <button class="btn block" id="hfDownloadBtn"><svg><use href="#i-down"/></svg>Queue download</button>
@@ -1654,10 +1655,8 @@ Do not use the subject's name, trigger tags, gender nouns, guessed age, ethnicit
         <div class="hf-browser-foot">
           <div class="hf-browser-summary" id="hfBrowserSummary">No files selected</div>
           <select class="select" id="hfBrowserDest">
-            <option value="loras">→ loras</option>
-            <option value="models" selected>→ models</option>
-            <option value="checkpoints">→ checkpoints</option>
-            <option value="components">→ components</option>
+            <option value="datasets">→ datasets</option>
+            <option value="loras" selected>→ loras</option>
           </select>
           <button class="btn primary" id="hfBrowserDownload" disabled>Download 0 selected</button>
         </div>

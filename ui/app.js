@@ -364,6 +364,8 @@ const loraId = (l) => l?.rel_path || l?.filename || '';
 const modelSupportsLora = (m) => {
   if (!m) return false;
   if (m.supports_lora === true) return true;
+  const category = String(m.category || '').toLowerCase();
+  if (['image', 'video'].includes(category)) return true;
   if (m.supports_lora === false) return false;
   const id = String(m.id || '').toLowerCase();
   const runner = String(m.runner_module || '').toLowerCase();
@@ -547,6 +549,10 @@ const api = {
   trainers:      () => json(apiCall('/api/trainers')),
   trainerDatasets: () => json(apiCall('/api/trainers/datasets')),
   createTrainerDataset: (b) => json(apiCall('/api/trainers/dataset/create', jsonBody(b))),
+  deleteTrainerDataset: (datasetPath) => {
+    const qs = new URLSearchParams({ dataset_path: datasetPath || '' });
+    return json(apiCall(`/api/trainers/dataset?${qs}`, { method: 'DELETE' }));
+  },
   downloadTrainerDataset: (b) => json(apiCall('/api/trainers/datasets/download', jsonBody(b))),
   uploadTrainerDataset:   (files, targetName) => {
     const fd = new FormData();
@@ -2105,12 +2111,12 @@ function renderDrawerBody() {
 
   // State block — short status with subtitle. Icon + colour shift per phase.
   const stateBlocks = {
-    not_downloaded: { cls:'',       icon:'i-down',    title:'Not downloaded',    sub:'Pull model weights from HuggingFace.' },
-    downloading:    { cls:'busy',   icon:'i-spinner', title:'Downloading weights', sub:'Large repos can take a while.' },
-    downloaded:     { cls:'ready',  icon:'i-check',   title:'Weights cached',    sub:'Ready to start the runner.' },
-    starting:       { cls:'busy',   icon:'i-spinner', title:startingTitle,       sub:startingSub },
-    ready:          { cls:'ready',  icon:'i-check',   title:'Runner ready',      sub:'Open the workspace to generate.' },
-    error:          { cls:'error',  icon:'i-x',       title:'Something went wrong', sub: modelStateOf(m.id).error || '' },
+    not_downloaded: { cls:'',       icon:'i-down',    brand:false, title:'Not downloaded',    sub:'Pull model weights from HuggingFace.' },
+    downloading:    { cls:'busy',   icon:'i-spinner', brand:true,  title:'Downloading weights', sub:'Large repos can take a while.' },
+    downloaded:     { cls:'ready',  icon:'i-check',   brand:false, title:'Weights cached',    sub:'Ready to start the runner.' },
+    starting:       { cls:'busy',   icon:'i-spinner', brand:true,  title:startingTitle,       sub:startingSub },
+    ready:          { cls:'ready',  icon:'i-check',   brand:false, title:'Runner ready',      sub:'Open the workspace to generate.' },
+    error:          { cls:'error',  icon:'i-x',       brand:false, title:'Something went wrong', sub: modelStateOf(m.id).error || '' },
   }[phase];
 
   $('#drawerBody').innerHTML = `
@@ -2155,7 +2161,9 @@ function renderDrawerBody() {
     ` : ''}
 
     <div class="drawer-state ${stateBlocks.cls}">
-      <div class="state-icon"><svg><use href="#${stateBlocks.icon}"/></svg></div>
+      <div class="state-icon ${stateBlocks.brand ? 'brand-loading' : ''}">
+        ${stateBlocks.brand ? '<span class="brand-loader" aria-hidden="true"></span>' : `<svg><use href="#${stateBlocks.icon}"/></svg>`}
+      </div>
       <div class="state-text">
         <div class="state-title">${stateBlocks.title}</div>
         <div class="state-sub">${stateBlocks.sub}</div>
@@ -3877,11 +3885,17 @@ function componentRequirementStatus(modelId, entry) {
 }
 
 function renderWorkspaceLoras(m) {
-  if (!modelSupportsLora(m)) {
-    $('#wsLoraPane').style.display = 'none';
+  const pane = $('#wsLoraPane');
+  const supported = modelSupportsLora(m);
+  if (!pane) return;
+  if (pane) pane.dataset.model = m?.id || '';
+  if (pane) pane.dataset.supported = supported ? 'true' : 'false';
+  if (!supported) {
+    pane.style.display = 'none';
     return;
   }
-  $('#wsLoraPane').style.display = '';
+  pane.hidden = false;
+  pane.style.removeProperty('display');
 
   // Filter bundled LoRAs by applies_to vs the currently resolved variant.
   // Wan I2V Lightning only applies to the 14B variant, so it's hidden when
@@ -5672,6 +5686,9 @@ function bindDatasetStudio() {
     datasetLog('Stop requested. Finishing the current image...', 'warn');
   });
   $('#btnSendToTrainer')?.addEventListener('click', sendDatasetToTrainer);
+  $('#btnDeleteDataset')?.addEventListener('click', () => {
+    if (state.activeDataset?.dataset_path) deleteDatasetByPath(state.activeDataset.dataset_path);
+  });
   $('#btnSaveCaption')?.addEventListener('click', saveDatasetInspectorCaption);
   $('#btnToggleExclude')?.addEventListener('click', toggleDatasetInspectorExclude);
   $('#inspectorCaptionText')?.addEventListener('input', (e) => {
@@ -5769,7 +5786,10 @@ function renderDatasetLibrary() {
             <strong>${esc(ds.name || datasetNameFromPath(ds.dataset_path))}</strong>
             <span>${esc(ds.dataset_path || '')}</span>
           </div>
-          <em>${count} img</em>
+          <div class="dataset-card-actions">
+            <em>${count} img</em>
+            <button class="dataset-delete-btn" data-dataset-delete="${esc(ds.dataset_path)}" type="button" title="Delete dataset" aria-label="Delete ${esc(ds.name || datasetNameFromPath(ds.dataset_path))}">Delete</button>
+          </div>
         </div>
         <div class="dataset-card-progress"><span style="width:${Math.min(100, pct)}%"></span></div>
         <div class="dataset-card-foot">
@@ -5780,6 +5800,13 @@ function renderDatasetLibrary() {
   }).join('');
   $$('[data-dataset-open]', grid).forEach(card => {
     card.addEventListener('click', () => openDatasetByPath(card.dataset.datasetOpen));
+  });
+  $$('[data-dataset-delete]', grid).forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      deleteDatasetByPath(btn.dataset.datasetDelete);
+    });
   });
 }
 
@@ -5860,6 +5887,32 @@ async function openDatasetByPath(datasetPath) {
   resetDatasetConsole();
   await loadActiveDatasetItems();
   toggleDatasetDrawer(!state.datasetItems.length);
+}
+
+async function deleteDatasetByPath(datasetPath) {
+  if (!datasetPath) return;
+  const name = datasetNameFromPath(datasetPath);
+  const ok = await confirmModal(
+    'Delete Dataset',
+    `Delete <b>${esc(name)}</b>? This removes the dataset folder, images, captions, and curation metadata from <span style="font-family:var(--font-mono)">${esc(datasetPath)}</span>.`,
+    'Delete dataset',
+    true
+  );
+  if (!ok) return;
+  try {
+    if (state.preview) {
+      delete state.previewDatasetStore[datasetPath];
+      state.datasets = (state.datasets || []).filter(ds => ds.dataset_path !== datasetPath);
+    } else {
+      await api.deleteTrainerDataset(datasetPath);
+      state.datasets = (state.datasets || []).filter(ds => ds.dataset_path !== datasetPath);
+    }
+    if (state.activeDataset?.dataset_path === datasetPath) showDatasetList();
+    else renderDatasetLibrary();
+    toast(`Deleted ${name}`, 'success');
+  } catch (e) {
+    toast(`Delete failed: ${e.message || 'unknown error'}`, 'error');
+  }
 }
 
 async function loadActiveDatasetItems() {
@@ -9287,6 +9340,7 @@ async function refreshCompletedDownloadTargets(jobs) {
     await loadLoras();
   }
   if (targets.has('components')) await loadComponents();
+  if (targets.has('datasets') && state.view === 'datasets') await loadDatasetLibrary();
   if (targets.has('models') || targets.has('checkpoints')) {
     await Promise.all((state.models || []).map(m => refreshWeightState(m)));
     renderModels();
