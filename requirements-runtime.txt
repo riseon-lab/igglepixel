@@ -57,8 +57,8 @@
 #   server for Qwen2.5-VL. The UI already has a runtime deps button, so these
 #   live here instead of requiring terminal access on the pod. The backend
 #   installer uses `uv pip install --torch-backend=cu128` by default because
-#   the current RunPod CUDA runtime is 12.8; override with
-#   IGGLEPIXEL_RUNTIME_TORCH_BACKEND only if the pod image changes.
+#   the current RunPod CUDA runtime is 12.8. Pin vLLM to a CUDA-12.8 release
+#   that supports Qwen2.5-VL instead of taking newer CUDA-13 wheels.
 
 diffusers>=0.38.0
 peft
@@ -69,5 +69,5 @@ uv
 virtualenv
 bitsandbytes>=0.46
 torchao>=0.15
-vllm
+vllm==0.10.2
 qwen-vl-utils

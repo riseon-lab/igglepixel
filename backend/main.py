@@ -1045,10 +1045,19 @@ def _run_app_runtime_install_job(job_id: str) -> None:
         return_code = _run_and_log(cmd)
         job["returncode"] = return_code
         if return_code == 0:
-            job["status"] = "done"
             job["torchao_available"] = importlib.util.find_spec("torchao") is not None
             job["vllm_available"] = _vllm_available()
             job["deps_ready"] = job["torchao_available"] and job["vllm_available"]
+            if job["deps_ready"]:
+                job["status"] = "done"
+            else:
+                missing = []
+                if not job["torchao_available"]:
+                    missing.append("torchao")
+                if not job["vllm_available"]:
+                    missing.append("vllm._C")
+                job["status"] = "error"
+                job["error"] = "Install finished, but readiness checks failed: " + ", ".join(missing)
         else:
             job["status"] = "error"
             job["error"] = f"pip install exited with code {return_code}"

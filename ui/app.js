@@ -5876,6 +5876,12 @@ function bindDatasetStudio() {
   $('#btnCheckCaptionRuntime')?.addEventListener('click', () => checkDatasetVisionRuntime({ quiet: false }));
   $('#btnStartCaptionRuntime')?.addEventListener('click', startDatasetVisionRuntime);
   $('#btnStopCaptionRuntime')?.addEventListener('click', stopDatasetVisionRuntime);
+  $('#captionProvider')?.addEventListener('change', () => {
+    applyDatasetVisionProviderDefaults({ force: true });
+    renderDatasetVisionRuntime({});
+  });
+  applyDatasetVisionProviderDefaults();
+  renderDatasetVisionRuntime({});
   $('#btnRunCaptioning')?.addEventListener('click', runDatasetPipeline);
   $('#btnCancelCaptioning')?.addEventListener('click', () => {
     datasetPipelineCancel = true;
@@ -6342,6 +6348,26 @@ function datasetVisionSettings() {
   };
 }
 
+const DATASET_VISION_DEFAULTS = {
+  openai: {
+    endpoint: 'http://127.0.0.1:8000/v1/chat/completions',
+    model: 'Qwen/Qwen2.5-VL-7B-Instruct',
+  },
+  ollama: {
+    endpoint: 'http://127.0.0.1:11434/api/chat',
+    model: 'llama3.2-vision:11b',
+  },
+};
+
+function applyDatasetVisionProviderDefaults({ force = false } = {}) {
+  const provider = $('#captionProvider')?.value || 'openai';
+  const defaults = DATASET_VISION_DEFAULTS[provider] || DATASET_VISION_DEFAULTS.openai;
+  const endpoint = $('#captionEndpoint');
+  const model = $('#captionModel');
+  if (endpoint && (force || !endpoint.value.trim())) endpoint.value = defaults.endpoint;
+  if (model && (force || !model.value.trim())) model.value = defaults.model;
+}
+
 function renderDatasetVisionRuntime(payload = {}) {
   const pill = $('#captionRuntimePill');
   const status = $('#captionRuntimeStatus');
@@ -6349,6 +6375,8 @@ function renderDatasetVisionRuntime(payload = {}) {
   const start = $('#btnStartCaptionRuntime');
   const stop = $('#btnStopCaptionRuntime');
   if (!pill || !status) return;
+  const provider = $('#captionProvider')?.value || 'openai';
+  const externalOnly = provider !== 'openai';
   const stateName = payload.state || (payload.ready ? 'ready' : payload.running ? 'starting' : 'stopped');
   const loading = stateName === 'starting' || payload.status === 'starting';
   pill.dataset.state = payload.ready ? 'on' : loading ? 'loading' : stateName === 'exited' ? 'off' : 'unknown';
@@ -6365,6 +6393,8 @@ function renderDatasetVisionRuntime(payload = {}) {
     status.textContent = payload.probe.error;
   } else if (payload.returncode != null) {
     status.textContent = `Managed server exited with code ${payload.returncode}.`;
+  } else if (externalOnly) {
+    status.textContent = 'Ollama fallback uses an already-running local Ollama server. Start it outside the app, then click Check.';
   } else {
     status.textContent = 'No vision server is reachable yet.';
   }
@@ -6373,7 +6403,11 @@ function renderDatasetVisionRuntime(payload = {}) {
     log.textContent = lines.join('\n');
     log.style.display = lines.length ? '' : 'none';
   }
-  if (start) start.disabled = loading || payload.ready;
+  if (start) {
+    start.disabled = externalOnly || loading || payload.ready;
+    start.textContent = externalOnly ? 'External only' : 'Start model';
+    start.title = externalOnly ? 'Start Ollama outside IgglePixel, then click Check.' : '';
+  }
   if (stop) stop.disabled = !payload.running;
 }
 
@@ -6397,6 +6431,10 @@ async function checkDatasetVisionRuntime({ quiet = false } = {}) {
 async function startDatasetVisionRuntime() {
   const settings = datasetVisionSettings();
   if (!settings.endpoint || !settings.model) return toast('Set the vision endpoint and model first.', 'error');
+  if (settings.provider !== 'openai') {
+    renderDatasetVisionRuntime({ state: 'stopped', model: settings.model, endpoint: settings.endpoint });
+    return toast('Ollama fallback cannot be launched from the pod. Start Ollama locally, then click Check.', 'info');
+  }
   const btn = $('#btnStartCaptionRuntime');
   if (btn) btn.disabled = true;
   renderDatasetVisionRuntime({ state: 'starting', model: settings.model, endpoint: settings.endpoint });
