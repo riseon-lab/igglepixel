@@ -4829,17 +4829,22 @@ def get_train_job_samples(job_id: str):
     # Walk output_dir for any folder named `samples` (AI Toolkit nests one
     # level deeper under ai-toolkit-output/<name>). Collect image files,
     # parse the step out of the filename, and bucket per step.
-    sample_files = list(out_dir.rglob("samples/*.jpg")) + list(out_dir.rglob("samples/*.png"))
+    sample_exts = (".jpg", ".jpeg", ".png", ".webp")
+    sample_files: list[Path] = []
+    for ext in sample_exts:
+        sample_files.extend(out_dir.rglob(f"samples/*{ext}"))
     total_steps = int(job.get("total_steps") or job.get("steps") or 0)
     max_plausible_step = max(total_steps + 1000, total_steps * 2, 1000)
 
     def sample_step_from_path(path: Path) -> Optional[int]:
         rel = path.relative_to(out_dir).as_posix().lower()
+        # 1. Filename starts with a bare step number (older AI Toolkit).
         name_match = re.match(r"^0*(\d{1,8})[_-]", path.name.lower())
         if name_match:
             step = int(name_match.group(1))
             if 0 < step <= max_plausible_step:
                 return step
+        # 2. Explicit step / global_step / checkpoint markers in the path.
         patterns = [
             r"(?:^|[/_-])step[_-]?0*(\d{1,8})(?:\D|$)",
             r"(?:^|[/_-])global[_-]?step[_-]?0*(\d{1,8})(?:\D|$)",
@@ -4852,21 +4857,50 @@ def get_train_job_samples(job_id: str):
             step = int(match.group(1))
             if 0 < step <= max_plausible_step:
                 return step
+        # 3. Current AI Toolkit shape: `<run_name>_<step:09d>__<prompt>__<seed>.<ext>`.
+        # The step is zero-padded (typically 9 digits) — far longer than the
+        # prompt index (1-2 digits) and usually shorter than a 32-bit seed
+        # (10 digits), so we try digit groups in (longest, largest)-first
+        # order and accept the first one that's a plausible step value.
+        for s in sorted(re.findall(r"\d+", path.stem), key=lambda x: (-len(x), -int(x))):
+            step = int(s)
+            if 0 < step <= max_plausible_step:
+                return step
         return None
+
+    def sample_prompt_slug(path: Path, step: int) -> str:
+        stem = path.stem
+        # Old shape: `<step>__<prompt>__<seed>`.
+        m = re.match(r"^\d+__(.+?)__\d+$", stem)
+        if not m:
+            m = re.match(r"^\d+[_-]+(.+?)[_-]+\d+$", stem)
+        if not m:
+            m = re.match(r"^\d+[_-]+(.+)$", stem)
+        if m:
+            return m.group(1)
+        # New shape: `<run_name>_<step>__<prompt>__<seed>` — split around the
+        # zero-padded step we already identified, then take the chunk before
+        # the trailing seed.
+        for token in sorted(re.findall(r"\d+", stem), key=lambda x: -len(x)):
+            if int(token) != step:
+                continue
+            tail = stem.split(token, 1)[1].lstrip("_-")
+            if not tail:
+                continue
+            tail = re.sub(r"[_-]+\d+$", "", tail)
+            return tail or stem
+        return stem
 
     by_step: dict[int, list[dict]] = {}
     prompt_order: list[str] = []
     seen_prompts: set[str] = set()
+    unmatched: list[str] = []
     for p in sample_files:
         step = sample_step_from_path(p)
         if step is None:
+            unmatched.append(p.name)
             continue
-        m = re.match(r"^\d+__(.+?)__\d+\.(?:jpg|png)$", p.name)
-        if not m:
-            m = re.match(r"^\d+[_-]+(.+?)[_-]+\d+\.(?:jpg|png)$", p.name)
-        if not m:
-            m = re.match(r"^\d+[_-]+(.+?)\.(?:jpg|png)$", p.name)
-        prompt_slug = m.group(1) if m else p.stem
+        prompt_slug = sample_prompt_slug(p, step)
         try:
             ws_rel = p.relative_to(WORKSPACE.resolve()).as_posix()
         except ValueError:
@@ -4886,6 +4920,11 @@ def get_train_job_samples(job_id: str):
             {"step": s, "samples": by_step[s]} for s in checkpoints
         ],
         "prompts": prompt_order,
+        # Diagnostic: files we found under samples/ but couldn't parse a step
+        # number out of. If the grid is empty and this list isn't, the
+        # filename format has shifted again and needs another regex branch.
+        "unmatched_files": unmatched[:20],
+        "scanned_count": len(sample_files),
     }
 
 
