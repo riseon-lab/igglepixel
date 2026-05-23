@@ -7667,8 +7667,8 @@ select,
   display: grid !important;
   grid-template-columns: 380px 1fr !important;
   gap: 16px !important;
-  align-items: stretch !important;
-  height: calc(100dvh - var(--topbar-h) - 96px) !important;
+  align-items: start !important;
+  height: auto !important;
   min-height: 0 !important;
 }
 
@@ -7683,12 +7683,11 @@ select,
   display: flex !important;
   flex-direction: column !important;
   gap: 14px !important;
-  height: 100% !important;
+  height: auto !important;
   min-height: 0 !important;
-  overflow-y: auto !important;
+  overflow: visible !important;
   padding: 0 8px 28px 0 !important;
   scroll-padding-bottom: 28px !important;
-  overscroll-behavior: contain !important;
 }
 
 .ws-control-deck::-webkit-scrollbar {
@@ -7710,11 +7709,11 @@ select,
   flex-direction: column !important;
   gap: 14px !important;
   min-width: 0 !important;
-  height: 100% !important;
+  height: auto !important;
 }
 
 .ws-viewport-canvas {
-  flex: 1 !important;
+  flex: none !important;
   position: relative !important;
   border-radius: var(--r-xl) !important;
   backdrop-filter: blur(32px) saturate(160%) !important;
@@ -7726,7 +7725,8 @@ select,
   align-items: center !important;
   justify-content: center !important;
   overflow: hidden !important;
-  min-height: 400px !important;
+  min-height: min(620px, calc(100dvh - var(--topbar-h) - 150px)) !important;
+  height: min(720px, calc(100dvh - var(--topbar-h) - 150px)) !important;
 }
 
 .ws-viewport-canvas::before,
