@@ -3468,9 +3468,35 @@ def delete_trainer_dataset(dataset_path: str = Query(...)):
 
 
 @app.post("/api/trainers/dataset/vision-proxy")
-def vision_proxy(req: TrainerVisionProxyRequest):
-    """Proxy vision requests to Ollama/LM Studio from backend to avoid CORS and mixed-content browser restrictions."""
+async def vision_proxy(req: TrainerVisionProxyRequest):
+    """Proxy vision requests to Ollama/LM Studio or managed Qwen2.5-VL Captioner."""
     _require_unlocked()
+
+    is_managed_model = (req.provider == "openai" and req.model == "Qwen/Qwen2.5-VL-7B-Instruct")
+
+    if is_managed_model:
+        info = launcher.get("qwen25-vl-captioner")
+        if not info or info["status"] != "running":
+            raise HTTPException(409, "Local vision captioner is not running. Launch it from the settings panel first.")
+
+        # Route to the managed runner using _generate_result!
+        gen_req = GenerateRequest(
+            model_id="qwen25-vl-captioner",
+            params={
+                "prompt": req.prompt,
+                "temperature": req.temperature,
+                "image_base64": req.image_base64,
+                "image_path": req.image_path,
+            }
+        )
+        try:
+            res = await _generate_result(gen_req)
+            response_text = res.get("meta", {}).get("text", "")
+            return {"status": "success", "response": response_text}
+        except Exception as e:
+            if isinstance(e, HTTPException):
+                raise e
+            raise HTTPException(500, f"Local vision runner error: {str(e)}")
 
     import base64
 
@@ -3660,90 +3686,253 @@ def _vision_probe(provider: str, endpoint: str) -> dict:
 
 
 @app.get("/api/trainers/dataset/vision-runtime/status")
-def vision_runtime_status(
+async def vision_runtime_status(
     provider: str = Query("openai"),
     endpoint: str = Query("http://127.0.0.1:8000/v1/chat/completions"),
     model: str = Query("Qwen/Qwen2.5-VL-7B-Instruct"),
 ):
     _require_unlocked()
-    probe = _vision_probe(provider, endpoint)
-    payload = _vision_runtime_public(provider, endpoint, model)
-    payload.update({
-        "ready": probe.get("ready", False),
-        "probe": probe,
-    })
-    if payload["ready"] and not payload["running"]:
-        payload["state"] = "external"
-    elif payload["running"] and payload["ready"]:
-        payload["state"] = "ready"
-    elif payload["running"]:
-        payload["state"] = "starting"
-    elif payload["managed"] and payload.get("returncode") is not None:
-        payload["state"] = "exited"
+    is_managed_model = (provider == "openai" and model == "Qwen/Qwen2.5-VL-7B-Instruct")
+
+    if is_managed_model:
+        info = launcher.get("qwen25-vl-captioner")
+        if info:
+            port = info["port"]
+            pid = info["pid"]
+            running = (info["status"] == "running" and info["proc"].poll() is None)
+
+            ready = False
+            if running:
+                async with httpx.AsyncClient() as c:
+                    try:
+                        r = await c.get(f"http://127.0.0.1:{port}/healthz", timeout=1.0)
+                        if r.status_code == 200:
+                            ready = r.json().get("ready", False)
+                    except Exception:
+                        pass
+
+            log_lines = []
+            log_path = Path(info["log_path"])
+            if log_path.exists():
+                try:
+                    with open(log_path, "r", encoding="utf-8", errors="replace") as f:
+                        log_lines = f.read().splitlines()[-80:]
+                except Exception:
+                    pass
+
+            state = "starting"
+            if ready:
+                state = "ready"
+            elif not running:
+                state = "exited"
+
+            return {
+                "managed": True,
+                "running": running,
+                "ready": ready,
+                "pid": pid,
+                "returncode": info["proc"].poll() if info["proc"] else None,
+                "provider": "openai",
+                "endpoint": f"http://127.0.0.1:{port}/v1/chat/completions",
+                "model": "qwen25-vl-captioner",
+                "command": "launcher managed",
+                "log": log_lines,
+                "state": state,
+            }
+        else:
+            return {
+                "managed": True,
+                "running": False,
+                "ready": False,
+                "pid": None,
+                "returncode": None,
+                "provider": "openai",
+                "endpoint": "http://127.0.0.1:8000/v1/chat/completions",
+                "model": "Qwen/Qwen2.5-VL-7B-Instruct",
+                "command": None,
+                "log": [],
+                "state": "stopped",
+            }
     else:
-        payload["state"] = "stopped"
-    return payload
+        probe = _vision_probe(provider, endpoint)
+        payload = _vision_runtime_public(provider, endpoint, model)
+        payload.update({
+            "ready": probe.get("ready", False),
+            "probe": probe,
+        })
+        if payload["ready"] and not payload["running"]:
+            payload["state"] = "external"
+        elif payload["running"] and payload["ready"]:
+            payload["state"] = "ready"
+        elif payload["running"]:
+            payload["state"] = "starting"
+        elif payload["managed"] and payload.get("returncode") is not None:
+            payload["state"] = "exited"
+        else:
+            payload["state"] = "stopped"
+        return payload
 
 
 @app.post("/api/trainers/dataset/vision-runtime/start")
-def start_vision_runtime(req: TrainerVisionRuntimeRequest):
+async def start_vision_runtime(req: TrainerVisionRuntimeRequest):
     _require_unlocked()
-    global vision_runtime_proc, vision_runtime_cfg
 
-    if _vision_runtime_alive():
+    is_managed_model = (req.provider == "openai" and req.model == "Qwen/Qwen2.5-VL-7B-Instruct")
+
+    if is_managed_model:
+        with open(REGISTRY_PATH, "r") as f:
+            registry = json.load(f)
+        model_entry = next((m for m in registry["models"] if m["id"] == "qwen25-vl-captioner"), None)
+        if not model_entry:
+            raise HTTPException(500, "Captioner model entry 'qwen25-vl-captioner' not found in registry")
+
+        model_entry = _with_resolved_runtime(registry, model_entry)
+
+        info = launcher.get("qwen25-vl-captioner")
+        if info and info["status"] == "running" and info["proc"].poll() is None:
+            ready = False
+            async with httpx.AsyncClient() as c:
+                try:
+                    r = await c.get(f"http://127.0.0.1:{info['port']}/healthz", timeout=1.0)
+                    ready = r.json().get("ready", False)
+                except Exception:
+                    pass
+            state = "ready" if ready else "starting"
+
+            log_lines = []
+            log_path = Path(info["log_path"])
+            if log_path.exists():
+                try:
+                    with open(log_path, "r", encoding="utf-8", errors="replace") as f:
+                        log_lines = f.read().splitlines()[-80:]
+                except Exception:
+                    pass
+
+            return {
+                "managed": True,
+                "running": True,
+                "ready": ready,
+                "pid": info["pid"],
+                "returncode": None,
+                "provider": "openai",
+                "endpoint": f"http://127.0.0.1:{info['port']}/v1/chat/completions",
+                "model": "qwen25-vl-captioner",
+                "command": "launcher managed",
+                "log": log_lines,
+                "status": "already_running",
+                "state": state,
+            }
+
+        hf_token = os.environ.get("HF_TOKEN")
+        res = await launcher.launch(model_entry, loras=[], hf_token=hf_token)
+        if res.get("status") == "needs_runtime":
+            return {
+                "managed": True,
+                "running": False,
+                "ready": False,
+                "pid": None,
+                "returncode": None,
+                "provider": "openai",
+                "endpoint": "",
+                "model": "qwen25-vl-captioner",
+                "command": None,
+                "log": [res.get("message", "")],
+                "status": "needs_runtime",
+                "state": "stopped",
+            }
+        elif res.get("status") == "error":
+            raise HTTPException(500, f"Failed to launch captioner: {res.get('message')}")
+
         return {
-            **_vision_runtime_public(req.provider, req.endpoint, req.model),
-            "status": "already_running",
+            "managed": True,
+            "running": True,
+            "ready": False,
+            "pid": res.get("pid"),
+            "returncode": None,
+            "provider": "openai",
+            "endpoint": f"http://127.0.0.1:{res.get('port')}/v1/chat/completions",
+            "model": "qwen25-vl-captioner",
+            "command": "launcher managed",
+            "log": ["vLLM vision runner launched inside virtualenv venv-vision-vllm. Waiting for OpenAI server binding..."],
+            "status": "starting",
+            "state": "starting",
         }
+    else:
+        global vision_runtime_proc, vision_runtime_cfg
 
-    probe = _vision_probe(req.provider, req.endpoint)
-    if probe.get("ready"):
-        return {
-            **_vision_runtime_public(req.provider, req.endpoint, req.model),
-            "status": "external_ready",
-            "ready": True,
-            "state": "external",
-            "probe": probe,
-        }
+        if _vision_runtime_alive():
+            return {
+                **_vision_runtime_public(req.provider, req.endpoint, req.model),
+                "status": "already_running",
+            }
 
-    cmd = _vision_runtime_command(req)
-    _vision_runtime_append("starting vision runtime")
-    _vision_runtime_append("command: " + " ".join(shlex.quote(x) for x in cmd))
-    env = os.environ.copy()
-    env.setdefault("HF_HOME", str(HF_HOME_DIR))
-    env.setdefault("HF_HUB_CACHE", str(HF_HOME_DIR / "hub"))
-    env.setdefault("TRANSFORMERS_CACHE", str(HF_HOME_DIR / "hub"))
-    try:
-        proc = subprocess.Popen(
-            cmd,
-            cwd=str(BASE_DIR),
-            env=env,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            bufsize=1,
-        )
-    except FileNotFoundError as e:
-        raise HTTPException(400, f"Vision runtime command not found: {e.filename}")
-    except Exception as e:
-        raise HTTPException(500, f"Failed to start vision runtime: {e}")
+        probe = _vision_probe(req.provider, req.endpoint)
+        if probe.get("ready"):
+            return {
+                **_vision_runtime_public(req.provider, req.endpoint, req.model),
+                "status": "external_ready",
+                "ready": True,
+                "state": "external",
+                "probe": probe,
+            }
 
-    with vision_runtime_lock:
-        vision_runtime_proc = proc
-        vision_runtime_cfg = {
-            "provider": req.provider,
-            "endpoint": req.endpoint,
-            "model": req.model,
-            "command": " ".join(shlex.quote(x) for x in cmd),
-            "started_at": time.time(),
-        }
-    threading.Thread(target=_read_vision_runtime, args=(proc,), daemon=True).start()
-    return {**_vision_runtime_public(req.provider, req.endpoint, req.model), "status": "starting", "state": "starting"}
+        cmd = _vision_runtime_command(req)
+        _vision_runtime_append("starting vision runtime")
+        _vision_runtime_append("command: " + " ".join(shlex.quote(x) for x in cmd))
+        env = os.environ.copy()
+        env.setdefault("HF_HOME", str(HF_HOME_DIR))
+        env.setdefault("HF_HUB_CACHE", str(HF_HOME_DIR / "hub"))
+        env.setdefault("TRANSFORMERS_CACHE", str(HF_HOME_DIR / "hub"))
+        try:
+            proc = subprocess.Popen(
+                cmd,
+                cwd=str(BASE_DIR),
+                env=env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
+            )
+        except FileNotFoundError as e:
+            raise HTTPException(400, f"Vision runtime command not found: {e.filename}")
+        except Exception as e:
+            raise HTTPException(500, f"Failed to start vision runtime: {e}")
+
+        with vision_runtime_lock:
+            vision_runtime_proc = proc
+            vision_runtime_cfg = {
+                "provider": req.provider,
+                "endpoint": req.endpoint,
+                "model": req.model,
+                "command": " ".join(shlex.quote(x) for x in cmd),
+                "started_at": time.time(),
+            }
+        threading.Thread(target=_read_vision_runtime, args=(proc,), daemon=True).start()
+        return {**_vision_runtime_public(req.provider, req.endpoint, req.model), "status": "starting", "state": "starting"}
 
 
 @app.post("/api/trainers/dataset/vision-runtime/stop")
-def stop_vision_runtime():
+async def stop_vision_runtime():
     _require_unlocked()
+
+    info = launcher.get("qwen25-vl-captioner")
+    if info:
+        await launcher.stop("qwen25-vl-captioner")
+        return {
+            "managed": True,
+            "running": False,
+            "ready": False,
+            "pid": None,
+            "returncode": 0,
+            "provider": "openai",
+            "endpoint": "",
+            "model": "qwen25-vl-captioner",
+            "command": None,
+            "log": ["vLLM vision runner stopped by user"],
+            "status": "stopped",
+            "state": "stopped",
+        }
+
     global vision_runtime_proc
     proc = vision_runtime_proc
     if proc is None or proc.poll() is not None:

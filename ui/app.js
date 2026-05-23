@@ -1729,6 +1729,7 @@ function renderModels() {
   const grid = $('#modelGrid');
   const search = $('#modelSearch').value.toLowerCase();
   const filtered = state.models.filter(m => {
+    if (m.hidden) return false;
     const cat = state.filter === 'all' || m.category === state.filter;
     const q   = !search || m.name.toLowerCase().includes(search) || (m.description || '').toLowerCase().includes(search);
     return cat && q;
@@ -9734,6 +9735,20 @@ function confirmModal(title, text, confirmLabel = 'OK', danger = false) {
 // cards as production. Append entries here when adding new runners.
 function mockModels() {
   return [
+    {
+      id: 'qwen25-vl-captioner',
+      name: 'Qwen2.5-VL Captioner',
+      category: 'vision',
+      hidden: true,
+      description: 'Dataset Studio vision captioning model based on Qwen2.5-VL-7B-Instruct.',
+      runner_module: 'backend.runners.qwen_vision_captioner',
+      hf_repo: 'Qwen/Qwen2.5-VL-7B-Instruct',
+      min_vram_gb: 16,
+      recommended_vram_gb: 24,
+      supports_lora: false,
+      gpu_support: ['nvidia'],
+      runtime_profile: 'vision-vllm'
+    },
     {
       id: 'qwen-image', name: 'Qwen-Image', category: 'image',
       description: "Alibaba's Qwen-Image text-to-image. Strong prompt adherence, native 1328×1328. ~40 GB on first download.",

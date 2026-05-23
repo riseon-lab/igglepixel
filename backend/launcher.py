@@ -83,6 +83,14 @@ class ModelLauncher:
                 "port":   self._procs[mid]["port"],
             }
 
+        # Proactive VRAM eviction sweep: Stop any other running runner to free GPU VRAM
+        active_other_mids = [other_mid for other_mid, info in list(self._procs.items()) 
+                             if other_mid != mid and self._is_alive(info["proc"])]
+        for other_mid in active_other_mids:
+            print(f"[launcher] Evicting runner '{other_mid}' to reclaim VRAM before launching '{mid}'", flush=True)
+            await self.stop(other_mid)
+
+
         runner_module = model.get("runner_module")
         if not runner_module:
             return {"status": "error", "message": f"Model '{mid}' has no runner_module"}

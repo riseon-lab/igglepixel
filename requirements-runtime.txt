@@ -74,9 +74,9 @@ imageio-ffmpeg
 uv
 virtualenv
 bitsandbytes>=0.46
-torch==2.8.0
-torchvision==0.23.0
-torchaudio==2.8.0
+torch>=2.0.0
+torchvision>=0.15.0
+torchaudio>=2.0.0
 torchao>=0.15
-vllm==0.10.2
+vllm>=0.10.2
 qwen-vl-utils
