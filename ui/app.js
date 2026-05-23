@@ -5796,10 +5796,26 @@ function openCreateDatasetModal() {
         ds = { name: safe, dataset_path: `datasets/${safe}`, image_count: 0, caption_count: 0, pairs: 0, valid: true, items: [] };
         state.previewDatasetStore[ds.dataset_path] = ds;
       } else {
-        ds = await api.createTrainerDataset({ name });
+        try {
+          ds = await api.createTrainerDataset({ name });
+        } catch (e) {
+          if (!/method not allowed|server error 405/i.test(e.message || '')) throw e;
+          const safe = name.replace(/[^A-Za-z0-9._-]+/g, '_').replace(/^_+|_+$/g, '') || 'dataset';
+          ds = {
+            name: safe,
+            dataset_path: `datasets/${safe}`,
+            image_count: 0,
+            caption_count: 0,
+            pairs: 0,
+            valid: true,
+            virtual: true,
+          };
+          state.datasets = [ds, ...(state.datasets || []).filter(x => x.dataset_path !== ds.dataset_path)];
+          toast('Backend create route is not live yet; dataset folder will be created on first upload.', 'info');
+        }
       }
       closeModal();
-      await loadDatasetLibrary();
+      if (!ds.virtual) await loadDatasetLibrary();
       await openDatasetByPath(ds.dataset_path);
       toast('Dataset created', 'success');
     } catch (e) {
@@ -5837,6 +5853,11 @@ async function openDatasetByPath(datasetPath) {
 
 async function loadActiveDatasetItems() {
   if (!state.activeDataset?.dataset_path) return;
+  if (state.activeDataset.virtual) {
+    state.datasetItems = [];
+    renderDatasetWorkspace();
+    return;
+  }
   try {
     if (state.preview) {
       state.datasetItems = state.previewDatasetStore[state.activeDataset.dataset_path]?.items || [];
@@ -6014,7 +6035,19 @@ async function uploadFilesToActiveDataset(files) {
       state.previewDatasetStore[state.activeDataset.dataset_path] = store;
       state.activeDataset = store;
     } else {
-      await api.uploadDatasetFiles(images, state.activeDataset.dataset_path);
+      const res = await api.uploadDatasetFiles(images, state.activeDataset.dataset_path);
+      if (res?.dataset_path && res.dataset_path !== state.activeDataset.dataset_path) {
+        state.activeDataset = {
+          ...(state.activeDataset || {}),
+          name: datasetNameFromPath(res.dataset_path),
+          dataset_path: res.dataset_path,
+          virtual: false,
+        };
+        $('#activeDatasetTitle') && ($('#activeDatasetTitle').textContent = state.activeDataset.name);
+        $('#activeDatasetSub') && ($('#activeDatasetSub').textContent = state.activeDataset.dataset_path);
+      } else {
+        state.activeDataset.virtual = false;
+      }
     }
     await loadActiveDatasetItems();
     datasetLog('Upload complete.');
