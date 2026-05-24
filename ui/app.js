@@ -8429,23 +8429,37 @@ function renderTrainerRunningSamples() {
   }
   const prompts = data.prompts || [];
   const checkpoints = data.checkpoints || [];
-  // Build a step × prompt grid. The first column is prompt-slug labels;
-  // each subsequent column is a checkpoint.
-  const cols = `200px ${checkpoints.map(() => '140px').join(' ')}`;
+  // Per-row grids instead of one big 2D grid. Previously every cell
+  // lived as a direct child of a single `display: grid` container
+  // relying on auto-flow to wrap onto the right row — that worked
+  // until a stray CSS rule (or even a future content-visibility
+  // ancestor) elsewhere subtly broke the flow, at which point all
+  // sample cells collapsed onto the same grid track and the user
+  // saw the same image position get repeatedly overwritten with
+  // empty placeholders on the other rows. Each row now owns its
+  // own grid, so cells physically cannot escape their row.
+  const colTemplate = `200px ${checkpoints.map(() => '140px').join(' ')}`;
+  const minWidth = 200 + checkpoints.length * 148;
+  const rowStyle = `style="display:grid;grid-template-columns:${colTemplate};gap:8px;align-items:start;min-width:${minWidth}px"`;
   const headerRow = `
-    <div></div>
-    ${checkpoints.map(c => `<div class="col-head">step ${Number(c.step).toLocaleString()}</div>`).join('')}
-  `;
+    <div class="sample-grid-row sample-grid-header" ${rowStyle}>
+      <div></div>
+      ${checkpoints.map(c => `<div class="col-head">step ${Number(c.step).toLocaleString()}</div>`).join('')}
+    </div>`;
   const rows = prompts.map(slug => {
     const cells = checkpoints.map(c => {
       const hit = (c.samples || []).find(s => s.prompt_slug === slug);
       if (!hit) return `<div class="sample-cell empty">—</div>`;
-      return `<div class="sample-cell"><img src="${esc(hit.url)}" alt="${esc(hit.name)}" loading="lazy"></div>`;
+      return `<div class="sample-cell"><img src="${esc(hit.url)}" alt="${esc(hit.name)}" loading="lazy" decoding="async"></div>`;
     }).join('');
-    return `<div class="row-head" title="${esc(slug)}">${esc(slug)}</div>${cells}`;
+    return `
+      <div class="sample-grid-row" ${rowStyle}>
+        <div class="row-head" title="${esc(slug)}">${esc(slug)}</div>
+        ${cells}
+      </div>`;
   }).join('');
   body.innerHTML = `
-    <div class="sample-grid" style="grid-template-columns:${cols};min-width:${200 + checkpoints.length * 148}px">
+    <div class="sample-grid" style="display:flex;flex-direction:column;gap:8px;min-width:${minWidth}px">
       ${headerRow}
       ${rows}
     </div>
