@@ -78,14 +78,12 @@ body {
   -moz-osx-font-smoothing: grayscale;
 }
 
-/* Beautiful breathing background atmosphere with high-fidelity, high-contrast blooms.
- * Performance: this sits *behind* every backdrop-filter on the page, so when
- * it repaints the entire app re-rasters. Three guards keep it cheap:
- *  - blur(30px) instead of 60px: visually similar, ~4x cheaper to filter.
- *  - will-change + translateZ promotes it to its own compositor layer so
- *    backdrop-filter samples a static bitmap instead of re-running the
- *    blur every frame.
- *  - prefers-reduced-motion disables the loop entirely. */
+/* Static background atmosphere. Was a 45s `bodyGlowBreathe` loop with a
+ * `filter: blur(30px)` over the entire viewport — sat behind every
+ * backdrop-filter on the page, so every "breath" forced a full re-raster
+ * of every glass surface. Visual cost was massive for a barely-visible
+ * animation. Now: static gradients only, no filter, no animation. The
+ * radial gradients are still soft so visually it looks the same at rest. */
 body::before {
   content: '';
   position: fixed;
@@ -97,26 +95,6 @@ body::before {
     radial-gradient(70vw 70vw at 90% 85%, rgba(214, 138, 163, 0.14) 0%, transparent 75%),
     radial-gradient(60vw 60vw at 75% 20%, rgba(125, 200, 169, 0.10) 0%, transparent 70%),
     radial-gradient(55vw 55vw at 25% 80%, rgba(214, 185, 125, 0.10) 0%, transparent 70%);
-  filter: blur(30px);
-  transform: translateZ(0);
-  will-change: transform;
-  animation: bodyGlowBreathe 45s ease infinite alternate;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  body::before { animation: none !important; }
-}
-
-@keyframes bodyGlowBreathe {
-  0% {
-    transform: translate(0, 0) scale(1) rotate(0deg);
-  }
-  50% {
-    transform: translate(4vw, -3vh) scale(1.08) rotate(4deg);
-  }
-  100% {
-    transform: translate(-3vw, 3vh) scale(0.96) rotate(-4deg);
-  }
 }
 
 /* ── App shell ─────────────────────────────────────────────────────────── */
@@ -146,8 +124,8 @@ body::before {
   gap: 10px;
   padding: 0 14px;
   background: var(--glass-1);
-  backdrop-filter: blur(30px) saturate(160%);
-  -webkit-backdrop-filter: blur(30px) saturate(160%);
+  backdrop-filter: blur(14px) saturate(160%);
+  -webkit-backdrop-filter: blur(14px) saturate(160%);
   border-bottom: 1px solid var(--line-1);
   z-index: 10;
 }
@@ -232,8 +210,8 @@ body::before {
 /* ── Sidebar ───────────────────────────────────────────────────────────── */
 .sidebar {
   background: var(--glass-0);
-  backdrop-filter: blur(30px) saturate(150%);
-  -webkit-backdrop-filter: blur(30px) saturate(150%);
+  backdrop-filter: blur(14px) saturate(150%);
+  -webkit-backdrop-filter: blur(14px) saturate(150%);
   border-right: 1px solid var(--line-1);
   display: flex;
   flex-direction: column;
@@ -448,8 +426,8 @@ body::before {
 .card {
   position: relative;
   background: var(--glass-1);
-  backdrop-filter: blur(24px) saturate(150%);
-  -webkit-backdrop-filter: blur(24px) saturate(150%);
+  backdrop-filter: blur(12px) saturate(150%);
+  -webkit-backdrop-filter: blur(12px) saturate(150%);
   border: 1px solid var(--line-1);
   border-radius: var(--r-lg);
   overflow: hidden;
@@ -475,8 +453,8 @@ body::before {
   cursor: pointer;
   transition: background 140ms var(--ease), border-color 140ms var(--ease), transform 140ms var(--ease);
   background: var(--glass-1);
-  backdrop-filter: blur(24px) saturate(150%);
-  -webkit-backdrop-filter: blur(24px) saturate(150%);
+  backdrop-filter: blur(12px) saturate(150%);
+  -webkit-backdrop-filter: blur(12px) saturate(150%);
   border: 1px solid var(--line-1);
   border-radius: var(--r-lg);
   position: relative;
@@ -839,8 +817,8 @@ body::before {
    * pre-blurred, so stacking another 40px just costs frames during the
    * slide-in transition without changing the look. */
   background: rgba(12, 12, 14, 0.92);
-  backdrop-filter: blur(18px) saturate(150%);
-  -webkit-backdrop-filter: blur(18px) saturate(150%);
+  backdrop-filter: blur(12px) saturate(150%);
+  -webkit-backdrop-filter: blur(12px) saturate(150%);
   border-left: 1px solid var(--line-2);
   z-index: 110;
   display: flex;
@@ -1150,8 +1128,8 @@ body::before {
    * already-blurred body background, costing FPS on open with no
    * visible improvement. */
   background: rgba(12,12,14,0.94);
-  backdrop-filter: blur(18px) saturate(150%);
-  -webkit-backdrop-filter: blur(18px) saturate(150%);
+  backdrop-filter: blur(12px) saturate(150%);
+  -webkit-backdrop-filter: blur(12px) saturate(150%);
   border: 1px solid var(--line-2);
   border-radius: var(--r-xl);
   display: flex;
@@ -1246,8 +1224,8 @@ body::before {
   max-width: 380px;
   padding: 24px 24px 22px;
   background: var(--glass-1);
-  backdrop-filter: blur(40px) saturate(160%);
-  -webkit-backdrop-filter: blur(40px) saturate(160%);
+  backdrop-filter: blur(14px) saturate(140%);
+  -webkit-backdrop-filter: blur(14px) saturate(140%);
   border: 1px solid var(--line-2);
   border-radius: var(--r-xl);
   box-shadow: 0 24px 80px rgba(0,0,0,0.6);
@@ -3084,8 +3062,8 @@ body::before {
   min-width: 160px;
   padding: 4px;
   background: rgba(20, 20, 22, 0.94);
-  backdrop-filter: blur(28px) saturate(160%);
-  -webkit-backdrop-filter: blur(28px) saturate(160%);
+  backdrop-filter: blur(14px) saturate(160%);
+  -webkit-backdrop-filter: blur(14px) saturate(160%);
   border: 1px solid var(--line-2);
   border-radius: var(--r-md);
   box-shadow: 0 12px 40px rgba(0, 0, 0, 0.6);
@@ -3114,8 +3092,8 @@ body::before {
   width: 100vw;
   height: 100dvh;
   background: rgba(0,0,0,0.85);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
   z-index: 400;
   display: none;
   grid-template-rows: auto minmax(0, 1fr) auto;
@@ -3555,8 +3533,8 @@ body::before {
   pointer-events: auto;
   padding: 9px 14px;
   background: rgba(20,20,22,0.92);
-  backdrop-filter: blur(24px) saturate(160%);
-  -webkit-backdrop-filter: blur(24px) saturate(160%);
+  backdrop-filter: blur(12px) saturate(160%);
+  -webkit-backdrop-filter: blur(12px) saturate(160%);
   border: 1px solid var(--line-2);
   border-radius: var(--r-md);
   color: var(--t-1);
@@ -3622,8 +3600,8 @@ body::before {
   height: var(--mobile-nav-h);
   padding-bottom: env(safe-area-inset-bottom, 0px);
   background: rgba(8,8,10,0.96);
-  backdrop-filter: blur(24px) saturate(160%);
-  -webkit-backdrop-filter: blur(24px) saturate(160%);
+  backdrop-filter: blur(12px) saturate(160%);
+  -webkit-backdrop-filter: blur(12px) saturate(160%);
   border-top: 1px solid var(--line-1);
   z-index: 200;
 }
@@ -6445,8 +6423,8 @@ body::before {
 .mobile-nav {
   background: rgba(9, 10, 16, 0.56);
   border-color: var(--aura-border);
-  backdrop-filter: blur(24px) saturate(145%);
-  -webkit-backdrop-filter: blur(24px) saturate(145%);
+  backdrop-filter: blur(12px) saturate(145%);
+  -webkit-backdrop-filter: blur(12px) saturate(145%);
 }
 .topbar { box-shadow: 0 1px 0 rgba(255,255,255,0.04), 0 16px 42px rgba(0,0,0,0.22); }
 .sidebar { border-right: 1px solid var(--aura-border); }
@@ -6750,8 +6728,8 @@ select,
   background: var(--aura-panel);
   color: var(--aura-text);
   box-shadow: var(--aura-shadow-soft);
-  backdrop-filter: blur(24px) saturate(148%);
-  -webkit-backdrop-filter: blur(24px) saturate(148%);
+  backdrop-filter: blur(12px) saturate(148%);
+  -webkit-backdrop-filter: blur(12px) saturate(148%);
 }
 .card::after,
 .model-card::after,
@@ -6971,8 +6949,8 @@ select,
   color: var(--aura-text);
   border-radius: var(--r-lg);
   box-shadow: var(--aura-shadow);
-  backdrop-filter: blur(24px) saturate(150%);
-  -webkit-backdrop-filter: blur(24px) saturate(150%);
+  backdrop-filter: blur(12px) saturate(150%);
+  -webkit-backdrop-filter: blur(12px) saturate(150%);
 }
 
 #assetGrid .asset-menu-btn {
@@ -6999,8 +6977,8 @@ select,
 .auth-shell,
 .lightbox {
   background: rgba(4,5,10,0.64);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
 }
 .lightbox-head,
 .lightbox-foot { background: rgba(10,12,19,0.78); border-color: var(--aura-border); }
@@ -7170,8 +7148,8 @@ select,
 
 .dataset-card {
   background: var(--glass-1);
-  backdrop-filter: blur(24px) saturate(150%);
-  -webkit-backdrop-filter: blur(24px) saturate(150%);
+  backdrop-filter: blur(12px) saturate(150%);
+  -webkit-backdrop-filter: blur(12px) saturate(150%);
   border: 1px solid var(--line-1);
   border-radius: var(--r-lg);
   position: relative;
@@ -7415,8 +7393,8 @@ select,
   width: 320px;
   flex-shrink: 0;
   background: var(--glass-1);
-  backdrop-filter: blur(20px) saturate(140%);
-  -webkit-backdrop-filter: blur(20px) saturate(140%);
+  backdrop-filter: blur(12px) saturate(140%);
+  -webkit-backdrop-filter: blur(12px) saturate(140%);
   border: 1px solid var(--line-1);
   border-radius: var(--r-lg);
   display: flex;
@@ -7536,8 +7514,8 @@ select,
   flex: 1;
   min-width: 0;
   background: var(--glass-1);
-  backdrop-filter: blur(20px) saturate(140%);
-  -webkit-backdrop-filter: blur(20px) saturate(140%);
+  backdrop-filter: blur(12px) saturate(140%);
+  -webkit-backdrop-filter: blur(12px) saturate(140%);
   border: 1px solid var(--line-1);
   border-radius: var(--r-lg);
   padding: 14px;
@@ -7682,8 +7660,8 @@ select,
   width: 320px;
   flex-shrink: 0;
   background: var(--glass-1);
-  backdrop-filter: blur(20px) saturate(140%);
-  -webkit-backdrop-filter: blur(20px) saturate(140%);
+  backdrop-filter: blur(12px) saturate(140%);
+  -webkit-backdrop-filter: blur(12px) saturate(140%);
   border: 1px solid var(--line-1);
   border-radius: var(--r-lg);
   padding: 14px !important;
@@ -7892,8 +7870,8 @@ select,
    * but the GPU samples ~4x fewer pixels per frame on scroll. The body
    * background is already pre-blurred, so stacking blur on blur past
    * ~16px is purely throwing performance away. */
-  backdrop-filter: blur(18px) saturate(150%) !important;
-  -webkit-backdrop-filter: blur(18px) saturate(150%) !important;
+  backdrop-filter: blur(12px) saturate(150%) !important;
+  -webkit-backdrop-filter: blur(12px) saturate(150%) !important;
   border: 1px solid rgba(255, 255, 255, 0.05) !important;
   background: rgba(4, 4, 5, 0.55) !important;
   box-shadow: inset 0 0 40px rgba(0,0,0,0.4), var(--accent-glow) !important;
@@ -7925,44 +7903,16 @@ select,
   transition: opacity 420ms var(--ease) !important;
 }
 
-.ws-viewport-canvas::before {
-  background:
-    linear-gradient(115deg, transparent 12%, rgba(125, 167, 214, 0.20) 30%, transparent 46%),
-    linear-gradient(245deg, transparent 20%, rgba(214, 138, 163, 0.14) 44%, transparent 64%),
-    repeating-linear-gradient(0deg, rgba(255,255,255,0.045) 0 1px, transparent 1px 8px) !important;
-  filter: blur(10px) saturate(130%) !important;
-  animation: viewportFieldFlow 8s linear infinite !important;
-}
-
+/* Ambient viewport pseudo-element animations (field flow + particle
+ * drift + the repeating-linear-gradient hatch + mix-blend-mode: screen
+ * + filter: blur(10px)) were running 24/7 regardless of state. Each one
+ * forced a fresh composite layer behind the canvas's backdrop-filter.
+ * Disabled entirely — `opacity: 0` keeps the rules around so we can
+ * re-enable for a single class without touching JS, but the rendering
+ * cost is zero. */
+.ws-viewport-canvas::before,
 .ws-viewport-canvas::after {
-  background-image:
-    radial-gradient(circle at 20% 30%, rgba(145, 200, 255, 0.32) 0 1px, transparent 1.8px),
-    radial-gradient(circle at 78% 62%, rgba(214, 185, 125, 0.22) 0 1px, transparent 2px),
-    linear-gradient(90deg, transparent, rgba(255,255,255,0.10), transparent) !important;
-  background-size: 92px 92px, 128px 128px, 180% 100% !important;
-  animation: viewportParticleDrift 12s ease-in-out infinite alternate !important;
-  mix-blend-mode: screen !important;
-}
-
-.ws-viewport-canvas.is-idle::before,
-.ws-viewport-canvas.is-idle::after {
-  opacity: 0.42 !important;
-  animation-duration: 18s !important;
-}
-
-.ws-viewport-canvas.is-generating::before {
-  opacity: 0.46 !important;
-  animation-duration: 18s !important;
-}
-
-.ws-viewport-canvas.is-generating::after {
-  opacity: 0.30 !important;
-  animation-duration: 24s !important;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .ws-viewport-canvas::before,
-  .ws-viewport-canvas::after { animation: none !important; }
+  display: none !important;
 }
 
 .viewport-stage {
@@ -8031,7 +7981,7 @@ select,
   background: rgba(255, 255, 255, 0.02) !important;
   border: 1px solid rgba(255, 255, 255, 0.05) !important;
   border-radius: var(--r-lg) !important;
-  backdrop-filter: blur(16px) !important;
+  backdrop-filter: blur(12px) !important;
 }
 
 .ws-viewport-canvas .viewport-audio svg {
@@ -8096,7 +8046,18 @@ select,
   border-radius: 50% !important;
   border: 1px solid rgba(255,255,255,0.11) !important;
   transform: rotate(var(--ring-rotate, 0deg)) scale(var(--ring-scale, 1)) !important;
+}
+
+/* Only spin the aura rings while a generation is actually in progress.
+ * Previously both idle AND generating states span 24/7 — 3 rings each
+ * × continuous transform = unnecessary GPU work while the user is
+ * just sitting on the workspace page. */
+.generating-aura span {
   animation: viewportRingSpin var(--ring-speed, 14s) linear infinite !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .generating-aura span { animation: none !important; }
 }
 
 .idle-core span:nth-child(1),
@@ -8152,8 +8113,8 @@ select,
   border: none !important;
   border-top: 1px solid rgba(255, 255, 255, 0.05) !important;
   background: rgba(8, 8, 10, 0.85) !important;
-  backdrop-filter: blur(20px) saturate(140%) !important;
-  -webkit-backdrop-filter: blur(20px) saturate(140%) !important;
+  backdrop-filter: blur(12px) saturate(140%) !important;
+  -webkit-backdrop-filter: blur(12px) saturate(140%) !important;
   padding: 8px 24px !important;
   z-index: 5 !important;
   box-shadow: 0 -4px 20px rgba(0, 0, 0, 0.25) !important;
@@ -8325,16 +8286,10 @@ select,
   font-size: 11px !important;
 }
 
-@keyframes viewportFieldFlow {
-  0% { transform: translate3d(-8%, -4%, 0) rotate(0deg); background-position: 0% 0%, 100% 0%, 0 0; }
-  50% { transform: translate3d(5%, 3%, 0) rotate(2deg); background-position: 90% 40%, 10% 80%, 0 22px; }
-  100% { transform: translate3d(-8%, -4%, 0) rotate(0deg); background-position: 180% 80%, -40% 140%, 0 44px; }
-}
-
-@keyframes viewportParticleDrift {
-  0% { transform: translate3d(-2%, 1%, 0) scale(1); background-position: 0 0, 0 0, -80% 0; }
-  100% { transform: translate3d(2%, -1%, 0) scale(1.04); background-position: 46px 38px, -58px 44px, 120% 0; }
-}
+/* viewportFieldFlow + viewportParticleDrift removed as part of the
+ * perf cull — the pseudo-elements that drove them are now display:none
+ * (see .ws-viewport-canvas::before/::after near the top of the viewport
+ * section). */
 
 @keyframes viewportRingSpin {
   to { transform: rotate(360deg) scale(var(--ring-scale, 1)); }
@@ -8745,8 +8700,8 @@ select,
   background: rgba(255, 255, 255, 0.02) !important;
   border: 1px solid rgba(255, 255, 255, 0.05) !important;
   border-radius: var(--r-xl) !important;
-  backdrop-filter: blur(24px) saturate(160%) !important;
-  -webkit-backdrop-filter: blur(24px) saturate(160%) !important;
+  backdrop-filter: blur(12px) saturate(160%) !important;
+  -webkit-backdrop-filter: blur(12px) saturate(160%) !important;
   overflow: hidden !important;
   padding: 20px !important;
   transition: border-color 0.3s var(--ease) !important;
@@ -9066,9 +9021,18 @@ select,
   width: 80% !important;
   height: 80% !important;
   border-radius: 50% !important;
-  filter: blur(80px) saturate(180%) !important;
+  /* Was blur(80px) — the GPU samples ~6400 surrounding pixels per
+   * output pixel at that radius. 24px gives a visually similar
+   * "soft glow" look with roughly 1/10th the per-frame cost. The
+   * radial-gradient backgrounds on each sphere already soften the
+   * edges so a smaller filter blur still reads as a blob.
+   *
+   * mix-blend-mode: screen forces a fresh compositing group +
+   * read-back of the parent layer on every frame — removed
+   * entirely. The spheres' opacity already gives the right
+   * additive look against the dark canvas. */
+  filter: blur(24px) saturate(150%) !important;
   opacity: 0.45 !important;
-  mix-blend-mode: screen !important;
   will-change: transform !important;
 }
 
@@ -9095,8 +9059,8 @@ select,
 .magic-glass {
   position: absolute !important;
   inset: 0 !important;
-  backdrop-filter: blur(16px) saturate(130%) !important;
-  -webkit-backdrop-filter: blur(16px) saturate(130%) !important;
+  backdrop-filter: blur(12px) saturate(130%) !important;
+  -webkit-backdrop-filter: blur(12px) saturate(130%) !important;
   background: radial-gradient(circle at center, rgba(4, 4, 5, 0) 20%, rgba(4, 4, 5, 0.75) 85%) !important;
   border-radius: inherit !important;
   z-index: 2 !important;
@@ -9116,10 +9080,19 @@ select,
   height: var(--sz, 4px) !important;
   background: linear-gradient(135deg, #ffffff, var(--col, #ff7aa8)) !important;
   border-radius: 50% !important;
-  box-shadow: 0 0 12px var(--col, #ff7aa8) !important;
+  /* Was a per-particle box-shadow with 12px blur — 15 particles ×
+   * one repaint each per frame at ~6s loops adds up. Removed; the
+   * gradient fill is already saturated against a dark backdrop. */
   opacity: 0 !important;
   animation: magicSparkDrift var(--duration, 6s) ease-in infinite !important;
 }
+
+/* Cut from 15 to 6 particles — beyond ~6 the visual density doesn't
+ * actually read as more sparkly, but each extra particle is a
+ * separate animated transform + opacity + (still costly) per-frame
+ * paint. The hard-coded HTML retains all 15 spans for future-proofing;
+ * we just hide the surplus. */
+.magic-particles span:nth-child(n+7) { display: none !important; }
 
 /* Floating sparks positioning and random styling variables */
 .magic-particles span:nth-child(1)  { left: 15%; --sz: 3px; --dx: -40px; --duration: 5.5s; animation-delay: 0.2s; --col: #91c8ff; }
