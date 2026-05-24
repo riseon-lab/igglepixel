@@ -3907,6 +3907,9 @@ def _ollama_asset_kind(name: str) -> str:
     """Classify a release asset so the installer knows whether to
     extract it (tarball) or chmod it directly (raw binary)."""
     low = name.lower()
+    # Order matters: .tar.zst before .tar (longer suffix wins).
+    if low.endswith(".tar.zst"):
+        return "tar.zst"
     if low.endswith(".tgz") or low.endswith(".tar.gz"):
         return "tarball"
     if low.endswith(".tar"):
@@ -3921,6 +3924,13 @@ def _ollama_asset_kind(name: str) -> str:
     if "." not in base:
         return "binary"
     return "other"
+
+
+# Asset suffixes we recognise as "this is a specialised build for an
+# accelerator other than our default CUDA target". Used to deprioritise
+# them so a plain `ollama-linux-amd64.tar.zst` beats `…-rocm.tar.zst`
+# on a CUDA pod (and vice-versa via env override).
+_OLLAMA_VARIANT_SUFFIXES = ("rocm", "mlx", "jetpack5", "jetpack6")
 
 
 def _ollama_install_sources() -> list[dict]:
@@ -3939,33 +3949,45 @@ def _ollama_install_sources() -> list[dict]:
     # Best source: GitHub releases API — gives us the exact assets the
     # latest release ships, so renames are picked up automatically.
     _, assets = _ollama_release_assets()
-    matched: list[tuple[int, dict]] = []
+    matched: list[tuple[tuple[int, int], dict]] = []
     for a in assets:
         low = a["name"].lower()
+        # Require BOTH a Linux marker AND an arch marker — without the
+        # Linux check, `ollama-windows-amd64-*.zip` matches too, which
+        # is how the installer picked a Windows .zip on first attempt.
+        if "linux" not in low:
+            continue
         if not any(n in low for n in needles):
             continue
-        # Ranking: tarballs first (carry the bundled CUDA libs the
-        # Ollama binary loads at runtime), then plain archives, then
-        # raw binaries (still useful — CPU-only fallback works).
         kind = _ollama_asset_kind(a["name"])
-        rank = {"tarball": 0, "tar": 1, "zip": 2, "binary": 3}.get(kind, 9)
-        if rank < 9:
-            matched.append((rank, {"url": a["url"], "kind": kind, "name": a["name"]}))
+        # Ranking: tarballs first (carry the bundled CUDA libs the
+        # Ollama binary loads at runtime). zstd is the new default
+        # format Ollama ships, so treat it the same as tarball. Raw
+        # binaries last as a CPU-only fallback.
+        rank = {"tar.zst": 0, "tarball": 0, "tar": 1, "zip": 2, "binary": 3}.get(kind, 9)
+        if rank >= 9:
+            continue
+        # Sub-rank: penalise accelerator-specific variants (rocm/mlx/
+        # jetpack) so the plain build wins on a generic CUDA pod.
+        variant_penalty = 1 if any(suffix in low for suffix in _OLLAMA_VARIANT_SUFFIXES) else 0
+        matched.append(((rank, variant_penalty), {"url": a["url"], "kind": kind, "name": a["name"]}))
     matched.sort(key=lambda x: x[0])
     for _, src in matched:
         sources.append(src)
 
     # Stable alias backstop: GitHub auto-redirects `releases/latest/download/<asset>`
     # to whatever the latest release uses for that asset name. Kept in
-    # case the API rate-limits us.
-    fallback_name = f"ollama-linux-{arch}.tgz"
+    # case the API rate-limits us. Use the current canonical name
+    # (`.tar.zst` since v0.24.0); if Ollama renames again the API path
+    # above will still find the new shape.
+    fallback_name = f"ollama-linux-{arch}.tar.zst"
     fallback_url = f"https://github.com/ollama/ollama/releases/latest/download/{fallback_name}"
-    sources.append({"url": fallback_url, "kind": "tarball", "name": fallback_name})
+    sources.append({"url": fallback_url, "kind": "tar.zst", "name": fallback_name})
 
     # ollama.com — currently 404s on recent releases, kept so an
     # Ollama-side fix re-enables the path automatically.
     com_url = f"https://ollama.com/download/{fallback_name}"
-    sources.append({"url": com_url, "kind": "tarball", "name": fallback_name})
+    sources.append({"url": com_url, "kind": "tar.zst", "name": fallback_name})
 
     seen: set[str] = set()
     deduped: list[dict] = []
@@ -4076,7 +4098,11 @@ def _install_ollama_runtime() -> tuple[Optional[str], str]:
         return None, msg
 
     detected_kind = chosen["kind"]
-    if head[:2] == b"\x1f\x8b":
+    # zstd magic: 28 b5 2f fd (little-endian "frame magic"). Modern
+    # Ollama Linux assets are .tar.zst.
+    if head[:4] == b"\x28\xb5\x2f\xfd":
+        detected_kind = "tar.zst"
+    elif head[:2] == b"\x1f\x8b":
         detected_kind = "tarball"
     elif head[:4] == b"\x7fELF":
         detected_kind = "binary"
@@ -4101,6 +4127,28 @@ def _install_ollama_runtime() -> tuple[Optional[str], str]:
             import tarfile
             with tarfile.open(str(tmp_file), mode="r:") as tar:
                 tar.extractall(OLLAMA_INSTALL_ROOT)
+        elif detected_kind == "tar.zst":
+            # Python's tarfile doesn't natively support zstd. Shell out
+            # to system `tar`, which has supported `--zstd` since
+            # tar 1.31 (2019) — well within the Docker base image.
+            # This also avoids pulling the zstandard pip package.
+            try:
+                subprocess.run(
+                    ["tar", "--zstd", "-xf", str(tmp_file), "-C", str(OLLAMA_INSTALL_ROOT)],
+                    check=True, timeout=300,
+                )
+            except FileNotFoundError:
+                msg = "tar not in PATH; cannot extract .tar.zst archive"
+                _vision_runtime_append(f"ollama install failed: {msg}")
+                return None, msg
+            except subprocess.CalledProcessError as e:
+                msg = f"tar --zstd failed with exit {e.returncode}"
+                _vision_runtime_append(f"ollama install failed: {msg}")
+                return None, msg
+            except subprocess.TimeoutExpired:
+                msg = "tar --zstd timed out after 300s"
+                _vision_runtime_append(f"ollama install failed: {msg}")
+                return None, msg
         elif detected_kind == "zip":
             import zipfile
             with zipfile.ZipFile(str(tmp_file)) as zf:
@@ -4742,29 +4790,59 @@ async def delete_vision_weights(req: TrainerVisionRuntimeRequest):
         if not model:
             raise HTTPException(400, "Ollama model name is required to delete weights")
         delete_url = _ollama_url(endpoint, "delete")
+        api_error: Optional[str] = None
         try:
             async with httpx.AsyncClient(timeout=60.0) as c:
                 # Ollama's delete endpoint accepts both DELETE-with-body
                 # (older) and POST (newer); DELETE is the documented one.
                 r = await c.request("DELETE", delete_url, json={"name": model})
+            if r.status_code < 400:
+                _vision_runtime_append(f"deleted Ollama model via API: {model}")
+                return {
+                    "status":   "deleted",
+                    "provider": "ollama",
+                    "model":    model,
+                    "endpoint": endpoint,
+                    "via":      "api",
+                }
+            api_error = f"HTTP {r.status_code} {r.text[:240]}"
         except httpx.RequestError as e:
-            raise HTTPException(
-                502,
-                f"Could not reach Ollama at {delete_url} to delete '{model}': {e}. "
-                "Start Ollama before deleting weights.",
+            api_error = f"connection failed: {e}"
+
+        # Filesystem fallback: when Ollama isn't running we can't use
+        # its API, but the user still wants disk back. Wipe the model
+        # cache directory directly. Safe because Ollama isn't running
+        # (so nothing is reading the blobs), and the manifests we'd
+        # otherwise have to walk are inside this same tree.
+        if OLLAMA_MODELS_DIR.exists():
+            freed_bytes = _dir_size_bytes(OLLAMA_MODELS_DIR)
+            try:
+                shutil.rmtree(OLLAMA_MODELS_DIR)
+            except Exception as e:
+                raise HTTPException(
+                    502,
+                    f"Ollama API unreachable ({api_error}) AND filesystem fallback failed: {e}",
+                )
+            _vision_runtime_append(
+                f"deleted Ollama models dir {OLLAMA_MODELS_DIR} (~{freed_bytes // (1024 * 1024)} MB freed) "
+                f"because the API was unreachable ({api_error})"
             )
-        if r.status_code >= 400:
-            raise HTTPException(
-                r.status_code,
-                f"Ollama refused to delete '{model}': HTTP {r.status_code} {r.text[:240]}",
-            )
-        _vision_runtime_append(f"deleted Ollama model: {model}")
-        return {
-            "status":   "deleted",
-            "provider": "ollama",
-            "model":    model,
-            "endpoint": endpoint,
-        }
+            return {
+                "status":      "deleted",
+                "provider":    "ollama",
+                "model":       model,
+                "endpoint":    endpoint,
+                "via":         "filesystem",
+                "freed_bytes": freed_bytes,
+                "freed_mb":    round(freed_bytes / 1024 / 1024, 1),
+                "note":        "Ollama wasn't reachable; cleared the entire models cache.",
+            }
+
+        raise HTTPException(
+            502,
+            f"Could not reach Ollama at {delete_url} to delete '{model}' ({api_error}) "
+            f"and there's no models cache at {OLLAMA_MODELS_DIR} to clean up either.",
+        )
 
     raise HTTPException(400, f"Delete weights is not supported for provider: {req.provider}")
 
