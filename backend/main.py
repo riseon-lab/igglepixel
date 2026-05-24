@@ -6206,6 +6206,89 @@ def get_asset_file(
 app.mount("/", StaticFiles(directory=str(UI_DIR), html=True), name="ui")
 
 
+# ── Startup diagnostics + orphan sweep ───────────────────────────────────
+# Every boot writes a timestamped line to /workspace/logs/backend-startup.log
+# so we can spot rapid-restart loops (e.g. OOM-kill cascades). We also kill
+# any leftover runner / Ollama / vLLM processes from a previous backend
+# session — without this, a crashed backend leaves orphans holding VRAM
+# and bound to ports, and the new backend can't relaunch them cleanly.
+def _log_startup() -> None:
+    try:
+        log_dir = WORKSPACE / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        ts = time.strftime("%Y-%m-%dT%H:%M:%S%z")
+        pid = os.getpid()
+        line = f"{ts} pid={pid} igglepixel backend startup\n"
+        with open(log_dir / "backend-startup.log", "a", encoding="utf-8") as fp:
+            fp.write(line)
+        print(f"[startup] {line.rstrip()}", flush=True)
+    except Exception as e:
+        print(f"[startup] WARN: could not write startup log: {e}", flush=True)
+
+
+def _sweep_orphans() -> None:
+    """Kill leftover runner / Ollama / vLLM processes from a previous
+    backend session before we accept any new launches. Best-effort —
+    failures are logged, not fatal."""
+    # Patterns we know belong to us. We deliberately avoid matching the
+    # generic 'python' or 'vllm' alone — we look for the specific
+    # invocations the launcher and the vision-runtime path produce.
+    patterns = [
+        "backend.runner_host",                       # all model runners
+        "vllm.entrypoints.openai.api_server",        # the Qwen vLLM child
+        f"{WORKSPACE}/bin/ollama serve",             # self-heal-installed ollama
+        f"{WORKSPACE}/bin/ollama",                   # ollama children (model load)
+    ]
+    own_pid = os.getpid()
+    killed: list[str] = []
+    try:
+        ps = subprocess.run(
+            ["ps", "-eo", "pid=,command="],
+            check=True, capture_output=True, text=True, timeout=10,
+        )
+    except Exception as e:
+        print(f"[startup] WARN: could not list processes for orphan sweep: {e}", flush=True)
+        return
+    for raw in ps.stdout.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        try:
+            pid_str, cmd = line.split(None, 1)
+            pid = int(pid_str)
+        except ValueError:
+            continue
+        if pid == own_pid:
+            continue
+        if not any(pat in cmd for pat in patterns):
+            continue
+        try:
+            os.kill(pid, signal.SIGTERM)
+            killed.append(f"pid={pid} cmd={cmd[:80]}")
+        except ProcessLookupError:
+            pass
+        except PermissionError as e:
+            print(f"[startup] WARN: cannot SIGTERM pid {pid}: {e}", flush=True)
+    if killed:
+        # Give SIGTERM a few seconds, then SIGKILL stragglers.
+        time.sleep(3)
+        for entry in killed:
+            try:
+                pid = int(entry.split()[0].split("=", 1)[1])
+                if Path(f"/proc/{pid}").exists():
+                    os.kill(pid, signal.SIGKILL)
+            except Exception:
+                pass
+        for entry in killed:
+            print(f"[startup] swept orphan: {entry}", flush=True)
+    else:
+        print("[startup] no orphan runtimes to sweep", flush=True)
+
+
+_log_startup()
+_sweep_orphans()
+
+
 if __name__ == "__main__":
     uvicorn.run(
         app,
