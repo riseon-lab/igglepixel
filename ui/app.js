@@ -6230,8 +6230,11 @@ async function loadActiveDatasetItems() {
     }
     renderDatasetWorkspace();
   } catch (e) {
-    state.datasetItems = [];
-    renderDatasetWorkspace();
+    // Preserve whatever we already had on a transient load failure
+    // (e.g. a 502 from the reverse proxy while the captioner is
+    // hogging the backend). Previously this wiped state.datasetItems
+    // and the grid emptied out — looked exactly like "all my images
+    // disappeared" when the pipeline reload tripped over a 502.
     toast(`Dataset load failed: ${e.message || 'unknown error'}`, 'error');
   }
 }
@@ -6673,7 +6676,28 @@ async function runDatasetPipeline() {
   toggleDatasetDrawer(true);
   resetDatasetConsole();
   datasetLog(`Starting auto-review + caption with ${settings.model}`);
+  let persistedCount = 0;
   try {
+    // Warm-up probe: the first caption call after a fresh vLLM launch
+    // can take 30-60 seconds while CUDA graphs compile and the first
+    // batch is paged in. If we just hand that off to the loop, the
+    // very first request may exceed the RunPod edge-proxy timeout and
+    // come back as a 502 — which then looks like the whole pipeline
+    // is broken. Probe with a small request first so the warm-up
+    // happens with a clear log line, and surface failures with the
+    // actual cause instead of a generic 502.
+    const firstUncaptioned = rows.find(r => !r.excluded && !(r.caption || '').trim()) || rows.find(r => !r.excluded);
+    if (firstUncaptioned) {
+      datasetLog('Warming up vision model on a single probe request…');
+      try {
+        await requestDatasetVision(firstUncaptioned, 'Describe this image in five words.', settings);
+        datasetLog('Vision model warm — starting batch.');
+      } catch (probeErr) {
+        const msg = probeErr?.message || 'unknown error';
+        throw new Error(`Captioner warm-up failed: ${msg}. The vision model may still be loading weights — wait ~30s and retry.`);
+      }
+    }
+
     for (let i = 0; i < rows.length; i++) {
       if (datasetPipelineCancel) break;
       const item = rows[i];
@@ -6686,6 +6710,7 @@ async function runDatasetPipeline() {
         item.excluded = true;
         item.flags = [{ label: 'REJECTED', tone: 'warn', detail: review.reason || 'auto-review rejected this image' }, ...(item.flags || [])];
         await persistDatasetExclude(item, true);
+        persistedCount++;
         datasetLog(`Excluded ${item.image}: ${review.reason || 'review rejected'}`, 'warn');
         renderDatasetWorkspace();
         continue;
@@ -6702,6 +6727,7 @@ async function runDatasetPipeline() {
         item.caption_path = item.caption_path || item.image.replace(/\.[^.]+$/, '.txt');
         item.flags = (item.flags || []).filter(f => !['NO CAP', 'EMPTY CAP', 'SHORT CAP'].includes(f.label));
         await persistDatasetCaption(item, caption);
+        persistedCount++;
         datasetLog(`Saved caption for ${item.image}`);
         renderDatasetWorkspace();
       }
@@ -6714,7 +6740,13 @@ async function runDatasetPipeline() {
   } finally {
     datasetPipelineCancel = false;
     setDatasetBusy(false);
-    await loadActiveDatasetItems();
+    // Only reload from server if we actually persisted something —
+    // otherwise we have nothing to sync, and the reload's own
+    // failure case used to wipe the visible grid (now fixed in
+    // loadActiveDatasetItems, but skipping is cleaner anyway).
+    if (persistedCount > 0) {
+      await loadActiveDatasetItems();
+    }
   }
 }
 
