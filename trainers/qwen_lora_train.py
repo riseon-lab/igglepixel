@@ -71,6 +71,9 @@ def ensure_ai_toolkit() -> Path:
 
 
 def ensure_venv(toolkit_dir: Path) -> Path:
+    if py_bool(os.environ.get("IGGLEPIXEL_AI_TOOLKIT_DELETE_VENV"), False) and VENV_DIR.exists():
+        log(f"Deleting AI Toolkit venv before bootstrap: {VENV_DIR}")
+        shutil.rmtree(VENV_DIR)
     py = VENV_DIR / "bin" / "python"
     stamp = VENV_DIR / ".igglepixel_ai_toolkit_ready"
     if not py.exists():

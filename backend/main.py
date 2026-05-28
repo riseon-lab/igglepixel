@@ -2956,6 +2956,7 @@ class TrainJobRequest(BaseModel):
     sample_prompts: Optional[list[str]] = None
     generate_samples: bool = True
     auto_import_lora: bool = True
+    rebuild_trainer_venv: bool = False
 
 
 class HFLoraUploadRequest(BaseModel):
@@ -4904,6 +4905,35 @@ def _clean_sample_prompts(prompts: Optional[list[str]]) -> list[str]:
     return cleaned
 
 
+def _trainer_ai_toolkit_venv_path(env: dict[str, str]) -> Path:
+    raw = (env.get("IGGLEPIXEL_AI_TOOLKIT_VENV") or "").strip()
+    path = Path(raw) if raw else (WORKSPACE / "venvs" / "ai-toolkit")
+    if not path.is_absolute():
+        path = WORKSPACE / path
+    resolved = path.resolve()
+    venv_root = (WORKSPACE / "venvs").resolve()
+    try:
+        resolved.relative_to(venv_root)
+    except ValueError:
+        raise RuntimeError(f"Refusing to delete trainer venv outside {venv_root}: {resolved}")
+    if resolved == venv_root:
+        raise RuntimeError(f"Refusing to delete trainer venv root: {resolved}")
+    return resolved
+
+
+def _delete_trainer_ai_toolkit_venv(job: dict, env: dict[str, str]) -> None:
+    venv_path = _trainer_ai_toolkit_venv_path(env)
+    job["trainer_venv_path"] = str(venv_path)
+    job["log_tail"].append(f"Rebuilding AI Toolkit venv: deleting {venv_path}")
+    job["log_tail"] = job["log_tail"][-120:]
+    if venv_path.exists():
+        shutil.rmtree(venv_path)
+        job["log_tail"].append("AI Toolkit venv deleted; bootstrap will recreate it")
+    else:
+        job["log_tail"].append("AI Toolkit venv was already absent; bootstrap will create it")
+    job["log_tail"] = job["log_tail"][-120:]
+
+
 def _prepare_curated_training_dataset(source_dir: Path, target_dir: Path) -> dict:
     """Copy the included image/caption pairs into a job-local snapshot.
 
@@ -5461,6 +5491,7 @@ def _run_train_job(job_id: str) -> None:
         "generate_samples": bool(req.generate_samples),
         "sample_prompts": sample_prompts,
         "auto_import_lora": bool(req.auto_import_lora),
+        "rebuild_trainer_venv": bool(req.rebuild_trainer_venv),
         "dataset": scan,
         "training_dataset": training_scan,
     }
@@ -5478,7 +5509,8 @@ def _run_train_job(job_id: str) -> None:
         f"optimizer {req.optimizer or 'adamw8bit'}, scheduler {req.scheduler or 'constant'}, "
         f"alpha {req.network_alpha or req.rank}, precision {req.precision or 'bf16'}, "
         f"samples {'on' if req.generate_samples else 'off'}, "
-        f"auto-import {'on' if req.auto_import_lora else 'off'}"
+        f"auto-import {'on' if req.auto_import_lora else 'off'}, "
+        f"rebuild-venv {'on' if req.rebuild_trainer_venv else 'off'}"
     )
 
     env = os.environ.copy()
@@ -5506,6 +5538,14 @@ def _run_train_job(job_id: str) -> None:
             "TRAIN_MANIFEST": str(manifest_path),
         }
     )
+    if req.rebuild_trainer_venv:
+        env["IGGLEPIXEL_AI_TOOLKIT_REINSTALL"] = "1"
+        env["IGGLEPIXEL_AI_TOOLKIT_DELETE_VENV"] = "1"
+        try:
+            _delete_trainer_ai_toolkit_venv(job, env)
+        except Exception as exc:
+            _set_train_job_error(job, f"Could not rebuild AI Toolkit venv: {exc}")
+            return
     # Advanced cfg from the wizard. Each is optional — wrapper falls back
     # to its own defaults when not set, so legacy callers stay unaffected.
     if req.optimizer:                       env["TRAIN_OPTIMIZER"] = req.optimizer
@@ -5683,6 +5723,7 @@ def create_train_job(req: TrainJobRequest):
         "generate_samples": bool(req.generate_samples),
         "sample_prompts": req.sample_prompts or [],
         "auto_import_lora": bool(req.auto_import_lora),
+        "rebuild_trainer_venv": bool(req.rebuild_trainer_venv),
         "progress": 0,
         "log_tail": [],
         "_request": req,

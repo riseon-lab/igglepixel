@@ -7191,6 +7191,7 @@ let trainerAlphaTouched = false;
 const trainerLaunchOpts = {
   samples:      true,
   autoPublish:  true,
+  rebuildVenv:  false,
   notify:       false,
   autoShutdown: false,
 };
@@ -8125,6 +8126,10 @@ function renderTrainerLaunchPreview() {
     lines[lines.length - 1] += ' \\';
     lines.push(arg('--auto-import-lora', 'off'));
   }
+  if (trainerLaunchOpts.rebuildVenv) {
+    lines[lines.length - 1] += ' \\';
+    lines.push(arg('--rebuild-ai-toolkit-venv', 'on'));
+  }
   // Sample prompts (one per --sample flag) if the user authored any.
   const samples = trainerWizardSamples.filter(s => s.trim());
   if (trainerLaunchOpts.samples && samples.length) {
@@ -8702,6 +8707,7 @@ function renderTrainerRunningConfig() {
     ['Instance $/hr', trainerRunJob.instance_usd_per_hour || trainerRunJob.gpu_usd_per_hour],
     ['Generate samples', trainerRunJob.generate_samples === false ? 'no' : 'yes'],
     ['Auto-import LoRA', trainerRunJob.auto_import_lora === false ? 'no' : 'yes'],
+    ['Rebuild venv', trainerRunJob.rebuild_trainer_venv ? 'yes' : 'no'],
     ['Output dir',   trainerRunJob.output_dir],
   ].filter(([, v]) => v !== undefined && v !== null && v !== '');
   rows.innerHTML = fields.map(([k, v]) => `
@@ -8920,6 +8926,7 @@ function trainerPayload() {
     sample_prompts:        samples.length ? samples : null,
     generate_samples:      !!trainerLaunchOpts.samples,
     auto_import_lora:      !!trainerLaunchOpts.autoPublish,
+    rebuild_trainer_venv:  !!trainerLaunchOpts.rebuildVenv,
   };
 }
 
@@ -9107,6 +9114,7 @@ async function startTrainerJob() {
         generate_samples: payload.generate_samples,
         sample_prompts: payload.sample_prompts,
         auto_import_lora: payload.auto_import_lora,
+        rebuild_trainer_venv: payload.rebuild_trainer_venv,
         current_step: startStep,
         total_steps: payload.steps,
         progress: 4,
@@ -9115,7 +9123,7 @@ async function startTrainerJob() {
         log_tail: [
           'Preview training job started',
           `Requested settings: rank ${payload.rank}, steps ${payload.steps}, lr ${payload.learning_rate}, resolution ${payload.resolution}`,
-          `Advanced settings: optimizer ${payload.optimizer}, scheduler ${payload.scheduler}, alpha ${payload.network_alpha}, precision ${payload.precision}, samples ${payload.generate_samples ? 'on' : 'off'}, auto-import ${payload.auto_import_lora ? 'on' : 'off'}`,
+          `Advanced settings: optimizer ${payload.optimizer}, scheduler ${payload.scheduler}, alpha ${payload.network_alpha}, precision ${payload.precision}, samples ${payload.generate_samples ? 'on' : 'off'}, auto-import ${payload.auto_import_lora ? 'on' : 'off'}, rebuild-venv ${payload.rebuild_trainer_venv ? 'on' : 'off'}`,
         ],
         created_at: Date.now() / 1000,
         started_at: Date.now() / 1000,
