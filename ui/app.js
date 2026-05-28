@@ -10484,8 +10484,6 @@ function mockModels() {
       ],
       quants: [
         { id: 'bf16', label: 'BF16', description: 'Best quality',        vram_gb: 47, auto_min_vram_gb: 47 },
-        { id: 'int8', label: 'INT8', description: 'Faster, near-bf16',   vram_gb: 24, auto_min_vram_gb: 36 },
-        { id: 'nf4',  label: 'NF4',  description: 'Fits any modern card',vram_gb: 14, auto_min_vram_gb: 0  },
       ],
       param_groups: ['prompt', 'generation', 'dimensions'],
       param_keys:   ['prompt', 'negative_prompt', 'seed', 'steps', 'cfg', 'width', 'height'],
@@ -10521,8 +10519,6 @@ function mockModels() {
       ],
       quants: [
         { id: 'bf16', label: 'BF16', description: 'Best quality, high VRAM', vram_gb: 80, auto_min_vram_gb: 80 },
-        { id: 'int8', label: 'INT8', description: 'Faster, near-bf16',   vram_gb: 24, auto_min_vram_gb: 36 },
-        { id: 'nf4',  label: 'NF4',  description: 'Fits any modern card',vram_gb: 14, auto_min_vram_gb: 0  },
       ],
       param_groups: ['prompt', 'generation', 'dimensions'],
       param_keys:   ['prompt', 'negative_prompt', 'seed', 'steps', 'cfg', 'width', 'height'],
@@ -10555,8 +10551,6 @@ function mockModels() {
       ],
       quants: [
         { id: 'bf16', label: 'BF16', description: 'Best quality',        vram_gb: 47, auto_min_vram_gb: 47 },
-        { id: 'int8', label: 'INT8', description: 'Faster, near-bf16',   vram_gb: 24, auto_min_vram_gb: 36 },
-        { id: 'nf4',  label: 'NF4',  description: 'Fits any modern card',vram_gb: 14, auto_min_vram_gb: 0  },
       ],
       image_inputs: [
         { key: 'ref', label: 'Reference', required: true, hint: 'What to keep from the original' },
@@ -10592,8 +10586,6 @@ function mockModels() {
       ],
       quants: [
         { id: 'bf16', label: 'BF16', description: 'Best quality',        vram_gb: 47, auto_min_vram_gb: 47 },
-        { id: 'int8', label: 'INT8', description: 'Faster, near-bf16',   vram_gb: 24, auto_min_vram_gb: 36 },
-        { id: 'nf4',  label: 'NF4',  description: 'Fits any modern card',vram_gb: 14, auto_min_vram_gb: 0  },
       ],
       image_inputs: [
         { key: 'ref', label: 'Reference', required: true, hint: 'Subject, scene or product to preserve' },

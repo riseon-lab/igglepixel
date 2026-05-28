@@ -91,18 +91,6 @@ def ensure_venv(toolkit_dir: Path) -> Path:
     else:
         log("AI Toolkit requirements already installed")
     ensure_torchaudio(py)
-
-    # Ensure compatible transformers and tokenizers versions are installed inside the venv to insulate the trainer from host package upgrades
-    try:
-        # Check current installed versions in venv
-        probe_code = "import transformers; import tokenizers; print(transformers.__version__); print(tokenizers.__version__)"
-        proc = subprocess.run([str(py), "-c", probe_code], capture_output=True, text=True)
-        if proc.returncode != 0 or "4.49.0" not in proc.stdout:
-            log("Host package upgrade detected or trainer venv uninsulated. Installing compatible transformers/tokenizers inside the venv.")
-            run([str(py), "-m", "pip", "install", "--upgrade", "transformers==4.49.0", "tokenizers>=0.21,<0.22"])
-    except Exception as exc:
-        log(f"Failed to verify/insulate trainer venv: {exc}")
-
     return py
 
 

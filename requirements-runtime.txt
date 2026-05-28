@@ -53,13 +53,13 @@
 #   context that doesn't exist on sm_120. BF16 doesn't go through bnb so it
 #   masks the issue — only int8/NF4 paths break.
 #
-# Why torchao==0.15.0:
+# Why torchao==0.14.1:
 #   Qwen text-to-image INT8 uses Diffusers' TorchAO quantization backend by
 #   default. It avoids bitsandbytes CUDA stream failures seen on some L40S pod
-#   images while preserving the lower-VRAM INT8 path. Diffusers 0.38.0's
-#   transformers 4.57.6 is used to support both Qwen3ForCausalLM (required by Flux2-Klein)
-#   and HybridCache (required by Qwen-Image-2512 vision pipelines) while staying fully
-#   compatible with our torchao and diffusers pins.
+#   images while preserving the lower-VRAM INT8 path. Keep this pinned in the
+#   torch==2.8-compatible range while exposing the TorchAO tensor classes that
+#   Diffusers 0.38 tries to register for safe checkpoint loading. Newer torchao
+#   wheels can require a newer torch stack unless upgraded together.
 #
 # Why torch/torchvision/torchaudio pins here:
 #   Keep the shared backend Python on a single CUDA 12.8 PyTorch stack so
@@ -69,7 +69,6 @@
 
 diffusers==0.38.0
 peft==0.17.1
-transformers==4.57.6
 ftfy
 imageio
 imageio-ffmpeg
@@ -79,4 +78,4 @@ bitsandbytes>=0.46
 torch==2.8.0
 torchvision==0.23.0
 torchaudio==2.8.0
-torchao==0.15.0
+torchao==0.14.1

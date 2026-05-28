@@ -94,10 +94,7 @@ def pipeline_torchao_int8_quantization_config(*, components_to_quantize="transfo
     and is the preferred Qwen text-to-image INT8 backend.
     """
     try:
-        try:
-            from transformers import TorchAoConfig
-        except ImportError:
-            from diffusers import TorchAoConfig
+        from diffusers import TorchAoConfig
         from diffusers.quantizers import PipelineQuantizationConfig
         from torchao.quantization import Int8WeightOnlyConfig
     except Exception as e:
@@ -108,7 +105,7 @@ def pipeline_torchao_int8_quantization_config(*, components_to_quantize="transfo
 
     return PipelineQuantizationConfig(
         quant_mapping={
-            components_to_quantize: TorchAoConfig(quant_type="int8_weight_only"),
+            components_to_quantize: TorchAoConfig(Int8WeightOnlyConfig()),
         }
     )
 
