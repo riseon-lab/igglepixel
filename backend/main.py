@@ -4934,6 +4934,30 @@ def _delete_trainer_ai_toolkit_venv(job: dict, env: dict[str, str]) -> None:
     job["log_tail"] = job["log_tail"][-120:]
 
 
+def _trainer_returncode_message(rc: int) -> str:
+    message = f"Trainer command exited with code {rc}"
+    if rc < 0:
+        sig = -rc
+        try:
+            sig_name = signal.Signals(sig).name
+        except ValueError:
+            sig_name = f"signal {sig}"
+        return f"{message} ({sig_name})"
+
+    # Some shells and Python wrappers surface negative native/crash statuses as
+    # unsigned 8-bit exit codes. 245, for example, maps back to -11/SIGSEGV.
+    if rc > 127:
+        signed = rc - 256
+        sig = abs(signed)
+        if signed < 0:
+            try:
+                sig_name = signal.Signals(sig).name
+                return f"{message} (maps to {signed}/{sig_name}; check the previous trainer log lines)"
+            except ValueError:
+                pass
+    return message
+
+
 def _prepare_curated_training_dataset(source_dir: Path, target_dir: Path) -> dict:
     """Copy the included image/caption pairs into a job-local snapshot.
 
@@ -5601,7 +5625,7 @@ def _run_train_job(job_id: str) -> None:
             _mark_train_job_cancelled(job)
             return
         if rc != 0:
-            _set_train_job_error(job, f"Trainer command exited with code {rc}")
+            _set_train_job_error(job, _trainer_returncode_message(rc))
             return
     except Exception as e:
         _set_train_job_error(job, f"{type(e).__name__}: {e}")
