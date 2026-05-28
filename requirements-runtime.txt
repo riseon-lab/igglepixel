@@ -69,6 +69,7 @@
 
 diffusers==0.38.0
 peft==0.17.1
+transformers==4.48.2
 ftfy
 imageio
 imageio-ffmpeg
