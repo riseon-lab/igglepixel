@@ -14,6 +14,15 @@
   --glass-3:     rgba(255, 255, 255, 0.10);
   --glass-4:     rgba(255, 255, 255, 0.15);
 
+  /* Solid card fill for surfaces that SCROLL (grid/list cards). These
+   * can't use backdrop-filter: a blurred backdrop has to be re-sampled
+   * every frame as the card moves, and Chrome/Safari can't keep up on
+   * fast scroll — you get ghosting/tearing/garbage flashes. This opaque
+   * panel colour reads the same as the frosted glass did at rest but
+   * costs nothing to scroll. Fixed chrome (sidebar/topbar/drawer/modal)
+   * keeps real backdrop-filter since it doesn't move vs its backdrop. */
+  --card-fill:   rgba(19, 20, 26, 0.78);
+
   --line-1:      rgba(255, 255, 255, 0.07); /* Sharper 1px boundaries */
   --line-2:      rgba(255, 255, 255, 0.12);
   --line-3:      rgba(255, 255, 255, 0.22);
@@ -425,9 +434,9 @@ body::before {
 /* ── Cards / grids ─────────────────────────────────────────────────────── */
 .card {
   position: relative;
-  background: var(--glass-1);
-  backdrop-filter: blur(12px) saturate(150%);
-  -webkit-backdrop-filter: blur(12px) saturate(150%);
+  /* Solid fill instead of backdrop-filter — this card scrolls, and a
+   * blurred backdrop tears/ghosts on fast scroll. */
+  background: var(--card-fill);
   border: 1px solid var(--line-1);
   border-radius: var(--r-lg);
   overflow: hidden;
@@ -452,9 +461,9 @@ body::before {
   padding: 14px;
   cursor: pointer;
   transition: background 140ms var(--ease), border-color 140ms var(--ease), transform 140ms var(--ease);
-  background: var(--glass-1);
-  backdrop-filter: blur(12px) saturate(150%);
-  -webkit-backdrop-filter: blur(12px) saturate(150%);
+  /* Solid fill — model cards scroll in a grid; backdrop-filter here was
+   * the main source of fast-scroll ghosting on the Models page. */
+  background: var(--card-fill);
   border: 1px solid var(--line-1);
   border-radius: var(--r-lg);
   position: relative;
@@ -6367,6 +6376,8 @@ button.hf-file-row {
   --glass-2: var(--aura-panel-strong);
   --glass-3: rgba(255, 255, 255, 0.105);
   --glass-4: rgba(255, 255, 255, 0.16);
+  /* Opaque scrolling-card fill for the aura theme (see :root note). */
+  --card-fill: rgba(16, 18, 28, 0.82);
   --line-1: var(--aura-border);
   --line-2: rgba(255, 255, 255, 0.18);
   --line-3: var(--aura-border-strong);
@@ -7189,14 +7200,14 @@ select,
 }
 
 .dataset-card {
-  background: var(--glass-1);
-  backdrop-filter: blur(12px) saturate(150%);
-  -webkit-backdrop-filter: blur(12px) saturate(150%);
+  /* Solid fill — dataset library cards scroll; backdrop-filter ghosts
+   * on fast scroll. */
+  background: var(--card-fill);
   border: 1px solid var(--line-1);
   border-radius: var(--r-lg);
   position: relative;
   overflow: hidden;
-  transition: all 180ms var(--ease);
+  transition: transform 180ms var(--ease), border-color 180ms var(--ease);
 }
 
 .dataset-card::after {
@@ -7608,12 +7619,19 @@ select,
   overflow: hidden;
   border: 1px solid var(--line-1) !important;
   cursor: pointer;
-  transition: all 140ms var(--ease) !important;
-  /* Skip painting + layout for cells scrolled out of view; the browser
-   * keeps the geometry from contain-intrinsic-size so the scrollbar
-   * stays accurate. Massive win for datasets with 100+ images. */
+  /* Transition only the two properties that actually change on
+   * hover/select — `transition: all` made the browser watch every
+   * animatable property, which can stutter during scroll as layout
+   * values settle. */
+  transition: transform 140ms var(--ease), border-color 140ms var(--ease) !important;
+  /* Skip painting + layout for cells scrolled out of view. The
+   * intrinsic-size estimate MUST be close to the real rendered size,
+   * or the scrollbar jumps as the browser corrects its guess on fast
+   * scroll. The grid is `minmax(110px, 1fr)` square cells, so real
+   * cells land ~120-150px — 140px keeps the correction imperceptible.
+   * (Was 240px, which caused exactly that fast-scroll scrollbar jump.) */
   content-visibility: auto;
-  contain-intrinsic-size: 240px 240px;
+  contain-intrinsic-size: 140px 140px;
   contain: layout paint style;
 }
 
