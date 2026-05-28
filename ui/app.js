@@ -52,6 +52,7 @@ const state = {
   workspaceParams: {},        // model_id -> persisted prompt/settings while app is open
   promptModes:   readJSONStorage('forge_prompt_modes', {}),   // model_id -> 'builder' | 'raw'
   promptBuilders: readJSONStorage('forge_prompt_builders', {}),// model_id -> guided prompt fields
+  promptLibrary: readJSONStorage('forge_prompt_library', []),  // [{name, prompt}] from CSV uploads
   recents:       {},          // model_id -> [asset, …] (this session only)
   activePreviews: {},         // model_id -> focused asset in the hero preview
   imgInputs:     {},          // { model_id -> { ref:{img,enabled}, pose:{...}, ... } }
@@ -165,6 +166,19 @@ const PARAM_GROUPS = {
         min: 0, max: 1, step: 0.01, default: 0.65 },
     ],
   },
+  api: {
+    title: 'API',
+    fields: [
+      { key: 'quality', label: 'Quality', type: 'select',
+        options: ['auto', 'low', 'medium', 'high'], default: 'auto' },
+      { key: 'output_format', label: 'Format', type: 'select',
+        options: ['png', 'jpeg', 'webp'], default: 'png' },
+      { key: 'reference_mode', label: 'Reference mode', type: 'select',
+        options: ['auto', 'edit image', 'combine images', 'style transfer', 'product mockup', 'preserve details', 'inpaint by instruction', 'sketch to finished', 'character consistency'],
+        default: 'auto',
+        hint: 'Gemini/Nano Banana refs' },
+    ],
+  },
   precision: {
     title: 'Precision & quantization',
     fields: [
@@ -263,6 +277,7 @@ const PROMPT_BUILDER_SECTIONS = [
       { key: 'expression', label: 'Expression', type: 'select', options: ['neutral expression', 'soft smile', 'wide smile', 'serious expression', 'confident expression', 'pensive expression', 'curious expression', 'surprised expression', 'dreamy expression', 'intense gaze', 'laughing', 'subtle smirk', 'calm expression', 'melancholic expression', 'closed-mouth smile', 'open-mouth smile', 'raised eyebrow', 'focused expression', 'playful expression', 'defiant expression', 'tired expression', 'serene expression'] },
       { key: 'head', label: 'Head direction', type: 'select', options: ['looking at camera', 'looking left', 'looking right', 'looking up', 'looking down', 'looking over shoulder', 'eyes closed', 'gaze off-frame', 'chin lifted', 'chin lowered', 'looking past camera', 'looking into mirror', 'head tilted left', 'head tilted right', 'profile gaze', 'downcast eyes'] },
       { key: 'hairColor', label: 'Hair colour', type: 'select', options: ['black hair', 'dark brown hair', 'brown hair', 'chestnut hair', 'auburn hair', 'red hair', 'ginger hair', 'copper hair', 'strawberry blonde hair', 'dark blonde hair', 'blonde hair', 'platinum blonde hair', 'silver hair', 'grey hair', 'white hair', 'pastel pink hair', 'blue hair', 'green hair', 'purple hair', 'two-tone hair', 'dark roots', 'balayage hair', 'ombre hair', 'highlighted hair', 'shaved head', 'bald head'] },
+      { key: 'eyeColor', label: 'Eye colour', type: 'select', options: ['brown eyes', 'dark brown eyes', 'hazel eyes', 'green eyes', 'blue eyes', 'grey eyes', 'amber eyes', 'black eyes', 'violet eyes', 'heterochromia', 'bright eyes', 'deep-set eyes'] },
       { key: 'hairStyle', label: 'Hair style', type: 'select', options: ['long straight hair', 'long wavy hair', 'long curly hair', 'shoulder-length hair', 'short bob', 'lob haircut', 'pixie cut', 'buzz cut', 'undercut', 'slicked-back hair', 'middle part hair', 'side part hair', 'messy hair', 'braided hair', 'loose braid', 'box braids', 'cornrows', 'high ponytail', 'low ponytail', 'bun', 'messy bun', 'space buns', 'afro', 'locs', 'wet-look hair', 'windblown hair', 'fringe bangs', 'curtain bangs'] },
       { key: 'makeup', label: 'Make-up', type: 'select', options: ['no visible make-up', 'natural make-up', 'soft glam make-up', 'editorial make-up', 'smoky eye make-up', 'winged eyeliner', 'graphic eyeliner', 'glossy lips', 'matte lips', 'bold red lip', 'nude lip', 'metallic eye shadow', 'glitter make-up', 'goth make-up', 'avant-garde face paint', 'dewy skin finish', 'matte skin finish', 'sun-kissed blush', 'highlighter glow'] },
       { key: 'piercings', label: 'Piercings', type: 'select', options: ['no piercings visible', 'ear piercings', 'multiple ear piercings', 'nose ring', 'nose stud', 'septum piercing', 'lip piercing', 'eyebrow piercing', 'industrial piercing', 'helix piercings', 'facial piercing set', 'minimal jewellery piercings'] },
@@ -361,12 +376,28 @@ const DEFAULT_NEGATIVE_PROMPT =
   'extra fingers, extra arms, duplicate limbs, malformed hands, distorted face, bad anatomy, blurry, low quality, watermark, text artifacts, upside down subject';
 
 const loraId = (l) => l?.rel_path || l?.filename || '';
+const isFluxModelId = (id) => /^flux(?:-|2-|$)/.test(String(id || '').toLowerCase());
+const isFluxKleinModelId = (id) => /^flux2-klein(?:-|$)/.test(String(id || '').toLowerCase());
+const isFluxKleinLora = (l) => {
+  const modelId = String(l?.model_id || '').toLowerCase();
+  const baseModel = String(l?.base_model || '').toLowerCase();
+  const tags = Array.isArray(l?.tags) ? l.tags.map(t => String(t).toLowerCase()) : [];
+  return isFluxKleinModelId(modelId) ||
+    baseModel.includes('flux.2-klein') ||
+    tags.includes('flux') ||
+    tags.includes('flux-klein');
+};
+const loraCompatibleWithModel = (l, m) => {
+  if (!l || !m) return false;
+  if (l.model_id === m.id) return true;
+  return isFluxKleinModelId(m.id) && isFluxKleinLora(l);
+};
 const modelSupportsLora = (m) => {
   if (!m) return false;
   if (m.supports_lora === true) return true;
+  if (m.supports_lora === false) return false;
   const category = String(m.category || '').toLowerCase();
   if (['image', 'video'].includes(category)) return true;
-  if (m.supports_lora === false) return false;
   const id = String(m.id || '').toLowerCase();
   const runner = String(m.runner_module || '').toLowerCase();
   return /\b(qwen|flux|z-image|wan|hunyuan|ltx|longcat)/.test(id) ||
@@ -1146,6 +1177,8 @@ function bindShell() {
   $('#hfDownloadBtn')?.addEventListener('click', startHFDownload);
   $('#hfBrowseBtn')?.addEventListener('click', () => openHFBrowser());
   $('#hfRepo')?.addEventListener('keydown', (e) => { if (e.key === 'Enter') openHFBrowser(); });
+  $('#promptCsvUpload')?.addEventListener('change', importPromptCsv);
+  $('#promptLibraryClear')?.addEventListener('click', clearPromptLibrary);
   bindTrainerWizard();
   // HF Browser modal wiring. Each handler is null-safe so the modal works
   // even before any tab navigation has touched the markup.
@@ -1498,9 +1531,65 @@ async function installRuntimeDepsFromSettings() {
 function saveHFToken(value) {
   const token = (value || '').trim();
   state.settings.hf_token = token;
-  localStorage.setItem('forge_settings', JSON.stringify(state.settings));
+  saveSettings();
   syncHFTokenInputs();
   return token;
+}
+
+function saveSettings() {
+  localStorage.setItem('forge_settings', JSON.stringify(state.settings));
+}
+
+function apiImageProviderForVariant(variantId) {
+  const id = String(variantId || '').toLowerCase();
+  if (id.startsWith('openai-')) return 'openai';
+  if (id.startsWith('gemini-')) return 'gemini';
+  if (id.startsWith('stability-')) return 'stability';
+  if (id.startsWith('replicate-')) return 'replicate';
+  if (id.startsWith('fal-')) return 'fal';
+  return 'openai';
+}
+
+function apiImageVariants(m = state.selected) {
+  return Array.isArray(m?.variants) ? m.variants : [];
+}
+
+function preferredApiImageVariant(m = state.selected) {
+  const variants = apiImageVariants(m);
+  if (!variants.length) return null;
+  const keyed = variants.find(v => savedApiImageKey(apiImageProviderForVariant(v.id)));
+  return keyed || variants[0];
+}
+
+function selectedApiImageVariantId(m = state.selected) {
+  if (!m?.external_api) return '';
+  const raw = String(state.params?.api_model || '').trim();
+  if (raw && raw !== 'auto' && apiImageVariants(m).some(v => v.id === raw)) return raw;
+  return preferredApiImageVariant(m)?.id || selectedVariant(m)?.id || '';
+}
+
+function apiImageProviderLabel(provider) {
+  return ({
+    openai: 'OpenAI',
+    gemini: 'Gemini',
+    stability: 'Stability AI',
+    replicate: 'Replicate',
+    fal: 'fal',
+  })[provider] || provider || 'Provider';
+}
+
+function selectedApiImageProvider(m = state.selected) {
+  if (!m?.external_api) return '';
+  return apiImageProviderForVariant(selectedApiImageVariantId(m) || selectedVariant(m)?.id || modelStateOf(m.id).variant || '');
+}
+
+function savedApiImageKey(provider) {
+  return String(state.settings.api_image_keys?.[provider] || '').trim();
+}
+
+function apiImageKeyForModel(m = state.selected) {
+  const provider = selectedApiImageProvider(m);
+  return provider ? savedApiImageKey(provider) : '';
 }
 
 function currentHFToken(selector) {
@@ -1516,6 +1605,48 @@ function syncHFTokenInputs() {
     const el = $(sel);
     if (el && el.value !== token) el.value = token;
   });
+}
+
+function openApiImageKeySettings(m = state.selected) {
+  const provider = selectedApiImageProvider(m);
+  const keys = state.settings.api_image_keys || {};
+  $('#modalTitle').textContent = 'API image keys';
+  $('#modalMeta').textContent = provider
+    ? `${apiImageProviderLabel(provider)} selected`
+    : 'Saved in this browser';
+  const fields = [
+    ['openai', 'OpenAI', 'OPENAI_API_KEY'],
+    ['gemini', 'Gemini', 'GEMINI_API_KEY'],
+    ['stability', 'Stability AI', 'STABILITY_API_KEY'],
+    ['replicate', 'Replicate', 'REPLICATE_API_TOKEN'],
+    ['fal', 'fal', 'FAL_KEY'],
+  ];
+  $('#modalBody').innerHTML = `
+    <div class="field-stack">
+      ${fields.map(([id, label, env]) => `
+        <div class="field">
+          <label class="field-label">${label} <span class="hint">${env}</span></label>
+          <input class="text-input mask-text" data-api-image-key="${id}" value="${esc(keys[id] || '')}" placeholder="${esc(env)}" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false" data-1p-ignore="true" data-lpignore="true" data-bwignore="true" data-form-type="other">
+        </div>
+      `).join('')}
+    </div>`;
+  $('#modalFoot').innerHTML = `
+    <button class="btn ghost" id="modalCancel">Cancel</button>
+    <button class="btn primary" id="apiImageKeysSave"><svg><use href="#i-check"/></svg>Save keys</button>`;
+  $('#modalCancel').onclick = closeModal;
+  $('#apiImageKeysSave').onclick = () => {
+    const next = {};
+    $$('[data-api-image-key]', $('#modalBody')).forEach(input => {
+      const value = input.value.trim();
+      if (value) next[input.dataset.apiImageKey] = value;
+    });
+    state.settings.api_image_keys = next;
+    saveSettings();
+    closeModal();
+    if (state.selected?.external_api) renderWorkspace(state.selected, resolveFields(state.selected));
+    toast('API keys saved', 'success');
+  };
+  openModal();
 }
 
 // ── Views ────────────────────────────────────────────────────────────────
@@ -1560,6 +1691,7 @@ function switchView(name, push = true) {
     // poller so freshly-queued jobs appear right away when the user lands
     // back on the Downloads view.
     pokeDownloadQueuePoll();
+    renderPromptLibraryDownloads();
   } else {
     // Repaint so any active jobs that should be hidden on other views are
     // taken down — the panel is still scoped to the Downloads view today.
@@ -1723,7 +1855,7 @@ function modelVramProfile(m) {
   const values = modelVramValues(m);
   const min = Number(m.min_vram_gb) || (values.length ? Math.min(...values) : 0);
   const max = values.length ? Math.max(...values) : (Number(m.recommended_vram_gb) || min);
-  if (m.category === 'audio' && max === 0) {
+  if ((m.category === 'audio' || m.external_api) && max === 0) {
     return { min: 0, max: 0, label: 'CPU' };
   }
   return {
@@ -1824,6 +1956,16 @@ function openModelMenu(id) {
   if (!m) return;
   $('#modalTitle').textContent = m.name;
   $('#modalMeta').textContent  = m.hf_repo || '';
+  if (m.external_api) {
+    $('#modalBody').innerHTML = `
+      <div style="font-size:13px;color:var(--t-2);line-height:1.55">
+        This model uses provider APIs and stores no local weights to delete.
+      </div>`;
+    $('#modalFoot').innerHTML = `<button class="btn ghost" id="modalCancel">Close</button>`;
+    $('#modalCancel').onclick = closeModal;
+    openModal();
+    return;
+  }
   $('#modalBody').innerHTML = `
     <div style="font-size:13px;color:var(--t-2);line-height:1.55">
       Manage downloaded weights for this model. Deleting frees disk on the pod —
@@ -2171,9 +2313,9 @@ function renderDrawerBody() {
           <div class="label">Context</div>
           <div class="value">${contextStatText(m)}</div>
         </div>` : ''}
-      <div class="drawer-stat" style="grid-column:1/-1"><div class="label">HF repo</div><div class="value">${m.hf_repo
+      <div class="drawer-stat" style="grid-column:1/-1"><div class="label">${m.external_api ? 'Source' : 'HF repo'}</div><div class="value">${m.hf_repo
         ? `<a class="ext-link" href="https://huggingface.co/${esc(m.hf_repo)}" target="_blank" rel="noopener">${esc(m.hf_repo)} ↗</a>`
-        : '—'}</div></div>
+        : (m.external_api ? 'Provider API' : '—')}</div></div>
       ${m.license ? `
         <div class="drawer-stat" style="grid-column:1/-1">
           <div class="label">License</div>
@@ -2224,6 +2366,7 @@ function renderDrawerBody() {
       const auto = pickAutoVariant(m, vram);
       const cur  = modelStateOf(m.id).variant || 'auto';
       const autoHint = auto ? `auto picks ${auto.label}` : 'auto';
+      const label = m.external_api ? 'Provider model' : 'Size';
       const opts = m.variants.map(v => {
         const minVram = v.auto_min_vram_gb ?? 0;
         const tooBig = vram > 0 && vram < minVram - 4;
@@ -2231,7 +2374,7 @@ function renderDrawerBody() {
       }).join('');
       return `
         <div class="field" style="margin-top:14px">
-          <label class="field-label">Size <span class="hint">${autoHint}</span></label>
+          <label class="field-label">${label} <span class="hint">${autoHint}</span></label>
           <select class="select" id="drawerVariant">
             <option value="auto" ${cur === 'auto' ? 'selected' : ''}>Auto</option>
             ${opts}
@@ -2264,10 +2407,10 @@ function renderDrawerBody() {
         </div>`;
     })()}
 
-    <div class="field" style="margin-top:14px">
+    ${m.external_api ? '' : `<div class="field" style="margin-top:14px">
       <label class="field-label">HF token <span class="hint">gated repos</span></label>
       <input class="text-input mask-text" id="drawerHFToken" type="text" placeholder="hf_…" value="${esc(state.settings.hf_token || '')}" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false" data-1p-ignore="true" data-lpignore="true" data-bwignore="true" data-form-type="other">
-    </div>
+    </div>`}
 
     ${(() => {
       // Components (split-file transformer / VAE / text-encoder swaps).
@@ -2982,6 +3125,9 @@ function defaultParamsForModel(m, sections = resolveFields(m)) {
   if (variantDefaults && typeof variantDefaults === 'object') {
     Object.assign(params, variantDefaults);
   }
+  if (m.external_api && Array.isArray(m.variants) && m.variants.length) {
+    params.api_model = 'auto';
+  }
   return params;
 }
 
@@ -3060,9 +3206,28 @@ function renderWorkspace(m, sections) {
 
   // Settings grid — render every non-prompt, non-dim field as an inline control.
   // Width/height are rendered manually below the chips so they can be hidden cleanly.
-  const skipKeys = new Set(['prompt', 'negative_prompt', 'ref_image', 'width', 'height', 'seed']);
+  if (m.external_api && !state.params.api_model) state.params.api_model = 'auto';
+  const skipKeys = new Set(['prompt', 'negative_prompt', 'ref_image', 'width', 'height', 'seed', 'api_key', 'api_model']);
   const settingsFields = sections.flatMap(s => s.fields).filter(f => !skipKeys.has(f.key));
   let settingsHtml = settingsFields.map(f => renderField(f)).join('');
+  if (m.external_api) {
+    const variants = apiImageVariants(m);
+    const auto = preferredApiImageVariant(m);
+    const cur = state.params.api_model || 'auto';
+    const opts = variants.map(v => {
+      const provider = apiImageProviderForVariant(v.id);
+      const keyState = savedApiImageKey(provider) ? 'key saved' : 'no saved key';
+      return `<option value="${esc(v.id)}" ${cur === v.id ? 'selected' : ''}>${esc(v.label)} · ${esc(apiImageProviderLabel(provider))} · ${keyState}</option>`;
+    }).join('');
+    settingsHtml = `
+      <div class="field" style="grid-column:1/-1">
+        <label class="field-label">API model <span class="hint">${auto ? `auto: ${esc(auto.label)}` : 'auto uses saved keys'}</span></label>
+        <select class="select" id="wsApiModel" data-key="api_model">
+          <option value="auto" ${cur === 'auto' ? 'selected' : ''}>Auto · first provider with a saved key</option>
+          ${opts}
+        </select>
+      </div>` + settingsHtml;
+  }
   // Seed gets a custom random/fixed UI.
   if (promptKeys.includes('seed')) settingsHtml = renderSeedField() + settingsHtml;
   // Manual width/height beneath the chips.
@@ -3093,9 +3258,23 @@ function renderWorkspace(m, sections) {
         </select>
       </div>`;
   }
+  if (m.external_api) {
+    const provider = selectedApiImageProvider(m);
+    const saved = !!savedApiImageKey(provider);
+    settingsHtml += `
+      <div class="field api-key-panel" style="grid-column:1/-1">
+        <label class="field-label">Provider keys <span class="hint">${esc(apiImageProviderLabel(provider))}${saved ? ' saved' : ' not saved'}</span></label>
+        <button class="btn block" id="wsApiKeySettings" type="button"><svg><use href="#i-settings"/></svg>API keys</button>
+      </div>`;
+  }
   const settingsEl = $('#wsSettings');
   settingsEl.classList.toggle('video-controls', promptKeys.includes('num_frames') || promptKeys.includes('fps') || m.category === 'video');
   settingsEl.innerHTML = settingsHtml;
+  $('#wsApiKeySettings')?.addEventListener('click', () => openApiImageKeySettings(m));
+  $('#wsApiModel')?.addEventListener('change', (e) => {
+    state.params.api_model = e.target.value || 'auto';
+    renderWorkspace(m, resolveFields(m));
+  });
 
   // LoRA panel (with strength sliders + toggles)
   renderWorkspaceLoras(m);
@@ -3953,7 +4132,7 @@ function renderWorkspaceLoras(m) {
   const defaults = allDefaults.filter(l =>
     !l.applies_to || !currentVariant || l.applies_to.includes(currentVariant)
   );
-  const assigned = state.loras.filter(l => l.model_id === m.id);
+  const assigned = state.loras.filter(l => loraCompatibleWithModel(l, m));
 
   // Stable key per logical LoRA. Multi-file LoRAs use `id` since they don't
   // have a single filename; everything else falls back to filename.
@@ -4622,12 +4801,13 @@ function openLoraPicker(model) {
   $('#modalBody').innerHTML = `
     <div class="field-stack" style="max-height:50vh;overflow-y:auto">
       ${all.map(l => {
-        const checked = l.model_id === model.id ? 'checked' : '';
+        const compatible = loraCompatibleWithModel(l, model);
+        const checked = compatible ? 'checked' : '';
         const id = loraId(l);
         return `<label class="check-row ${checked ? 'on' : ''}">
           <input type="checkbox" data-lora-pick="${esc(id)}" ${checked}>
           <span class="name" title="${esc(l.rel_path || l.filename)}">${esc(l.rel_path || l.filename)}</span>
-          <span class="meta">${l.size_mb || '—'}MB${l.model_id && l.model_id !== model.id ? ` · also on ${esc(l.model_id)}` : ''}</span>
+          <span class="meta">${l.size_mb || '—'}MB${l.model_id && l.model_id !== model.id ? ` · compatible via ${esc(l.model_id)}` : ''}</span>
         </label>`;
       }).join('')}
     </div>`;
@@ -4651,7 +4831,7 @@ function openLoraPicker(model) {
     for (const c of checks) {
       const fn          = c.dataset.loraPick;
       const lora        = state.loras.find(l => loraId(l) === fn);
-      const wasAssigned = lora?.model_id === model.id;
+      const wasAssigned = loraCompatibleWithModel(lora, model);
       const nowAssigned = c.checked;
       if (wasAssigned === nowAssigned) continue;
       try {
@@ -4864,6 +5044,35 @@ function renderPromptBuilder(m) {
     return;
   }
   const values = promptBuilderForModel(m);
+  const library = Array.isArray(state.promptLibrary) ? state.promptLibrary : [];
+  const libraryHtml = library.length ? `
+    <section class="pb-section pb-library">
+      <div class="pb-section-title">Prompt Library</div>
+      <div class="pb-section-grid">
+        <label class="pb-field wide">
+          <span>Saved prompt</span>
+          <select class="select" data-pb-key="libraryPromptId">
+            <option value="">None / build from fields</option>
+            ${library.map((item, idx) => `<option value="${idx}" ${String(values.libraryPromptId || '') === String(idx) ? 'selected' : ''}>${esc(item.name)}</option>`).join('')}
+          </select>
+        </label>
+        <label class="pb-field">
+          <span>Hair colour</span>
+          <select class="select" data-pb-key="libraryHairColor">
+            <option value="">Use prompt default</option>
+            ${PROMPT_BUILDER_SECTIONS.find(s => s.id === 'face-hair')?.fields.find(f => f.key === 'hairColor')?.options.map(opt => `<option value="${esc(opt)}" ${values.libraryHairColor === opt ? 'selected' : ''}>${esc(opt)}</option>`).join('') || ''}
+          </select>
+        </label>
+        <label class="pb-field">
+          <span>Eye colour</span>
+          <select class="select" data-pb-key="libraryEyeColor">
+            <option value="">Use prompt default</option>
+            ${PROMPT_BUILDER_SECTIONS.find(s => s.id === 'face-hair')?.fields.find(f => f.key === 'eyeColor')?.options.map(opt => `<option value="${esc(opt)}" ${values.libraryEyeColor === opt ? 'selected' : ''}>${esc(opt)}</option>`).join('') || ''}
+          </select>
+        </label>
+      </div>
+    </section>
+  ` : '';
   const sections = PROMPT_BUILDER_SECTIONS.map(section => {
     const fields = section.fields.filter(f => !f.categories || f.categories.includes(m.category));
     if (!fields.length) return '';
@@ -4877,7 +5086,7 @@ function renderPromptBuilder(m) {
   `;
   }).join('');
   root.innerHTML = `
-    <div class="pb-stack">${sections}</div>
+    <div class="pb-stack">${libraryHtml}${sections}</div>
     <div class="pb-preview">
       <div class="pb-preview-label">Compiled prompt</div>
       <div class="pb-preview-text" id="wsPromptBuilderPreview">${esc(compilePromptBuilder(m) || 'Fill in a few fields to build the generation prompt.')}</div>
@@ -4926,6 +5135,15 @@ function updatePromptBuilderPreview(m) {
 function compilePromptBuilder(m = state.selected) {
   const values = promptBuilderForModel(m);
   const clean = (key) => String(values[key] || '').replace(/\s+/g, ' ').trim();
+  const library = Array.isArray(state.promptLibrary) ? state.promptLibrary : [];
+  const libraryPrompt = library[Number(values.libraryPromptId)]?.prompt || '';
+  const libraryTraits = [clean('libraryHairColor'), clean('libraryEyeColor')].filter(Boolean);
+  if (libraryPrompt.trim()) {
+    const base = libraryPrompt.replace(/\s+/g, ' ').trim();
+    return libraryTraits.length
+      ? `${base}. Keep the same prompt, with ${libraryTraits.join(' and ')}.`
+      : base;
+  }
   const add = (parts, label, key) => {
     const value = clean(key);
     if (value) parts.push(`${label}: ${value}`);
@@ -4951,6 +5169,7 @@ function compilePromptBuilder(m = state.selected) {
   add(faceHair, 'expression', 'expression');
   add(faceHair, 'head direction', 'head');
   add(faceHair, 'hair colour', 'hairColor');
+  add(faceHair, 'eye colour', 'eyeColor');
   add(faceHair, 'hair style', 'hairStyle');
   add(faceHair, 'make-up', 'makeup');
   add(faceHair, 'piercings', 'piercings');
@@ -5013,6 +5232,18 @@ function compilePromptBuilder(m = state.selected) {
   add(lightingStyle, 'image finish', 'finish');
   add(lightingStyle, 'extra style detail', 'styleDetail');
 
+  if (isFluxModelId(m?.id)) {
+    return compileFluxPrompt({
+      subject,
+      faceHair,
+      wardrobe,
+      scene,
+      poseAction,
+      camera,
+      lightingStyle,
+    });
+  }
+
   return [
     sectionText('Subject', subject),
     sectionText('Face and hair', faceHair),
@@ -5023,6 +5254,27 @@ function compilePromptBuilder(m = state.selected) {
     sectionText('Camera', camera),
     sectionText('Lighting and style', lightingStyle),
   ].filter(Boolean).join('. ');
+}
+
+function compileFluxPrompt(groups) {
+  const flatten = (items) => items
+    .map(item => String(item || '').replace(/^[^:]+:\s*/, '').trim())
+    .filter(Boolean);
+  const sentence = (lead, items) => {
+    const parts = flatten(items);
+    return parts.length ? `${lead} ${parts.join(', ')}.` : '';
+  };
+  const subject = sentence('Create one coherent image of', groups.subject);
+  const appearance = sentence('Subject details:', groups.faceHair);
+  const wardrobe = sentence('Wardrobe:', groups.wardrobe);
+  const scene = sentence('Environment:', groups.scene);
+  const pose = sentence('Pose and action:', groups.poseAction);
+  const camera = sentence('Camera and composition:', groups.camera);
+  const style = sentence('Lighting and finish:', groups.lightingStyle);
+  const adherence = 'Follow every listed attribute literally; keep identity, clothing, pose, background, lighting, and camera choices consistent with no extra subjects or unrequested text.';
+  return [subject, appearance, wardrobe, scene, pose, camera, style, adherence]
+    .filter(Boolean)
+    .join(' ');
 }
 
 function currentWorkspacePrompt() {
@@ -5279,6 +5531,14 @@ function snapshotJob() {
     const slot = slots[inp.key];
     const active = slot?.images?.[slot.idx ?? 0];
     if (slot?.enabled && active) params[inp.key === 'ref' ? 'ref_image' : inp.key] = active.path;
+  }
+  if (m.external_api) {
+    params.api_model = selectedApiImageVariantId(m);
+  }
+  if (m.external_api && !String(params.api_key || '').trim()) {
+    const provider = apiImageProviderForVariant(params.api_model);
+    const savedKey = savedApiImageKey(provider);
+    if (savedKey) params.api_key = savedKey;
   }
   const lstate = state.loraStates[m.id] || {};
   // Build the LoRA payload from the per-key state. Multi-file logical LoRAs
@@ -9652,6 +9912,99 @@ async function uploadFiles(files) {
   toast('Upload complete', 'success');
 }
 
+// ── Prompt library CSV ──────────────────────────────────────────────────
+// Browser-local prompt library. CSV columns can be `name,prompt` or the
+// first two columns; prompt selection is wired into the workspace builder.
+function parseCsvRows(text) {
+  const rows = [];
+  let row = [], cell = '', quoted = false;
+  const src = String(text || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+  for (let i = 0; i < src.length; i++) {
+    const ch = src[i];
+    if (quoted) {
+      if (ch === '"' && src[i + 1] === '"') { cell += '"'; i++; }
+      else if (ch === '"') quoted = false;
+      else cell += ch;
+      continue;
+    }
+    if (ch === '"') quoted = true;
+    else if (ch === ',') { row.push(cell); cell = ''; }
+    else if (ch === '\n') { row.push(cell); rows.push(row); row = []; cell = ''; }
+    else cell += ch;
+  }
+  row.push(cell);
+  if (row.some(v => String(v).trim())) rows.push(row);
+  return rows;
+}
+
+function normalizePromptLibraryRows(rows) {
+  if (!rows.length) return [];
+  const header = rows[0].map(h => String(h || '').trim().toLowerCase());
+  const nameIdx = header.findIndex(h => ['name', 'title', 'label'].includes(h));
+  const promptIdx = header.findIndex(h => ['prompt', 'text', 'description'].includes(h));
+  const hasHeader = nameIdx >= 0 || promptIdx >= 0;
+  const dataRows = hasHeader ? rows.slice(1) : rows;
+  const nIdx = hasHeader && nameIdx >= 0 ? nameIdx : 0;
+  const pIdx = hasHeader && promptIdx >= 0 ? promptIdx : 1;
+  return dataRows.map((r, i) => {
+    const name = String(r[nIdx] || '').trim();
+    const prompt = String(r[pIdx] || '').trim();
+    if (!prompt) return null;
+    return { name: name || `Prompt ${i + 1}`, prompt };
+  }).filter(Boolean);
+}
+
+function savePromptLibrary() {
+  writeJSONStorage('forge_prompt_library', state.promptLibrary || []);
+}
+
+function renderPromptLibraryDownloads() {
+  const count = $('#promptLibraryCount');
+  const list = $('#promptLibraryList');
+  const clear = $('#promptLibraryClear');
+  const items = Array.isArray(state.promptLibrary) ? state.promptLibrary : [];
+  if (count) count.textContent = `${items.length} prompt${items.length === 1 ? '' : 's'} saved`;
+  if (clear) clear.disabled = !items.length;
+  if (!list) return;
+  if (!items.length) {
+    list.innerHTML = '<div class="empty prompt-library-empty">Upload a CSV with name and prompt columns.</div>';
+    return;
+  }
+  list.innerHTML = items.slice(0, 6).map(item => `
+    <div class="prompt-library-row">
+      <div class="prompt-library-name">${esc(item.name)}</div>
+      <div class="prompt-library-prompt">${esc(item.prompt)}</div>
+    </div>
+  `).join('') + (items.length > 6 ? `<div class="prompt-library-more">+${items.length - 6} more</div>` : '');
+}
+
+async function importPromptCsv(e) {
+  const file = e.target?.files?.[0];
+  if (!file) return;
+  try {
+    const rows = parseCsvRows(await file.text());
+    const prompts = normalizePromptLibraryRows(rows);
+    if (!prompts.length) throw new Error('No prompts found');
+    state.promptLibrary = prompts;
+    savePromptLibrary();
+    renderPromptLibraryDownloads();
+    if (state.selected) renderPromptBuilder(state.selected);
+    toast(`Imported ${prompts.length} prompt${prompts.length === 1 ? '' : 's'}`, 'success');
+  } catch (err) {
+    toast(`CSV import failed: ${err.message || 'unknown'}`, 'error');
+  } finally {
+    e.target.value = '';
+  }
+}
+
+function clearPromptLibrary() {
+  state.promptLibrary = [];
+  savePromptLibrary();
+  renderPromptLibraryDownloads();
+  if (state.selected) renderPromptBuilder(state.selected);
+  toast('Prompt library cleared', 'info');
+}
+
 // ── HF download ──────────────────────────────────────────────────────────
 // Advanced "type the exact file path" path. Used when the user already
 // knows the rel_path inside the repo and doesn't want to open the browser.
@@ -9843,6 +10196,11 @@ function pokeDownloadQueuePoll() {
 }
 
 async function pollDownloadQueue() {
+  if (state.preview) {
+    renderDownloadQueue();
+    _dlPollTimer = null;
+    return;
+  }
   let data;
   try {
     data = await api.hfJobs();
@@ -10066,6 +10424,51 @@ function mockModels() {
       supports_lora: false,
       gpu_support: ['nvidia'],
       runtime_profile: 'vision-vllm'
+    },
+    {
+      id: 'api-image',
+      name: 'API Image Models',
+      category: 'image',
+      description: 'Hosted image generation through configured provider API keys.',
+      runner_module: 'backend.runners.api_image',
+      external_api: true,
+      min_vram_gb: 0,
+      recommended_vram_gb: 0,
+      supports_lora: false,
+      supports_preview: false,
+      gpu_support: ['cpu', 'nvidia'],
+      variants: [
+        { id: 'openai-gpt-image-2', label: 'OpenAI — GPT Image 2', auto_min_vram_gb: 0 },
+        { id: 'openai-gpt-image-15', label: 'OpenAI — GPT Image 1.5', auto_min_vram_gb: 0 },
+        { id: 'openai-gpt-image-1-mini', label: 'OpenAI — GPT Image 1 mini', auto_min_vram_gb: 0 },
+        { id: 'gemini-nano-banana-pro', label: 'Gemini — Nano Banana Pro', auto_min_vram_gb: 0 },
+        { id: 'gemini-nano-banana-2', label: 'Gemini — Nano Banana 2', auto_min_vram_gb: 0 },
+        { id: 'gemini-nano-banana', label: 'Gemini — Nano Banana', auto_min_vram_gb: 0 },
+        { id: 'stability-core', label: 'Stability — Stable Image Core', auto_min_vram_gb: 0 },
+        { id: 'stability-ultra', label: 'Stability — Stable Image Ultra', auto_min_vram_gb: 0 },
+        { id: 'replicate-flux-schnell', label: 'Replicate — FLUX Schnell', auto_min_vram_gb: 0 },
+        { id: 'fal-flux-2-turbo', label: 'fal — FLUX 2 Turbo', auto_min_vram_gb: 0 },
+      ],
+      image_inputs: [
+        { key: 'ref', label: 'Primary reference', required: false },
+        { key: 'ref2', label: 'Second reference', required: false },
+        { key: 'ref3', label: 'Style reference', required: false },
+        { key: 'ref4', label: 'Scene reference', required: false },
+        { key: 'ref5', label: 'Product reference', required: false },
+        { key: 'ref6', label: 'Pose or sketch', required: false },
+      ],
+      default_size_by_vram: [{ min_gb: 0, w: 1024, h: 1024 }],
+      param_groups: ['prompt', 'dimensions', 'api'],
+      param_keys: ['prompt', 'width', 'height', 'api_model', 'quality', 'output_format', 'reference_mode'],
+      param_overrides: {
+        width: { default: 1024, step: 512, min: 1024, max: 1536 },
+        height: { default: 1024, step: 512, min: 1024, max: 1536 },
+      },
+      aspect_presets: [
+        { label: 'Square', w: 1024, h: 1024 },
+        { label: 'Landscape', w: 1536, h: 1024 },
+        { label: 'Portrait', w: 1024, h: 1536 },
+      ],
     },
     {
       id: 'qwen-image', name: 'Qwen-Image', category: 'image',

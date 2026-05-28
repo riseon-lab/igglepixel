@@ -8,6 +8,7 @@ images in one call.
 
 from __future__ import annotations
 
+from importlib import metadata
 from pathlib import Path
 from typing import Optional
 
@@ -31,6 +32,31 @@ class Flux2KleinRunner(RunnerBase):
         self._pipe = None
         self._cancel = False
 
+    @staticmethod
+    def _package_version(name: str) -> str:
+        try:
+            return metadata.version(name)
+        except metadata.PackageNotFoundError:
+            return "missing"
+
+    @staticmethod
+    def _projection_shape(pipe) -> str:
+        transformer = getattr(pipe, "transformer", None)
+        for name in (
+            "transformer_blocks.0.attn.to_out.0",
+            "transformer_blocks.0.attn.add_q_proj",
+            "transformer_blocks.0.attn.to_q",
+        ):
+            module = transformer
+            for part in name.split("."):
+                module = getattr(module, part, None) if module is not None else None
+                if module is None:
+                    break
+            weight = getattr(module, "weight", None)
+            if weight is not None:
+                return f"{name}.weight={tuple(weight.shape)}"
+        return "unknown"
+
     def load(self) -> None:
         import os
         import torch
@@ -44,6 +70,14 @@ class Flux2KleinRunner(RunnerBase):
 
         token = os.environ.get("HF_TOKEN")
         quant = os.environ.get("FORGE_QUANT", "bf16").lower()
+        print(
+            "[runner] versions "
+            f"torch={torch.__version__} "
+            f"diffusers={self._package_version('diffusers')} "
+            f"peft={self._package_version('peft')} "
+            f"torchao={self._package_version('torchao')}",
+            flush=True,
+        )
 
         kwargs = {"torch_dtype": torch.bfloat16, "token": token}
         if quant in ("int8", "nf4"):
@@ -61,6 +95,7 @@ class Flux2KleinRunner(RunnerBase):
             print(f"[runner] loading {self.model_name} (bf16)...", flush=True)
 
         pipe = Flux2KleinPipeline.from_pretrained(self.HF_REPO, **kwargs)
+        print(f"[runner] loaded repo={self.HF_REPO} projection={self._projection_shape(pipe)}", flush=True)
 
         if torch.cuda.is_available() and quant == "bf16":
             try:

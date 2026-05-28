@@ -651,6 +651,14 @@ def weight_status(model_id: str, variant: Optional[str] = Query(None)):
     model = next((m for m in registry["models"] if m["id"] == model_id), None)
     if not model:
         raise HTTPException(404, "Model not found")
+    if model.get("external_api"):
+        return {
+            "downloading": False,
+            "downloaded":  True,
+            "progress":    1.0,
+            "error":       None,
+            "access":      _download_access(model, variant),
+        }
     repo, extra_files, extra_repos, snapshot = _download_plan(model, variant)
     tracked = downloads.get(_download_key(model_id, variant))
     cached = _download_plan_cached(repo, extra_files, extra_repos, snapshot)
@@ -675,6 +683,8 @@ def model_download(model_id: str, body: DownloadBody):
     model = next((m for m in registry["models"] if m["id"] == model_id), None)
     if not model:
         raise HTTPException(404, "Model not found")
+    if model.get("external_api"):
+        return {"status": "already_cached", "repo": "", "variant": body.variant}
     repo, extra_files, extra_repos, snapshot = _download_plan(model, body.variant)
     if not repo:
         raise HTTPException(400, "Model has no hf_repo to download")
@@ -5017,6 +5027,21 @@ def _unique_lora_destination(base_name: str) -> Path:
     return dest
 
 
+def _trainer_lora_model_id(req: TrainJobRequest) -> str:
+    if req.trainer_id == TRAINER_ID_FLUX_KLEIN_CHARACTER:
+        base = (req.base_model or "").lower()
+        if "flux.2-klein-base-9b" in base:
+            return "flux2-klein-base-9b"
+        if "flux.2-klein-9b" in base:
+            return "flux2-klein-9b"
+        if "flux.2-klein-4b" in base:
+            return "flux2-klein-4b"
+        return "flux2-klein-9b"
+    if req.trainer_id == TRAINER_ID_QWEN_CHARACTER:
+        return "qwen-image-edit"
+    return ""
+
+
 def _import_trainer_outputs(job: dict, req: TrainJobRequest, output_dir: Path, latest_only: bool = False) -> list[dict]:
     output_name = job["output_name"]
     candidates = _trainer_output_candidates(output_dir, output_name, req.steps)
@@ -5042,7 +5067,7 @@ def _import_trainer_outputs(job: dict, req: TrainJobRequest, output_dir: Path, l
         meta_path = dest.with_suffix(dest.suffix + ".meta.json")
         meta = {
             "tags": ["trained", family_tag, model_tag, "character"],
-            "model_id": "",
+            "model_id": _trainer_lora_model_id(req),
             "trainer_id": req.trainer_id,
             "base_model": req.base_model,
             "trigger_phrase": req.trigger_phrase,

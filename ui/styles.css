@@ -1702,6 +1702,10 @@ body::before {
   line-height: 1.45;
   white-space: pre-wrap;
 }
+.pb-library {
+  border-color: rgba(255,255,255,0.16);
+  background: rgba(255,255,255,0.045);
+}
 
 .ws-prompt {
   width: 100%;
@@ -3875,6 +3879,44 @@ body::before {
 
 .downloads-grid { display: grid; gap: 16px; max-width: 720px; }
 .hf-card .field-stack { display: flex; flex-direction: column; gap: 12px; }
+.prompt-library-list {
+  display: grid;
+  gap: 8px;
+  max-height: 240px;
+  overflow: auto;
+}
+.prompt-library-row {
+  border: 1px solid var(--line-1);
+  border-radius: 8px;
+  background: var(--glass-1);
+  padding: 9px 10px;
+  min-width: 0;
+}
+.prompt-library-name {
+  color: var(--t-1);
+  font-size: 12px;
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.prompt-library-prompt {
+  color: var(--t-3);
+  font-size: 11.5px;
+  line-height: 1.4;
+  margin-top: 3px;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.prompt-library-empty,
+.prompt-library-more {
+  min-height: 0;
+  padding: 10px;
+  color: var(--t-3);
+  font-size: 12px;
+}
 .hf-advanced { border: 1px solid var(--line-1); border-radius: 8px; padding: 0; }
 .hf-advanced > summary {
   list-style: none;

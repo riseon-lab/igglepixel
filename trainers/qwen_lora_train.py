@@ -210,6 +210,8 @@ def is_flux_klein_base(base_model: str) -> bool:
 
 
 def model_arch(base_model: str) -> str:
+    if is_flux_klein_base(base_model):
+        return "flux2_klein_base_9b"
     if is_flux_klein(base_model):
         return "flux2_klein_4b" if "4b" in base_model.lower() else "flux2_klein_9b"
     if "Edit" in base_model:
@@ -458,12 +460,62 @@ def check_dataset(dataset_dir: Path) -> None:
     log(f"Dataset ready for AI Toolkit: {len(images)} images")
 
 
+def write_transformers_startup_patch(output_dir: Path) -> Path:
+    """Patch a Transformers tokenizer metadata lookup that can require network.
+
+    Recent Transformers builds call huggingface_hub.model_info() inside the
+    Mistral tokenizer-regex guard, even for Qwen tokenizers. If the model files
+    are cached but the pod temporarily has no network, that unrelated lookup can
+    abort training. The patch only intercepts that guard's imported model_info
+    for known non-Mistral image-training models; normal HF downloads still use
+    huggingface_hub directly.
+    """
+    patch_dir = output_dir / "python_startup"
+    patch_dir.mkdir(parents=True, exist_ok=True)
+    patch_path = patch_dir / "sitecustomize.py"
+    patch_path.write_text(
+        """
+from types import SimpleNamespace
+
+try:
+    import transformers.tokenization_utils_tokenizers as _tok_utils
+
+    _orig_model_info = getattr(_tok_utils, "model_info", None)
+
+    def _igglepixel_safe_model_info(model_id, *args, **kwargs):
+        mid = str(model_id or "").lower()
+        try:
+            if _orig_model_info is not None:
+                return _orig_model_info(model_id, *args, **kwargs)
+        except Exception:
+            if mid.startswith("qwen/") or "qwen" in mid or "flux.2-klein" in mid:
+                return SimpleNamespace(config={"model_type": "qwen2"})
+            raise
+        return SimpleNamespace(config={})
+
+    if _orig_model_info is not None:
+        _tok_utils.model_info = _igglepixel_safe_model_info
+except Exception:
+    pass
+""".lstrip(),
+        encoding="utf-8",
+    )
+    return patch_dir
+
+
 def run_training(py: Path, toolkit_dir: Path, config_path: Path) -> None:
     env = os.environ.copy()
     env.setdefault("HF_HUB_ENABLE_HF_TRANSFER", "1")
     env.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+    patch_dir = write_transformers_startup_patch(config_path.parents[1])
+    env["PYTHONPATH"] = (
+        str(patch_dir)
+        if not env.get("PYTHONPATH")
+        else str(patch_dir) + os.pathsep + env["PYTHONPATH"]
+    )
     cmd = [str(py), "run.py", str(config_path)]
     log("Starting AI Toolkit training")
+    log(f"Using trainer Python startup patch: {patch_dir}")
     log("$ " + " ".join(shlex.quote(str(a)) for a in cmd))
     proc = subprocess.Popen(
         cmd,

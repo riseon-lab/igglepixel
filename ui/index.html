@@ -1632,6 +1632,20 @@ Do not use the subject's name, trigger tags, gender nouns, guessed age, ethnicit
             </details>
           </div>
         </div>
+        <div class="card hf-card prompt-library-card" style="padding:14px">
+          <div class="field-stack">
+            <div>
+              <div class="dl-queue-title">Prompt library</div>
+              <div class="page-sub" id="promptLibraryCount" style="font-size:12px;margin-top:4px">0 prompts saved</div>
+            </div>
+            <div class="field">
+              <label class="field-label">CSV prompts <span class="hint">name,prompt</span></label>
+              <input class="text-input" id="promptCsvUpload" type="file" accept=".csv,text/csv">
+            </div>
+            <div class="prompt-library-list" id="promptLibraryList"></div>
+            <button class="btn block" id="promptLibraryClear" type="button" disabled><svg><use href="#i-trash"/></svg>Clear prompt library</button>
+          </div>
+        </div>
       </div>
     </section>
 

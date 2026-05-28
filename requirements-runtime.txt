@@ -22,7 +22,7 @@
 #   imageio silently produces non-zero but invalid mp4s (missing/bad moov,
 #   no faststart, fps mismatch) — videos that "exist" but show 0 seconds.
 #
-# Why diffusers>=0.38.0:
+# Why diffusers==0.38.0:
 #   Qwen/Qwen-Image-Edit-2511 uses QwenImageEditPlusPipeline. Older image
 #   builds may have the original Qwen edit pipeline but not the 2511-ready
 #   Plus loader. Qwen/Qwen-Image-2512 also expects a current QwenImage
@@ -31,7 +31,13 @@
 #   LongCatImagePipeline/LongCatImageEditPipeline, and InstantX Qwen
 #   ControlNet uses QwenImageControlNetPipeline/QwenImageControlNetInpaintPipeline.
 #   HiDream uses HiDreamImagePipeline. SenseNova-U1 is intentionally isolated
-#   in a runtime profile because it pins torch/Python more aggressively.
+#   in a runtime profile because it pins torch/Python more aggressively. Keep
+#   this pinned so LoRA loading semantics cannot drift between pod restarts.
+#
+# Why peft==0.17.1:
+#   PEFT is the backend Diffusers uses for LoRA adapter loading and activation.
+#   Keep it pinned with Diffusers so the same LoRA does not see a different
+#   loader implementation after a fresh runtime install.
 #
 # Why uv + virtualenv:
 #   Per-runtime profiles (registry `runtime_profiles` entries) need isolated
@@ -47,10 +53,13 @@
 #   context that doesn't exist on sm_120. BF16 doesn't go through bnb so it
 #   masks the issue — only int8/NF4 paths break.
 #
-# Why torchao>=0.15:
+# Why torchao==0.14.1:
 #   Qwen text-to-image INT8 uses Diffusers' TorchAO quantization backend by
 #   default. It avoids bitsandbytes CUDA stream failures seen on some L40S pod
-#   images while preserving the lower-VRAM INT8 path.
+#   images while preserving the lower-VRAM INT8 path. Keep this pinned in the
+#   torch==2.8-compatible range while exposing the TorchAO tensor classes that
+#   Diffusers 0.38 tries to register for safe checkpoint loading. Newer torchao
+#   wheels can require a newer torch stack unless upgraded together.
 #
 # Why torch/torchvision/torchaudio pins here:
 #   Keep the shared backend Python on a single CUDA 12.8 PyTorch stack so
@@ -58,8 +67,8 @@
 #   builds. Qwen/vLLM vision is intentionally isolated in its runtime profile;
 #   do not install vLLM into the backend manager process from this file.
 
-diffusers>=0.38.0
-peft
+diffusers==0.38.0
+peft==0.17.1
 ftfy
 imageio
 imageio-ffmpeg
@@ -69,4 +78,4 @@ bitsandbytes>=0.46
 torch==2.8.0
 torchvision==0.23.0
 torchaudio==2.8.0
-torchao>=0.15
+torchao==0.14.1

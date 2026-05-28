@@ -886,6 +886,108 @@
       ]
     },
     {
+      "id": "api-image",
+      "name": "API Image Models",
+      "category": "image",
+      "description": "Hosted image generation through configured provider API keys. Launch once, then choose GPT Image or Gemini Nano Banana variants and optionally pass reference images through the same encrypted asset flow.",
+      "runner_module": "backend.runners.api_image",
+      "external_api": true,
+      "license": {
+        "type": "api",
+        "label": "Provider terms",
+        "url": "https://platform.openai.com/docs/guides/image-generation"
+      },
+      "min_vram_gb": 0,
+      "recommended_vram_gb": 0,
+      "supports_lora": false,
+      "supports_preview": false,
+      "gpu_support": ["cpu", "nvidia"],
+      "variants": [
+        {
+          "id": "openai-gpt-image-2",
+          "label": "OpenAI — GPT Image 2",
+          "description": "Latest OpenAI image generation and editing model. Uses OPENAI_API_KEY or the per-run API key field.",
+          "auto_min_vram_gb": 0
+        },
+        {
+          "id": "openai-gpt-image-15",
+          "label": "OpenAI — GPT Image 1.5",
+          "description": "Uses OPENAI_API_KEY or the per-run API key field.",
+          "auto_min_vram_gb": 0
+        },
+        {
+          "id": "openai-gpt-image-1-mini",
+          "label": "OpenAI — GPT Image 1 mini",
+          "description": "Lower-cost OpenAI image model.",
+          "auto_min_vram_gb": 0
+        },
+        {
+          "id": "gemini-nano-banana-pro",
+          "label": "Gemini — Nano Banana Pro",
+          "description": "Uses GEMINI_API_KEY or the per-run API key field.",
+          "auto_min_vram_gb": 0
+        },
+        {
+          "id": "gemini-nano-banana-2",
+          "label": "Gemini — Nano Banana 2",
+          "description": "Gemini 3.1 Flash Image Preview, optimized for fast native image generation and image edits.",
+          "auto_min_vram_gb": 0
+        },
+        {
+          "id": "gemini-nano-banana",
+          "label": "Gemini — Nano Banana",
+          "description": "Fast Gemini native image model.",
+          "auto_min_vram_gb": 0
+        },
+        {
+          "id": "stability-core",
+          "label": "Stability — Stable Image Core",
+          "description": "Uses STABILITY_API_KEY or the saved Stability key.",
+          "auto_min_vram_gb": 0
+        },
+        {
+          "id": "stability-ultra",
+          "label": "Stability — Stable Image Ultra",
+          "description": "Uses STABILITY_API_KEY or the saved Stability key.",
+          "auto_min_vram_gb": 0
+        },
+        {
+          "id": "replicate-flux-schnell",
+          "label": "Replicate — FLUX Schnell",
+          "description": "Uses REPLICATE_API_TOKEN or the saved Replicate key.",
+          "auto_min_vram_gb": 0
+        },
+        {
+          "id": "fal-flux-2-turbo",
+          "label": "fal — FLUX 2 Turbo",
+          "description": "Uses FAL_KEY or the saved fal key.",
+          "auto_min_vram_gb": 0
+        }
+      ],
+      "image_inputs": [
+        { "key": "ref",  "label": "Primary reference", "required": false, "hint": "Main edit, subject, or style reference" },
+        { "key": "ref2", "label": "Second reference", "required": false, "hint": "Additional subject, object, or scene reference" },
+        { "key": "ref3", "label": "Style reference", "required": false, "hint": "Optional palette, texture, lighting, or medium reference" },
+        { "key": "ref4", "label": "Scene reference", "required": false, "hint": "Optional background, environment, or layout reference" },
+        { "key": "ref5", "label": "Product reference", "required": false, "hint": "Optional product, logo, packaging, or detail reference" },
+        { "key": "ref6", "label": "Pose or sketch", "required": false, "hint": "Optional pose, sketch, or composition reference" }
+      ],
+      "default_size_by_vram": [
+        { "min_gb": 0, "w": 1024, "h": 1024 }
+      ],
+      "param_groups": ["prompt", "dimensions", "api"],
+      "param_keys": ["prompt", "width", "height", "api_model", "quality", "output_format", "reference_mode"],
+      "param_overrides": {
+        "width":  { "default": 1024, "step": 512, "min": 1024, "max": 1536 },
+        "height": { "default": 1024, "step": 512, "min": 1024, "max": 1536 }
+      },
+      "aspect_presets": [
+        { "label": "Square",        "w": 1024, "h": 1024 },
+        { "label": "Landscape",     "w": 1536, "h": 1024 },
+        { "label": "Portrait",      "w": 1024, "h": 1536 }
+      ]
+    },
+    {
       "id": "flux-dev",
       "name": "FLUX.1-dev",
       "category": "image",
