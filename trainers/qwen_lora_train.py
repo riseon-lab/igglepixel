@@ -121,6 +121,7 @@ def ensure_venv(toolkit_dir: Path) -> Path:
         stamp.write_text(str(time.time()), encoding="utf-8")
     else:
         log("AI Toolkit requirements already installed")
+    ensure_numpy_scipy_abi(py)
     ensure_qwen3_vl_transformers(py)
     ensure_torchaudio(py)
     log_python_stack(py)
@@ -144,6 +145,51 @@ def ensure_qwen3_vl_transformers(py: Path) -> None:
     run([str(py), "-m", "pip", "install", "--upgrade", "transformers>=4.57.0"])
     if not py_import_ok(py, module):
         raise SystemExit("AI Toolkit transformers upgrade did not provide qwen3_vl support")
+
+
+def numpy_scipy_probe(py: Path) -> tuple[bool, str]:
+    code = (
+        "import numpy\n"
+        "import scipy\n"
+        "import scipy.stats\n"
+        "from diffusers import DPMSolverMultistepScheduler\n"
+        "print('numpy=' + numpy.__version__)\n"
+        "print('scipy=' + scipy.__version__)\n"
+        "print('diffusers_scheduler=ok')\n"
+    )
+    proc = subprocess.run([str(py), "-c", code], capture_output=True, text=True)
+    output = (proc.stdout + proc.stderr).strip()
+    return proc.returncode == 0, output
+
+
+def ensure_numpy_scipy_abi(py: Path) -> None:
+    ok, details = numpy_scipy_probe(py)
+    if ok:
+        return
+    log("Repairing AI Toolkit NumPy/SciPy binary compatibility")
+    if details:
+        log("NumPy/SciPy probe failed:")
+        for line in details.splitlines()[-12:]:
+            log("  " + line)
+    run([
+        str(py),
+        "-m",
+        "pip",
+        "install",
+        "--upgrade",
+        "--force-reinstall",
+        "numpy==1.26.4",
+        "scipy==1.11.4",
+    ])
+    ok, details = numpy_scipy_probe(py)
+    if ok:
+        log("AI Toolkit NumPy/SciPy ABI repaired")
+        return
+    if details:
+        log("NumPy/SciPy probe still failed:")
+        for line in details.splitlines()[-12:]:
+            log("  " + line)
+    raise SystemExit("AI Toolkit NumPy/SciPy binary compatibility repair failed")
 
 
 def torch_build(py: Path) -> tuple[str, str]:
@@ -180,7 +226,7 @@ def log_python_stack(py: Path) -> None:
         "import importlib.metadata as md\n"
         "import torch\n"
         "print('torch=' + torch.__version__ + ' cuda=' + str(torch.version.cuda))\n"
-        "for pkg in ('diffusers', 'transformers', 'accelerate', 'bitsandbytes', 'torchvision', 'torchaudio'):\n"
+        "for pkg in ('numpy', 'scipy', 'diffusers', 'transformers', 'accelerate', 'bitsandbytes', 'torchvision', 'torchaudio'):\n"
         "    try:\n"
         "        print(pkg + '=' + md.version(pkg))\n"
         "    except Exception as exc:\n"
