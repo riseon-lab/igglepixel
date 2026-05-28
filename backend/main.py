@@ -5565,6 +5565,7 @@ def _run_train_job(job_id: str) -> None:
     if req.rebuild_trainer_venv:
         env["IGGLEPIXEL_AI_TOOLKIT_REINSTALL"] = "1"
         env["IGGLEPIXEL_AI_TOOLKIT_DELETE_VENV"] = "1"
+        env["IGGLEPIXEL_AI_TOOLKIT_RECLONE"] = "1"
         try:
             _delete_trainer_ai_toolkit_venv(job, env)
         except Exception as exc:

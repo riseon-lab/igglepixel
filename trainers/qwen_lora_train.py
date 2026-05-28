@@ -22,6 +22,7 @@ from pathlib import Path
 WORKSPACE = Path(os.environ.get("WORKSPACE", "/workspace"))
 TOOLKIT_REPO = os.environ.get("IGGLEPIXEL_AI_TOOLKIT_REPO", "https://github.com/ostris/ai-toolkit.git")
 TOOLKIT_DIR = Path(os.environ.get("IGGLEPIXEL_AI_TOOLKIT_DIR", WORKSPACE / "repos" / "ai-toolkit"))
+TOOLKIT_REF = os.environ.get("IGGLEPIXEL_AI_TOOLKIT_REF", "main").strip() or "main"
 VENV_DIR = Path(os.environ.get("IGGLEPIXEL_AI_TOOLKIT_VENV", WORKSPACE / "venvs" / "ai-toolkit"))
 
 
@@ -53,18 +54,38 @@ def py_bool(value: str | None, default: bool = True) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def safe_workspace_child(path: Path, root: Path, label: str) -> Path:
+    resolved = path.resolve()
+    root_resolved = root.resolve()
+    try:
+        resolved.relative_to(root_resolved)
+    except ValueError:
+        raise SystemExit(f"Refusing to delete {label} outside {root_resolved}: {resolved}")
+    if resolved == root_resolved:
+        raise SystemExit(f"Refusing to delete {label} root: {resolved}")
+    return resolved
+
+
 def ensure_ai_toolkit() -> Path:
     WORKSPACE.mkdir(parents=True, exist_ok=True)
     TOOLKIT_DIR.parent.mkdir(parents=True, exist_ok=True)
+    if py_bool(os.environ.get("IGGLEPIXEL_AI_TOOLKIT_RECLONE"), False) and TOOLKIT_DIR.exists():
+        safe_workspace_child(TOOLKIT_DIR, WORKSPACE / "repos", "AI Toolkit checkout")
+        log(f"Deleting AI Toolkit checkout before bootstrap: {TOOLKIT_DIR}")
+        shutil.rmtree(TOOLKIT_DIR)
     if not (TOOLKIT_DIR / "run.py").exists():
         if TOOLKIT_DIR.exists():
             raise SystemExit(f"{TOOLKIT_DIR} exists but does not look like ai-toolkit")
         log(f"Cloning AI Toolkit into {TOOLKIT_DIR}")
         run(["git", "clone", "--depth", "1", TOOLKIT_REPO, str(TOOLKIT_DIR)])
+        if TOOLKIT_REF != "main":
+            log(f"Checking out AI Toolkit ref {TOOLKIT_REF}")
+            run(["git", "fetch", "--depth", "1", "origin", TOOLKIT_REF], cwd=TOOLKIT_DIR)
+            run(["git", "checkout", "--force", "FETCH_HEAD"], cwd=TOOLKIT_DIR)
     elif py_bool(os.environ.get("IGGLEPIXEL_AI_TOOLKIT_UPDATE"), False):
-        log("Updating AI Toolkit")
-        run(["git", "fetch", "--depth", "1", "origin", "main"], cwd=TOOLKIT_DIR)
-        run(["git", "reset", "--hard", "origin/main"], cwd=TOOLKIT_DIR)
+        log(f"Updating AI Toolkit to {TOOLKIT_REF}")
+        run(["git", "fetch", "--depth", "1", "origin", TOOLKIT_REF], cwd=TOOLKIT_DIR)
+        run(["git", "reset", "--hard", "FETCH_HEAD"], cwd=TOOLKIT_DIR)
 
     run(["git", "submodule", "update", "--init", "--recursive"], cwd=TOOLKIT_DIR)
     return TOOLKIT_DIR
@@ -72,6 +93,7 @@ def ensure_ai_toolkit() -> Path:
 
 def ensure_venv(toolkit_dir: Path) -> Path:
     if py_bool(os.environ.get("IGGLEPIXEL_AI_TOOLKIT_DELETE_VENV"), False) and VENV_DIR.exists():
+        safe_workspace_child(VENV_DIR, WORKSPACE / "venvs", "AI Toolkit venv")
         log(f"Deleting AI Toolkit venv before bootstrap: {VENV_DIR}")
         shutil.rmtree(VENV_DIR)
     py = VENV_DIR / "bin" / "python"
@@ -79,11 +101,17 @@ def ensure_venv(toolkit_dir: Path) -> Path:
     if not py.exists():
         VENV_DIR.parent.mkdir(parents=True, exist_ok=True)
         log(f"Creating AI Toolkit venv at {VENV_DIR}")
+        venv_args = [sys.executable, "-m", "venv"]
+        if py_bool(os.environ.get("IGGLEPIXEL_AI_TOOLKIT_SYSTEM_SITE"), False):
+            venv_args.append("--system-site-packages")
         try:
-            run([sys.executable, "-m", "venv", "--system-site-packages", str(VENV_DIR)])
+            run([*venv_args, str(VENV_DIR)])
         except subprocess.CalledProcessError:
             log("python -m venv failed; trying virtualenv fallback")
-            run([sys.executable, "-m", "virtualenv", "--system-site-packages", str(VENV_DIR)])
+            virtualenv_args = [sys.executable, "-m", "virtualenv"]
+            if py_bool(os.environ.get("IGGLEPIXEL_AI_TOOLKIT_SYSTEM_SITE"), False):
+                virtualenv_args.append("--system-site-packages")
+            run([*virtualenv_args, str(VENV_DIR)])
 
     reinstall = py_bool(os.environ.get("IGGLEPIXEL_AI_TOOLKIT_REINSTALL"), False)
     if reinstall or not stamp.exists():
@@ -95,6 +123,7 @@ def ensure_venv(toolkit_dir: Path) -> Path:
         log("AI Toolkit requirements already installed")
     ensure_qwen3_vl_transformers(py)
     ensure_torchaudio(py)
+    log_python_stack(py)
     return py
 
 
@@ -146,6 +175,25 @@ def torchaudio_probe(py: Path) -> tuple[bool, str]:
     return proc.returncode == 0, output
 
 
+def log_python_stack(py: Path) -> None:
+    code = (
+        "import importlib.metadata as md\n"
+        "import torch\n"
+        "print('torch=' + torch.__version__ + ' cuda=' + str(torch.version.cuda))\n"
+        "for pkg in ('diffusers', 'transformers', 'accelerate', 'bitsandbytes', 'torchvision', 'torchaudio'):\n"
+        "    try:\n"
+        "        print(pkg + '=' + md.version(pkg))\n"
+        "    except Exception as exc:\n"
+        "        print(pkg + '=missing:' + type(exc).__name__)\n"
+    )
+    proc = subprocess.run([str(py), "-c", code], capture_output=True, text=True)
+    output = (proc.stdout + proc.stderr).strip()
+    if output:
+        log("AI Toolkit Python stack:")
+        for line in output.splitlines()[-10:]:
+            log("  " + line)
+
+
 def install_matching_torchaudio(py: Path) -> None:
     torch_version, cuda_version = torch_build(py)
     if not torch_version:
@@ -185,8 +233,18 @@ def install_cuda128_torch_stack(py: Path) -> None:
 def ensure_torchaudio(py: Path) -> None:
     ok, details = torchaudio_probe(py)
     if ok:
-        log("AI Toolkit torch/torchaudio CUDA stack is aligned")
-        return
+        if "cuda=None" in details or "cuda=" not in details:
+            log("AI Toolkit torch install is CPU-only; installing CUDA 12.8 torch stack")
+            install_cuda128_torch_stack(py)
+            ok, details = torchaudio_probe(py)
+            if ok:
+                if "cuda=None" not in details and "cuda=" in details:
+                    log("AI Toolkit CUDA torch stack installed")
+                    return
+                raise SystemExit("AI Toolkit torch install is still CPU-only after CUDA stack repair")
+        else:
+            log("AI Toolkit torch/torchaudio CUDA stack is aligned")
+            return
     log("Repairing AI Toolkit torchaudio install")
     if details:
         log("torchaudio probe failed:")
@@ -521,6 +579,9 @@ def run_training(py: Path, toolkit_dir: Path, config_path: Path) -> None:
     env = os.environ.copy()
     env.setdefault("HF_HUB_ENABLE_HF_TRANSFER", "1")
     env.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+    env.setdefault("PYTHONFAULTHANDLER", "1")
+    env.setdefault("TORCH_SHOW_CPP_STACKTRACES", "1")
+    env.setdefault("TOKENIZERS_PARALLELISM", "false")
     patch_dir = write_transformers_startup_patch(config_path.parents[1])
     env["PYTHONPATH"] = (
         str(patch_dir)
