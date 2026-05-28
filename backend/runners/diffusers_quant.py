@@ -108,7 +108,7 @@ def pipeline_torchao_int8_quantization_config(*, components_to_quantize="transfo
 
     return PipelineQuantizationConfig(
         quant_mapping={
-            components_to_quantize: TorchAoConfig(Int8WeightOnlyConfig()),
+            components_to_quantize: TorchAoConfig(quant_type="int8_weight_only"),
         }
     )
 
