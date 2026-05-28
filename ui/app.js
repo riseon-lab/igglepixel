@@ -7191,7 +7191,7 @@ let trainerAlphaTouched = false;
 const trainerLaunchOpts = {
   samples:      true,
   autoPublish:  true,
-  rebuildVenv:  false,
+  rebuildVenv:  true,
   notify:       false,
   autoShutdown: false,
 };

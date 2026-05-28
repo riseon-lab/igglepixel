@@ -93,6 +93,7 @@ def ensure_venv(toolkit_dir: Path) -> Path:
         stamp.write_text(str(time.time()), encoding="utf-8")
     else:
         log("AI Toolkit requirements already installed")
+    ensure_qwen3_vl_transformers(py)
     ensure_torchaudio(py)
     return py
 
@@ -104,6 +105,16 @@ def py_import_ok(py: Path, module: str) -> bool:
         stderr=subprocess.DEVNULL,
     )
     return probe.returncode == 0
+
+
+def ensure_qwen3_vl_transformers(py: Path) -> None:
+    module = "transformers.models.qwen3_vl.configuration_qwen3_vl"
+    if py_import_ok(py, module):
+        return
+    log("AI Toolkit transformers install is missing qwen3_vl; upgrading transformers")
+    run([str(py), "-m", "pip", "install", "--upgrade", "transformers>=4.57.0"])
+    if not py_import_ok(py, module):
+        raise SystemExit("AI Toolkit transformers upgrade did not provide qwen3_vl support")
 
 
 def torch_build(py: Path) -> tuple[str, str]:
