@@ -121,6 +121,16 @@ def ensure_venv(toolkit_dir: Path) -> Path:
         stamp.write_text(str(time.time()), encoding="utf-8")
     else:
         log("AI Toolkit requirements already installed")
+    # ORDER MATTERS. AI Toolkit's requirements.txt is unpinned, so a fresh
+    # install pulls whatever torch is newest on PyPI — currently torch 2.12.0
+    # built for CUDA 13, which refuses to import on this pod's CUDA 12.8
+    # driver (torch._dynamo trips on a missing `sys.get_int_max_str_digits`
+    # / "driver too old"). Every downstream probe that imports torch then
+    # fails. We MUST realign torch to the cu128 stack before running the
+    # numpy/scipy or transformers probes — otherwise the numpy/scipy repair
+    # misreads a broken-torch import as an ABI problem and hard-aborts the
+    # whole bootstrap (which is exactly the rebuild loop being hit).
+    ensure_cuda_torch_stack(py)
     ensure_numpy_scipy_abi(py)
     ensure_qwen3_vl_transformers(py)
     ensure_torchaudio(py)
@@ -147,6 +157,63 @@ def ensure_qwen3_vl_transformers(py: Path) -> None:
         raise SystemExit("AI Toolkit transformers upgrade did not provide qwen3_vl support")
 
 
+def torch_imports_with_cuda(py: Path) -> tuple[bool, str, str]:
+    """Probe whether torch imports cleanly and report its CUDA build.
+
+    Returns (import_ok, cuda_version, raw_output). `cuda_version` is the
+    torch.version.cuda string (e.g. '12.8') or '' when torch is CPU-only
+    or failed to import.
+    """
+    code = (
+        "import torch\n"
+        "print('CUDA=' + str(torch.version.cuda or ''))\n"
+        "print('VER=' + torch.__version__)\n"
+    )
+    proc = subprocess.run([str(py), "-c", code], capture_output=True, text=True)
+    output = (proc.stdout + proc.stderr).strip()
+    if proc.returncode != 0:
+        return False, "", output
+    cuda = ""
+    for line in proc.stdout.splitlines():
+        if line.startswith("CUDA="):
+            cuda = line.split("=", 1)[1].strip()
+    return True, cuda, output
+
+
+def ensure_cuda_torch_stack(py: Path) -> None:
+    """Pin torch/torchvision/torchaudio to the known-good CUDA 12.8 wheels.
+
+    AI Toolkit's requirements.txt does not pin torch, so a clean install
+    grabs the newest PyPI torch — which has drifted to a CUDA-13 build that
+    cannot run on this pod's 12.8 driver. We force the cu128 stack up front
+    so the rest of the bootstrap (numpy/scipy ABI, transformers, the
+    training run itself) executes against a torch that actually imports.
+
+    Idempotent: if torch already imports and reports a CUDA 12.x build we
+    leave it alone, so warm venvs don't reinstall torch on every run.
+    Override the pinned version via IGGLEPIXEL_TORCH_CUDA_TAG (default
+    cu128) if a future pod ships a different driver.
+    """
+    ok, cuda, output = torch_imports_with_cuda(py)
+    if ok and cuda.startswith("12"):
+        log(f"AI Toolkit torch already on CUDA {cuda}; leaving torch stack as-is")
+        return
+    if ok:
+        log(f"AI Toolkit torch reports CUDA '{cuda or 'none'}' — realigning to the CUDA 12.8 stack")
+    else:
+        log("AI Toolkit torch failed to import (unpinned requirements likely pulled a CUDA-13 build); installing the CUDA 12.8 stack")
+        for line in output.splitlines()[-6:]:
+            log("  " + line)
+    install_cuda128_torch_stack(py)
+    ok, cuda, output = torch_imports_with_cuda(py)
+    if not ok or not cuda.startswith("12"):
+        log("torch still not on a CUDA 12.x build after cu128 install:")
+        for line in output.splitlines()[-8:]:
+            log("  " + line)
+        raise SystemExit("AI Toolkit CUDA 12.8 torch stack install failed")
+    log(f"AI Toolkit CUDA torch stack ready (CUDA {cuda})")
+
+
 def numpy_scipy_probe(py: Path) -> tuple[bool, str]:
     code = (
         "import numpy\n"
@@ -166,6 +233,17 @@ def ensure_numpy_scipy_abi(py: Path) -> None:
     ok, details = numpy_scipy_probe(py)
     if ok:
         return
+    # Guard against misdiagnosis: if the probe failed because torch itself
+    # can't import (not because numpy/scipy have an ABI mismatch),
+    # reinstalling numpy/scipy is futile and we'd burn a rebuild cycle on
+    # the wrong fix. ensure_cuda_torch_stack() runs before us so this
+    # should already be healthy, but fail loudly with the real cause if not.
+    torch_ok, _, torch_out = torch_imports_with_cuda(py)
+    if not torch_ok:
+        log("NumPy/SciPy probe failed because torch will not import — this is a torch problem, not a numpy/scipy ABI one:")
+        for line in torch_out.splitlines()[-8:]:
+            log("  " + line)
+        raise SystemExit("AI Toolkit torch import is broken; fix the torch stack before the numpy/scipy ABI step")
     log("Repairing AI Toolkit NumPy/SciPy binary compatibility")
     if details:
         log("NumPy/SciPy probe failed:")
@@ -178,6 +256,7 @@ def ensure_numpy_scipy_abi(py: Path) -> None:
         "install",
         "--upgrade",
         "--force-reinstall",
+        "--no-deps",
         "numpy==1.26.4",
         "scipy==1.11.4",
     ])
