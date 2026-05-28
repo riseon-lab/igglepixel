@@ -10484,6 +10484,8 @@ function mockModels() {
       ],
       quants: [
         { id: 'bf16', label: 'BF16', description: 'Best quality',        vram_gb: 47, auto_min_vram_gb: 47 },
+        { id: 'int8', label: 'INT8', description: 'Faster, near-bf16',   vram_gb: 24, auto_min_vram_gb: 36 },
+        { id: 'nf4',  label: 'NF4',  description: 'Fits any modern card',vram_gb: 14, auto_min_vram_gb: 0  },
       ],
       param_groups: ['prompt', 'generation', 'dimensions'],
       param_keys:   ['prompt', 'negative_prompt', 'seed', 'steps', 'cfg', 'width', 'height'],
@@ -10506,38 +10508,6 @@ function mockModels() {
       ],
     },
     {
-      id: 'qwen-image-2512', name: 'Qwen-Image-2512', category: 'image',
-      description: "December refresh of Qwen-Image. Stronger realism, natural detail, and text rendering while staying Apache 2.0.",
-      runner_module: 'backend.runners.qwen_image_2512',
-      hf_repo: 'Qwen/Qwen-Image-2512',
-      min_vram_gb: 14, recommended_vram_gb: 47,
-      supports_lora: true, gpu_support: ['nvidia'],
-      default_size_by_vram: [
-        { min_gb: 47, w: 1328, h: 1328 },
-        { min_gb: 36, w: 1024, h: 1024 },
-        { min_gb: 0,  w: 768,  h: 768  },
-      ],
-      quants: [
-        { id: 'bf16', label: 'BF16', description: 'Best quality, high VRAM', vram_gb: 80, auto_min_vram_gb: 80 },
-      ],
-      param_groups: ['prompt', 'generation', 'dimensions'],
-      param_keys:   ['prompt', 'negative_prompt', 'seed', 'steps', 'cfg', 'width', 'height'],
-      param_overrides: {
-        steps:  { default: 25 },
-        cfg:    { default: 4.0, min: 0, max: 10, step: 0.1, label: 'Guidance' },
-        width:  { default: 1024, step: 16, min: 256, max: 2048 },
-        height: { default: 1024, step: 16, min: 256, max: 2048 },
-      },
-      aspect_presets: [
-        { label: 'Square',          w: 1328, h: 1328 },
-        { label: 'Landscape 16:9',  w: 1664, h: 928  },
-        { label: 'Portrait 9:16',   w: 928,  h: 1664 },
-        { label: '3:4',             w: 1152, h: 1536 },
-        { label: '4:3',             w: 1536, h: 1152 },
-      ],
-      default_loras: [],
-    },
-    {
       id: 'qwen-image-edit', name: 'Qwen-Image-Edit', category: 'image',
       description: "Alibaba's original Qwen-Image-Edit — instruction-based image editing with one reference image. Use the 2511 card for the newer consistency model.",
       runner_module: 'backend.runners.qwen_image_edit',
@@ -10551,6 +10521,8 @@ function mockModels() {
       ],
       quants: [
         { id: 'bf16', label: 'BF16', description: 'Best quality',        vram_gb: 47, auto_min_vram_gb: 47 },
+        { id: 'int8', label: 'INT8', description: 'Faster, near-bf16',   vram_gb: 24, auto_min_vram_gb: 36 },
+        { id: 'nf4',  label: 'NF4',  description: 'Fits any modern card',vram_gb: 14, auto_min_vram_gb: 0  },
       ],
       image_inputs: [
         { key: 'ref', label: 'Reference', required: true, hint: 'What to keep from the original' },
@@ -10586,6 +10558,8 @@ function mockModels() {
       ],
       quants: [
         { id: 'bf16', label: 'BF16', description: 'Best quality',        vram_gb: 47, auto_min_vram_gb: 47 },
+        { id: 'int8', label: 'INT8', description: 'Faster, near-bf16',   vram_gb: 24, auto_min_vram_gb: 36 },
+        { id: 'nf4',  label: 'NF4',  description: 'Fits any modern card',vram_gb: 14, auto_min_vram_gb: 0  },
       ],
       image_inputs: [
         { key: 'ref', label: 'Reference', required: true, hint: 'Subject, scene or product to preserve' },
