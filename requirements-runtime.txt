@@ -53,12 +53,13 @@
 #   context that doesn't exist on sm_120. BF16 doesn't go through bnb so it
 #   masks the issue — only int8/NF4 paths break.
 #
-# Why torchao>=0.15.0:
+# Why torchao==0.15.0:
 #   Qwen text-to-image INT8 uses Diffusers' TorchAO quantization backend by
 #   default. It avoids bitsandbytes CUDA stream failures seen on some L40S pod
 #   images while preserving the lower-VRAM INT8 path. Diffusers 0.38.0's
-#   TorchAoConfig requires torchao >= 0.15.0 to function properly. We allow >=0.15.0
-#   so pip can resolve the best-suited wheel compatible with torch==2.8.0.
+#   TorchAoConfig requires torchao >= 0.15.0 to function properly, while
+#   transformers 4.49.0 relies on legacy functional APIs (like int4_weight_only)
+#   that were removed in torchao 0.16.0. Pinning exactly to 0.15.0 satisfies both.
 #
 # Why torch/torchvision/torchaudio pins here:
 #   Keep the shared backend Python on a single CUDA 12.8 PyTorch stack so
@@ -78,4 +79,4 @@ bitsandbytes>=0.46
 torch==2.8.0
 torchvision==0.23.0
 torchaudio==2.8.0
-torchao>=0.15.0
+torchao==0.15.0
