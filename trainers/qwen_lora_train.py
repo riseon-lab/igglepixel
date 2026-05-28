@@ -134,6 +134,7 @@ def ensure_venv(toolkit_dir: Path) -> Path:
     ensure_numpy_scipy_abi(py)
     ensure_qwen3_vl_transformers(py)
     ensure_torchaudio(py)
+    ensure_pkg_resources_packaging(py)
     log_python_stack(py)
     return py
 
@@ -212,6 +213,47 @@ def ensure_cuda_torch_stack(py: Path) -> None:
             log("  " + line)
         raise SystemExit("AI Toolkit CUDA 12.8 torch stack install failed")
     log(f"AI Toolkit CUDA torch stack ready (CUDA {cuda})")
+
+
+def pkg_resources_packaging_ok(py: Path) -> bool:
+    probe = subprocess.run(
+        [str(py), "-c", "from pkg_resources import packaging"],
+        capture_output=True,
+        text=True,
+    )
+    return probe.returncode == 0
+
+
+def ensure_pkg_resources_packaging(py: Path) -> None:
+    """Keep `from pkg_resources import packaging` importable for CLIP.
+
+    AI Toolkit pulls openai-CLIP (via k_diffusion), whose clip.py still
+    does `from pkg_resources import packaging`. setuptools >= 71 removed
+    the vendored `packaging` re-export from pkg_resources, and the
+    bootstrap's `pip install --upgrade ... setuptools` grabs the latest —
+    so on a fresh venv that import dies and the whole training job fails
+    before it starts. Pin setuptools back below the removal at runtime
+    (the venv is already built, so the older setuptools only affects
+    runtime pkg_resources behaviour, not wheel building).
+    """
+    if pkg_resources_packaging_ok(py):
+        return
+    log("CLIP needs pkg_resources.packaging; pinning setuptools below the 71.x removal")
+    run([str(py), "-m", "pip", "install", "--upgrade", "setuptools==69.5.1"])
+    if pkg_resources_packaging_ok(py):
+        log("pkg_resources.packaging restored (setuptools 69.5.1)")
+        return
+    # Belt-and-braces: an even older setuptools that definitely vendors it.
+    log("setuptools 69.5.1 still missing packaging; falling back to 65.5.1")
+    run([str(py), "-m", "pip", "install", "setuptools==65.5.1"])
+    if pkg_resources_packaging_ok(py):
+        log("pkg_resources.packaging restored (setuptools 65.5.1)")
+        return
+    raise SystemExit(
+        "Could not restore pkg_resources.packaging for CLIP — set "
+        "IGGLEPIXEL_AI_TOOLKIT_REINSTALL=1 to rebuild the venv, or pin clip "
+        "to a build that doesn't import packaging from pkg_resources"
+    )
 
 
 def numpy_scipy_probe(py: Path) -> tuple[bool, str]:
