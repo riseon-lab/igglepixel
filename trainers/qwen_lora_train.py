@@ -22,8 +22,16 @@ from pathlib import Path
 WORKSPACE = Path(os.environ.get("WORKSPACE", "/workspace"))
 TOOLKIT_REPO = os.environ.get("IGGLEPIXEL_AI_TOOLKIT_REPO", "https://github.com/ostris/ai-toolkit.git")
 TOOLKIT_DIR = Path(os.environ.get("IGGLEPIXEL_AI_TOOLKIT_DIR", WORKSPACE / "repos" / "ai-toolkit"))
+# Pin AI Toolkit to a specific commit/tag to freeze BOTH its code and its
+# (unpinned) requirements.txt to a known-good snapshot. Defaults to "main"
+# (rolling), which is the source of the recurring dependency-drift breakage
+# — set IGGLEPIXEL_AI_TOOLKIT_REF=<sha> once a good commit is known to stop
+# the drift permanently.
 TOOLKIT_REF = os.environ.get("IGGLEPIXEL_AI_TOOLKIT_REF", "main").strip() or "main"
 VENV_DIR = Path(os.environ.get("IGGLEPIXEL_AI_TOOLKIT_VENV", WORKSPACE / "venvs" / "ai-toolkit"))
+# Narrow pip constraints applied to the AI Toolkit requirements install.
+# Bundled with the repo so it deploys via the normal git pull.
+AI_TOOLKIT_CONSTRAINTS = Path(__file__).resolve().parent / "ai_toolkit_constraints.txt"
 
 
 def log(message: str) -> None:
@@ -116,8 +124,19 @@ def ensure_venv(toolkit_dir: Path) -> Path:
     reinstall = py_bool(os.environ.get("IGGLEPIXEL_AI_TOOLKIT_REINSTALL"), False)
     if reinstall or not stamp.exists():
         log("Installing AI Toolkit requirements. First run can take several minutes.")
-        run([str(py), "-m", "pip", "install", "--upgrade", "pip", "wheel", "setuptools"])
-        run([str(py), "-m", "pip", "install", "-r", str(toolkit_dir / "requirements.txt")])
+        constraints = AI_TOOLKIT_CONSTRAINTS if AI_TOOLKIT_CONSTRAINTS.exists() else None
+        # Bound setuptools below the pkg_resources.packaging removal (71.x)
+        # up front, so the whole install — including CLIP's import — runs
+        # against a compatible setuptools rather than the absolute latest.
+        run([str(py), "-m", "pip", "install", "--upgrade", "pip", "wheel", "setuptools<71"])
+        req_cmd = [str(py), "-m", "pip", "install", "-r", str(toolkit_dir / "requirements.txt")]
+        if constraints:
+            # -c freezes the narrow set of drift-prone packages
+            # (setuptools, numpy) during resolution so requirements.txt
+            # can't bump them back into broken territory.
+            log(f"Applying dependency constraints from {constraints}")
+            req_cmd.extend(["-c", str(constraints)])
+        run(req_cmd)
         stamp.write_text(str(time.time()), encoding="utf-8")
     else:
         log("AI Toolkit requirements already installed")

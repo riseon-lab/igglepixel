@@ -1,0 +1,27 @@
+# pip constraints for the AI Toolkit venv.
+#
+# AI Toolkit tracks `main` with an unpinned requirements.txt, so a fresh
+# install drifts to whatever is newest on PyPI — which keeps breaking the
+# trainer in new ways as the ecosystem moves. This file freezes ONLY the
+# packages we've actually seen drift and break. It's intentionally narrow:
+# a constraint that conflicts with AI Toolkit's own requirement bounds
+# would hard-fail the whole install, so we don't pin torch / scipy /
+# transformers here (those are realigned by the runtime self-heal repairs
+# in qwen_lora_train.py, which use --force-reinstall and bypass
+# resolution).
+#
+# Constraints only cap/pin versions of packages that get installed for
+# some other reason — they never add packages themselves.
+
+# setuptools >= 71 removed the vendored `packaging` re-export from
+# pkg_resources, which openai-CLIP's clip.py still imports
+# (`from pkg_resources import packaging`). Nothing in the tree hard-requires
+# setuptools >= 71, so capping it is safe and stops the CLIP ImportError at
+# install time instead of repairing after.
+setuptools<71
+
+# numpy 2.x broke ABI compatibility across most of the compiled ML stack
+# (torch / scipy / opencv / etc.). The AI Toolkit tree already resolves to
+# numpy 1.26.x, so capping < 2 matches what pip picks anyway and guards
+# against a future drift to 2.x.
+numpy<2
