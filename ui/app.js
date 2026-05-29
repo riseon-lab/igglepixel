@@ -626,6 +626,9 @@ const api = {
   cancelTrainJob:(id) => json(apiCall(`/api/train-jobs/${encodeURIComponent(id)}`, { method: 'DELETE' })),
   trainJobSamples:(id) => json(apiCall(`/api/train-jobs/${encodeURIComponent(id)}/samples`)),
   trainJobStorage: () => json(apiCall('/api/train-jobs/storage')),
+  trainerBaseWeights: () => json(apiCall('/api/trainers/base-weights')),
+  deleteTrainerBaseWeights: (repo) =>
+    json(apiCall(`/api/trainers/base-weights?repo=${encodeURIComponent(repo)}`, { method: 'DELETE' })),
   cleanupTrainJobArtifacts: (id, force = false) => {
     const qs = force ? '?force=true' : '';
     return json(apiCall(`/api/train-jobs/${encodeURIComponent(id)}/artifacts${qs}`, { method: 'DELETE' }));
@@ -7164,6 +7167,9 @@ async function loadTrainers() {
     state.trainJobs = [];
   }
   renderTrainers();
+  // Cached base-model sizes need a disk stat, so fetch once on view entry
+  // rather than on every render. Fire-and-forget — it self-renders.
+  renderTrainerBaseWeights();
 }
 
 function activeTrainer() {
@@ -9039,6 +9045,69 @@ function renderTrainerModelSupport(trainer) {
       <p>${esc(f.description || '')}</p>
     </div>
   `).join('');
+}
+
+// Base-model weight storage management. Fetched once on trainer-view entry
+// (not on every render) because it stats the on-disk HF cache. Gives the
+// trainer parity with model cards + the captioner for freeing pod disk.
+async function renderTrainerBaseWeights() {
+  const root = $('#trainerBaseWeightsList');
+  if (!root) return;
+  const totalChip = $('#trainerBaseWeightsTotal');
+  let data;
+  try {
+    data = state.preview
+      ? { total_bytes: 41943040000, entries: [
+          { repo: 'Qwen/Qwen-Image-2512', label: 'Qwen-Image-2512', cached: true,  in_use: false, size_bytes: 41943040000 },
+          { repo: 'Qwen/Qwen-Image',      label: 'Qwen-Image',      cached: false, in_use: false, size_bytes: 0 },
+          { repo: 'black-forest-labs/FLUX.2-klein-base-9B', label: 'FLUX.2-klein-base-9B', cached: false, in_use: false, size_bytes: 0 },
+        ] }
+      : await api.trainerBaseWeights();
+  } catch (e) {
+    root.innerHTML = `<div class="empty trainer-empty">Couldn't load cached weights: ${esc(e.message || 'error')}</div>`;
+    if (totalChip) totalChip.textContent = '';
+    return;
+  }
+  const entries = data.entries || [];
+  if (totalChip) totalChip.textContent = (data.total_bytes > 0) ? `${formatBytes(data.total_bytes)} cached` : '';
+  if (!entries.length) {
+    root.innerHTML = `<div class="empty trainer-empty">No trainer base models registered.</div>`;
+    return;
+  }
+  root.innerHTML = entries.map(e => `
+    <div class="base-weight-row${e.cached ? '' : ' is-empty'}">
+      <div class="base-weight-info">
+        <div class="base-weight-name">${esc(e.label)}</div>
+        <div class="base-weight-repo">${esc(e.repo)}</div>
+      </div>
+      <div class="base-weight-size">${e.cached ? formatBytes(e.size_bytes) : 'not downloaded'}</div>
+      <button class="px-btn px-btn-sm base-weight-del" data-del-base="${esc(e.repo)}"
+        ${(!e.cached || e.in_use) ? 'disabled' : ''}
+        title="${e.in_use ? 'In use by an active training job' : (e.cached ? 'Delete these cached weights' : 'Nothing cached to delete')}">
+        ${e.in_use ? 'In use' : 'Delete'}
+      </button>
+    </div>`).join('');
+  $$('[data-del-base]', root).forEach(btn => {
+    btn.addEventListener('click', () => deleteTrainerBaseWeights(btn.dataset.delBase));
+  });
+}
+
+async function deleteTrainerBaseWeights(repo) {
+  if (!repo) return;
+  const ok = await confirmModal(
+    'Delete base model weights',
+    `Delete cached weights for <span style="font-family:var(--font-mono)">${esc(repo)}</span>? This frees pod disk now; the next training run that uses this base re-downloads it.`,
+    'Delete weights',
+    true,
+  );
+  if (!ok) return;
+  try {
+    const res = state.preview ? { freed_bytes: 0 } : await api.deleteTrainerBaseWeights(repo);
+    toast(`Base weights deleted · ${formatBytes(res.freed_bytes || 0)} freed`, 'success');
+  } catch (e) {
+    toast(`Delete failed: ${e.message || 'unknown error'}`, 'error');
+  }
+  renderTrainerBaseWeights();
 }
 
 function renderTrainerDatasetSummary(summary) {

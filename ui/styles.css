@@ -5662,6 +5662,54 @@ button.hf-file-row {
   text-overflow: ellipsis;
 }
 
+/* Base-model weight storage rows (trainer landing) — parity with the model
+ * cards / captioner delete-weights affordance for freeing pod disk. */
+.px-theme .base-weight-list { display: flex; flex-direction: column; gap: 8px; }
+.px-theme .base-weight-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--px-border);
+  border-radius: var(--r-md);
+  background: var(--px-panel-2);
+}
+.px-theme .base-weight-row.is-empty { opacity: 0.55; }
+.px-theme .base-weight-info { flex: 1; min-width: 0; }
+.px-theme .base-weight-name {
+  font-family: var(--px-font-mono);
+  font-size: 12.5px;
+  color: var(--px-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.px-theme .base-weight-repo {
+  font-family: var(--px-font-mono);
+  font-size: 10px;
+  color: var(--px-text-faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.px-theme .base-weight-size {
+  flex: none;
+  font-family: var(--px-font-mono);
+  font-size: 11.5px;
+  color: var(--px-text-dim);
+  white-space: nowrap;
+}
+.px-theme .base-weight-del {
+  flex: none;
+  border-color: rgba(255, 77, 106, 0.35);
+  color: var(--px-err);
+}
+.px-theme .base-weight-del:hover:not(:disabled) {
+  border-color: var(--px-err);
+  background: rgba(255, 77, 106, 0.08);
+}
+.px-theme .base-weight-del:disabled { opacity: 0.4; cursor: not-allowed; }
+
 .px-theme .run-gpu-row {
   display: flex;
   align-items: center;

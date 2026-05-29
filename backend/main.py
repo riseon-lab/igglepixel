@@ -5831,6 +5831,120 @@ def cleanup_finished_train_artifacts(
     }
 
 
+def _trainer_base_cache_dir(repo: str) -> Path:
+    """HF cache directory for a base model repo. Trainer + runners share the
+    same /workspace HF cache, so this matches where delete_model_weights and
+    the trainer subprocess actually read/write weights."""
+    cache_root = Path(os.environ.get("HF_HOME", str(Path.home() / ".cache" / "huggingface"))) / "hub"
+    return cache_root / f"models--{repo.replace('/', '--')}"
+
+
+def _hf_cache_real_size(p: Path) -> int:
+    """Accurate on-disk size of an HF cache dir. HF keeps the real files in
+    blobs/ and symlinks them into snapshots/, so the generic _dir_size_bytes
+    (which follows symlinks) double-counts every shard. Count regular files
+    only — that's the true bytes the volume reclaims on delete."""
+    total = 0
+    if not p.exists():
+        return 0
+    for f in p.rglob("*"):
+        try:
+            if f.is_file() and not f.is_symlink():
+                total += f.stat().st_size
+        except OSError:
+            pass
+    return total
+
+
+@app.get("/api/trainers/base-weights")
+def list_trainer_base_weights():
+    """Report on-disk size of each trainer base model so the UI can offer a
+    delete-weights control for storage management — parity with the model
+    cards and the captioner. Base models are large (Qwen-Image ~40 GB, FLUX.2
+    klein tens of GB) and otherwise sit in the HF cache forever after a run.
+
+    Cheap to compute: an HF snapshot is a handful of big shard files, so the
+    size walk is a few dozen stat() calls per repo, not a deep tree scan."""
+    _require_unlocked()
+    # Unique repos across every trainer, preserving first-seen order.
+    seen: list[str] = []
+    used_by: dict[str, list[str]] = {}
+    for trainer_id, repos in TRAINER_BASE_MODELS.items():
+        for repo in repos:
+            if repo not in used_by:
+                used_by[repo] = []
+                seen.append(repo)
+            used_by[repo].append(trainer_id)
+    active_bases = {
+        (job.get("base_model") or "")
+        for job in train_jobs.values()
+        if _train_job_is_active(job)
+    }
+    cache_root = Path(os.environ.get("HF_HOME", str(Path.home() / ".cache" / "huggingface"))) / "hub"
+    entries = []
+    total = 0
+    for repo in seen:
+        cache_dir = cache_root / f"models--{repo.replace('/', '--')}"
+        size = _hf_cache_real_size(cache_dir)
+        total += size
+        entries.append({
+            "repo":       repo,
+            "label":      repo.split("/")[-1],
+            "cached":     size > 0,
+            "in_use":     repo in active_bases,
+            "trainers":   used_by[repo],
+            "size_bytes": size,
+            "size_mb":    round(size / 1024 / 1024, 1),
+            "path":       str(cache_dir),
+        })
+    return {
+        "root":        str(cache_root),
+        "total_bytes": total,
+        "total_mb":    round(total / 1024 / 1024, 1),
+        "entries":     entries,
+    }
+
+
+@app.delete("/api/trainers/base-weights")
+def delete_trainer_base_weights(repo: str = Query(...)):
+    """Purge one trainer base model's cached weights from the HF cache.
+
+    Refuses if a queued/running job is training on that base — deleting
+    mid-run would corrupt it and rm would fail on the open file handles
+    anyway. Returns real bytes freed so the UI shows the volume shrank."""
+    _require_unlocked()
+    known = {r for repos in TRAINER_BASE_MODELS.values() for r in repos}
+    if repo not in known:
+        raise HTTPException(400, f"Unknown trainer base model: {repo}")
+    active = [
+        jid for jid, job in train_jobs.items()
+        if _train_job_is_active(job) and (job.get("base_model") or "") == repo
+    ]
+    if active:
+        raise HTTPException(
+            409,
+            f"{repo} is in use by an active training job ({', '.join(active)}). "
+            "Cancel the job before deleting its base weights.",
+        )
+    cache_dir = _trainer_base_cache_dir(repo)
+    _clear_repo_download_marker(repo)
+    before = _hf_cache_real_size(cache_dir)
+    _, err = _purge_dir(cache_dir)
+    freed = before - _hf_cache_real_size(cache_dir)
+    if err:
+        raise HTTPException(
+            500,
+            f"Couldn't fully delete {repo}: {err} (freed ~{round(freed / 1024 / 1024, 1)} MB)",
+        )
+    return {
+        "status":      "deleted",
+        "repo":        repo,
+        "path":        str(cache_dir),
+        "freed_bytes": freed,
+        "freed_mb":    round(freed / 1024 / 1024, 1),
+    }
+
+
 @app.get("/api/train-jobs/{job_id}")
 def get_train_job(job_id: str):
     job = train_jobs.get(job_id)
