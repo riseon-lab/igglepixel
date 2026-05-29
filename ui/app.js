@@ -6719,7 +6719,7 @@ function fileToDataUrl(file) {
 
 function datasetVisionSettings() {
   return {
-    provider: $('#captionProvider')?.value || 'ollama',
+    provider: $('#captionProvider')?.value || 'openai',
     endpoint: ($('#captionEndpoint')?.value || '').trim(),
     model: ($('#captionModel')?.value || '').trim(),
     temperature: Number($('#captionTemp')?.value || 0.1),
@@ -6742,8 +6742,8 @@ const DATASET_VISION_DEFAULTS = {
 };
 
 function applyDatasetVisionProviderDefaults({ force = false } = {}) {
-  const provider = $('#captionProvider')?.value || 'ollama';
-  const defaults = DATASET_VISION_DEFAULTS[provider] || DATASET_VISION_DEFAULTS.ollama;
+  const provider = $('#captionProvider')?.value || 'openai';
+  const defaults = DATASET_VISION_DEFAULTS[provider] || DATASET_VISION_DEFAULTS.openai;
   const endpoint = $('#captionEndpoint');
   const model = $('#captionModel');
   if (endpoint && (force || !endpoint.value.trim())) endpoint.value = defaults.endpoint;
@@ -6757,7 +6757,7 @@ function renderDatasetVisionRuntime(payload = {}) {
   const start = $('#btnStartCaptionRuntime');
   const stop = $('#btnStopCaptionRuntime');
   if (!pill || !status) return;
-  const provider = $('#captionProvider')?.value || 'ollama';
+  const provider = $('#captionProvider')?.value || 'openai';
   const isOllama = provider === 'ollama';
   const managedOllama = isOllama && payload.running;
   const stateName = payload.state || (payload.ready ? 'ready' : payload.running ? 'starting' : 'stopped');

@@ -1370,29 +1370,28 @@
               <div class="field">
                 <label>Provider</label>
                 <select class="input select" id="captionProvider">
-                  <option value="ollama" selected>Ollama local vision</option>
-                  <option value="openai">Qwen/vLLM pod vision</option>
+                  <option value="openai" selected>Qwen2.5-VL (pod / vLLM)</option>
                 </select>
               </div>
 
               <div class="field">
                 <label>Endpoint URL</label>
-                <input class="input" id="captionEndpoint" value="http://127.0.0.1:11434/api/chat">
+                <input class="input" id="captionEndpoint" value="http://127.0.0.1:8000/v1/chat/completions">
               </div>
 
               <div class="field">
                 <label>Model Name</label>
-                <input class="input" id="captionModel" value="llama3.2-vision:11b" placeholder="e.g. llama3.2-vision:11b">
+                <input class="input" id="captionModel" value="Qwen/Qwen2.5-VL-7B-Instruct" placeholder="Qwen/Qwen2.5-VL-7B-Instruct">
               </div>
 
               <div class="caption-runtime-card">
                 <div class="caption-runtime-head">
                   <span class="status-pill" id="captionRuntimePill" data-state="unknown">Vision: not checked</span>
-                  <span class="px-mute" id="captionRuntimeStatus">Start or check Ollama before batch captioning. Stop unloads the model from memory.</span>
+                  <span class="px-mute" id="captionRuntimeStatus">Start the pod vision model before batch captioning. First load downloads weights (~16 GB) once.</span>
                 </div>
                 <div class="caption-runtime-actions">
                   <button class="btn secondary" id="btnCheckCaptionRuntime" type="button">Check</button>
-                  <button class="btn" id="btnStartCaptionRuntime" type="button">Start Ollama</button>
+                  <button class="btn" id="btnStartCaptionRuntime" type="button">Start model</button>
                   <button class="btn danger" id="btnStopCaptionRuntime" type="button">Stop</button>
                   <button class="btn danger" id="btnDeleteCaptionWeights" type="button" title="Free disk by removing this model's weights">Delete weights</button>
                 </div>

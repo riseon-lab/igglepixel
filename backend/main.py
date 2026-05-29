@@ -3215,9 +3215,14 @@ class TrainerVisionProxyRequest(BaseModel):
 
 
 class TrainerVisionRuntimeRequest(BaseModel):
-    provider: str = "ollama"
-    endpoint: str = "http://127.0.0.1:11434/api/chat"
-    model: str = "llama3.2-vision:11b"
+    # Defaults target the managed Qwen2.5-VL / vLLM captioner. Ollama was
+    # removed as a pod option (its self-heal install kept breaking and the
+    # base image lacks zstd/tar support for current releases); the
+    # standalone local-captioner still uses Ollama on the operator's own
+    # machine where it's installed.
+    provider: str = "openai"
+    endpoint: str = "http://127.0.0.1:8000/v1/chat/completions"
+    model: str = "Qwen/Qwen2.5-VL-7B-Instruct"
     command: Optional[str] = None
     # Optional HF token for the managed Qwen2.5-VL captioner. The UI keeps
     # the token in browser state and forwards it on each call rather than
@@ -4375,9 +4380,9 @@ async def _ollama_unload_model(endpoint: str, model: str) -> dict:
 
 @app.get("/api/trainers/dataset/vision-runtime/status")
 async def vision_runtime_status(
-    provider: str = Query("ollama"),
-    endpoint: str = Query("http://127.0.0.1:11434/api/chat"),
-    model: str = Query("llama3.2-vision:11b"),
+    provider: str = Query("openai"),
+    endpoint: str = Query("http://127.0.0.1:8000/v1/chat/completions"),
+    model: str = Query("Qwen/Qwen2.5-VL-7B-Instruct"),
 ):
     _require_unlocked()
     is_managed_model = (provider.strip().lower() == "openai" and model.strip().lower() in ("qwen/qwen2.5-vl-7b-instruct", "qwen2.5-vl-7b-instruct", "qwen25-vl-captioner"))
