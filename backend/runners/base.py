@@ -51,6 +51,55 @@ def _data_key() -> bytes:
     return bytes.fromhex(hex_key)
 
 
+# Pinned in requirements-runtime.txt too — keep the two in sync.
+TRANSFORMERS_COMPAT_PIN = "4.57.6"
+
+
+def ensure_transformers_compat() -> None:
+    """Self-heal the transformers↔diffusers version skew for base-image runners.
+
+    diffusers==0.38.0 imports `HybridCache` from the transformers top-level
+    (in diffusers/loaders/lora_pipeline.py) but only requires
+    `transformers>=4.41.2` with no upper bound. transformers 5.0 removed that
+    export, so a pod that booted before requirements-runtime.txt pinned
+    transformers can be left on 5.x — and then EVERY diffusers pipeline import
+    dies with "cannot import name 'HybridCache' from 'transformers'".
+
+    requirements-runtime.txt now pins transformers==4.57.6 so fresh pods are
+    fine; this repairs an already-broken live pod in place (no reboot). Call
+    it at the very top of a diffusers runner's load(), BEFORE importing torch /
+    diffusers / transformers in this process: the probe runs in a subprocess
+    so we never import transformers here before the downgrade, which means the
+    subsequent `from diffusers import ...` picks up the corrected version.
+    """
+    import subprocess
+
+    probe = subprocess.run(
+        [sys.executable, "-c",
+         "import transformers, sys; sys.exit(0 if hasattr(transformers, 'HybridCache') else 3)"],
+        capture_output=True, text=True,
+    )
+    if probe.returncode == 0:
+        return  # transformers is importable and still exposes HybridCache.
+    print(
+        "[runner] transformers is incompatible with diffusers==0.38.0 "
+        "(HybridCache missing — likely transformers 5.x). Self-healing: "
+        f"pinning transformers=={TRANSFORMERS_COMPAT_PIN}...",
+        flush=True,
+    )
+    try:
+        subprocess.check_call(
+            [sys.executable, "-m", "pip", "install", f"transformers=={TRANSFORMERS_COMPAT_PIN}"]
+        )
+        print(f"[runner] transformers=={TRANSFORMERS_COMPAT_PIN} installed; continuing.", flush=True)
+    except subprocess.CalledProcessError as e:
+        print(
+            f"[runner] WARNING: could not repair transformers ({e}); "
+            "the diffusers import below may still fail.",
+            flush=True,
+        )
+
+
 class RefImageFlaggedError(RuntimeError):
     """Raised by Runner.load_image when the user-supplied ref fails NSFW
     moderation. The runner_host translates this into a 422 with a

@@ -66,8 +66,20 @@
 #   post-hoc installs cannot drift torch and torchaudio onto different CUDA
 #   builds. Qwen/vLLM vision is intentionally isolated in its runtime profile;
 #   do not install vLLM into the backend manager process from this file.
+#
+# Why transformers==4.57.6 (NOT unpinned):
+#   diffusers==0.38.0 declares only `transformers>=4.41.2` with NO upper
+#   bound, and it imports `HybridCache` from the transformers top-level in
+#   diffusers/loaders/lora_pipeline.py. transformers 5.0 removed that export,
+#   so an unpinned boot-time install pulls 5.x and EVERY diffusers pipeline
+#   import dies with: "Failed to import diffusers.pipelines... cannot import
+#   name 'HybridCache' from 'transformers'" (hit first on FLUX.2 [klein]).
+#   4.57.6 is the last 4.x — it still has HybridCache, satisfies diffusers
+#   0.38.0, and matches the transformers already validated in the LTX runtime
+#   profile. Keep it <5 until diffusers is bumped to a 5.x-compatible release.
 
 diffusers==0.38.0
+transformers==4.57.6
 peft==0.17.1
 ftfy
 imageio

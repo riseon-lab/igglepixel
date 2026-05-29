@@ -12,7 +12,7 @@ from importlib import metadata
 from pathlib import Path
 from typing import Optional
 
-from .base import Runner as RunnerBase, WORKSPACE
+from .base import Runner as RunnerBase, WORKSPACE, ensure_transformers_compat
 
 
 class Flux2KleinRunner(RunnerBase):
@@ -59,13 +59,20 @@ class Flux2KleinRunner(RunnerBase):
 
     def load(self) -> None:
         import os
+
+        # Repair the transformers 5.x / diffusers 0.38.0 HybridCache skew
+        # before importing diffusers, so an already-booted pod heals in place.
+        ensure_transformers_compat()
+
         import torch
 
         try:
             from diffusers import Flux2KleinPipeline
-        except ImportError as e:
+        except (ImportError, RuntimeError) as e:
             raise RuntimeError(
-                "Flux2KleinPipeline is missing. Install diffusers>=0.38.0 in the runtime."
+                "Flux2KleinPipeline failed to import. This usually means a "
+                "diffusers/transformers version skew (need diffusers>=0.38.0 "
+                f"with transformers<5). Underlying error: {e}"
             ) from e
 
         token = os.environ.get("HF_TOKEN")
@@ -74,6 +81,7 @@ class Flux2KleinRunner(RunnerBase):
             "[runner] versions "
             f"torch={torch.__version__} "
             f"diffusers={self._package_version('diffusers')} "
+            f"transformers={self._package_version('transformers')} "
             f"peft={self._package_version('peft')} "
             f"torchao={self._package_version('torchao')}",
             flush=True,
