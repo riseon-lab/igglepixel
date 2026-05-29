@@ -181,6 +181,17 @@ class Runner(RunnerBase):
                 raise FileNotFoundError(f"Dataset image not found: {image_path}")
             try:
                 pil_img = Image.open(img_path).convert("RGB")
+                # Bound the long edge before sending to vLLM. Qwen2.5-VL uses
+                # dynamic-resolution tiling, so a large training image (4K
+                # photos are common in LoRA datasets) explodes into thousands
+                # of vision tokens — that overflows --max-model-len (8192) and
+                # spikes vision-encoder activation memory, which OOMs/crashes
+                # the runner mid-pipeline (surfacing to the UI as a proxy 404
+                # while the backend bounces). 1024px is ample for caption
+                # quality. Tunable via IGGLEPIXEL_VISION_MAX_IMAGE_EDGE.
+                max_edge = int(os.environ.get("IGGLEPIXEL_VISION_MAX_IMAGE_EDGE", "1024"))
+                if max_edge > 0 and max(pil_img.size) > max_edge:
+                    pil_img.thumbnail((max_edge, max_edge))
                 buf = io.BytesIO()
                 pil_img.save(buf, format="JPEG", quality=95)
                 image_base64 = base64.b64encode(buf.getvalue()).decode("utf-8")

@@ -6958,42 +6958,63 @@ async function runDatasetPipeline() {
       }
     }
 
+    // Skip-on-error rather than hard-stop: a single bad image (corrupt
+    // file, one-off captioner hiccup) shouldn't throw away the whole run.
+    // But if requests fail repeatedly in a row, the captioner is genuinely
+    // down (backend crashed / OOM loop) and continuing is pointless — so
+    // we abort after a run of consecutive failures.
+    let consecutiveFailures = 0;
+    const MAX_CONSECUTIVE_FAILURES = 4;
+    let skipped = 0;
     for (let i = 0; i < rows.length; i++) {
       if (datasetPipelineCancel) break;
       const item = rows[i];
       if (item.excluded) continue;
-      datasetLog(`Review ${i + 1}/${rows.length}: ${item.image}`);
-      const reviewText = await requestDatasetVision(item, DATASET_REVIEW_PROMPT, settings);
-      const review = parseDatasetReview(reviewText);
-      item.review = review;
-      if (review && review.keep === false) {
-        item.excluded = true;
-        item.flags = [{ label: 'REJECTED', tone: 'warn', detail: review.reason || 'auto-review rejected this image' }, ...(item.flags || [])];
-        await persistDatasetExclude(item, true);
-        persistedCount++;
-        datasetLog(`Excluded ${item.image}: ${review.reason || 'review rejected'}`, 'warn');
-        renderDatasetWorkspace();
-        continue;
-      }
+      try {
+        datasetLog(`Review ${i + 1}/${rows.length}: ${item.image}`);
+        const reviewText = await requestDatasetVision(item, DATASET_REVIEW_PROMPT, settings);
+        const review = parseDatasetReview(reviewText);
+        item.review = review;
+        if (review && review.keep === false) {
+          item.excluded = true;
+          item.flags = [{ label: 'REJECTED', tone: 'warn', detail: review.reason || 'auto-review rejected this image' }, ...(item.flags || [])];
+          await persistDatasetExclude(item, true);
+          persistedCount++;
+          consecutiveFailures = 0;
+          datasetLog(`Excluded ${item.image}: ${review.reason || 'review rejected'}`, 'warn');
+          renderDatasetWorkspace();
+          continue;
+        }
 
-      if (!(item.caption || '').trim()) {
-        if (datasetPipelineCancel) break;
-        datasetLog(`Caption ${i + 1}/${rows.length}: ${item.image}`);
-        const prompt = ($('#captionPrompt')?.value || DATASET_CAPTION_FALLBACK).trim();
-        const raw = await requestDatasetVision(item, prompt, settings);
-        const caption = cleanDatasetCaption(raw);
-        if (!caption) throw new Error(`Captioner returned empty text for ${item.image}`);
-        item.caption = caption;
-        item.caption_path = item.caption_path || item.image.replace(/\.[^.]+$/, '.txt');
-        item.flags = (item.flags || []).filter(f => !['NO CAP', 'EMPTY CAP', 'SHORT CAP'].includes(f.label));
-        await persistDatasetCaption(item, caption);
-        persistedCount++;
-        datasetLog(`Saved caption for ${item.image}`);
-        renderDatasetWorkspace();
+        if (!(item.caption || '').trim()) {
+          if (datasetPipelineCancel) break;
+          datasetLog(`Caption ${i + 1}/${rows.length}: ${item.image}`);
+          const prompt = ($('#captionPrompt')?.value || DATASET_CAPTION_FALLBACK).trim();
+          const raw = await requestDatasetVision(item, prompt, settings);
+          const caption = cleanDatasetCaption(raw);
+          if (!caption) throw new Error(`Captioner returned empty text for ${item.image}`);
+          item.caption = caption;
+          item.caption_path = item.caption_path || item.image.replace(/\.[^.]+$/, '.txt');
+          item.flags = (item.flags || []).filter(f => !['NO CAP', 'EMPTY CAP', 'SHORT CAP'].includes(f.label));
+          await persistDatasetCaption(item, caption);
+          persistedCount++;
+          consecutiveFailures = 0;
+          datasetLog(`Saved caption for ${item.image}`);
+          renderDatasetWorkspace();
+        }
+      } catch (itemErr) {
+        if (datasetPipelineCancel || itemErr?.message === 'cancelled') break;
+        consecutiveFailures++;
+        skipped++;
+        datasetLog(`Skipped ${item.image}: ${itemErr.message || 'caption failed'} (${consecutiveFailures}/${MAX_CONSECUTIVE_FAILURES})`, 'error');
+        if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+          throw new Error(`Captioner failed ${MAX_CONSECUTIVE_FAILURES} times in a row — it's likely down (check the Running tab / pod logs). Stopping. ${persistedCount} captions saved so far.`);
+        }
       }
     }
-    datasetLog(datasetPipelineCancel ? 'Pipeline stopped by user.' : 'Pipeline complete.');
-    toast(datasetPipelineCancel ? 'Dataset pipeline stopped' : 'Dataset pipeline complete', datasetPipelineCancel ? 'info' : 'success');
+    const summary = skipped ? ` (${skipped} skipped)` : '';
+    datasetLog(datasetPipelineCancel ? 'Pipeline stopped by user.' : `Pipeline complete${summary}.`);
+    toast(datasetPipelineCancel ? 'Dataset pipeline stopped' : `Dataset pipeline complete${summary}`, datasetPipelineCancel ? 'info' : 'success');
   } catch (e) {
     datasetLog(e.message || 'Pipeline failed', 'error');
     toast(`Pipeline failed: ${e.message || 'unknown error'}`, 'error');
@@ -7017,15 +7038,33 @@ async function requestDatasetVision(item, prompt, settings) {
     return 'A close portrait with clear facial details, relaxed posture, visible clothing layers, soft ambient lighting, and a simple background.';
   }
   const imagePath = `${state.activeDataset.dataset_path}/${item.image}`;
-  const res = await api.datasetVisionProxy({
+  const payload = {
     provider: settings.provider,
     endpoint: settings.endpoint,
     model: settings.model,
     temperature: settings.temperature,
     prompt,
     image_path: imagePath,
-  });
-  return res.response || '';
+  };
+  // Retry once after a short pause. A single caption can fail transiently
+  // when the backend briefly bounces under load (the captioner/vLLM
+  // momentarily unavailable surfaces as a proxy 404/502). One retry rides
+  // through a fast restart without killing the whole pipeline.
+  let lastErr;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    if (datasetPipelineCancel) throw new Error('cancelled');
+    try {
+      const res = await api.datasetVisionProxy(payload);
+      return res.response || '';
+    } catch (e) {
+      lastErr = e;
+      if (attempt === 0) {
+        datasetLog(`Caption request failed (${e.message || 'error'}); retrying once…`, 'warn');
+        await new Promise(r => setTimeout(r, 4000));
+      }
+    }
+  }
+  throw lastErr;
 }
 
 function parseDatasetReview(text) {
