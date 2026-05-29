@@ -22,12 +22,14 @@ from pathlib import Path
 WORKSPACE = Path(os.environ.get("WORKSPACE", "/workspace"))
 TOOLKIT_REPO = os.environ.get("IGGLEPIXEL_AI_TOOLKIT_REPO", "https://github.com/ostris/ai-toolkit.git")
 TOOLKIT_DIR = Path(os.environ.get("IGGLEPIXEL_AI_TOOLKIT_DIR", WORKSPACE / "repos" / "ai-toolkit"))
-# Pin AI Toolkit to a specific commit/tag to freeze BOTH its code and its
-# (unpinned) requirements.txt to a known-good snapshot. Defaults to "main"
-# (rolling), which is the source of the recurring dependency-drift breakage
-# — set IGGLEPIXEL_AI_TOOLKIT_REF=<sha> once a good commit is known to stop
-# the drift permanently.
-TOOLKIT_REF = os.environ.get("IGGLEPIXEL_AI_TOOLKIT_REF", "main").strip() or "main"
+# Pin AI Toolkit to a specific commit to freeze BOTH its code and its
+# (unpinned) requirements.txt to a known-good snapshot — this is what stops
+# the recurring dependency-drift / arch-handling breakage. We default to the
+# commit our current config + self-heal repairs are validated against; set
+# IGGLEPIXEL_AI_TOOLKIT_REF=main (or another SHA) in the pod template to
+# move off it deliberately.
+DEFAULT_AI_TOOLKIT_REF = "5e84bf0d0b333ed4ddb8be681a7c45a735c95a3a"
+TOOLKIT_REF = os.environ.get("IGGLEPIXEL_AI_TOOLKIT_REF", DEFAULT_AI_TOOLKIT_REF).strip() or DEFAULT_AI_TOOLKIT_REF
 VENV_DIR = Path(os.environ.get("IGGLEPIXEL_AI_TOOLKIT_VENV", WORKSPACE / "venvs" / "ai-toolkit"))
 # Narrow pip constraints applied to the AI Toolkit requirements install.
 # Bundled with the repo so it deploys via the normal git pull.
@@ -81,23 +83,41 @@ def ensure_ai_toolkit() -> Path:
         safe_workspace_child(TOOLKIT_DIR, WORKSPACE / "repos", "AI Toolkit checkout")
         log(f"Deleting AI Toolkit checkout before bootstrap: {TOOLKIT_DIR}")
         shutil.rmtree(TOOLKIT_DIR)
-    if not (TOOLKIT_DIR / "run.py").exists():
+    fresh = not (TOOLKIT_DIR / "run.py").exists()
+    if fresh:
         if TOOLKIT_DIR.exists():
             raise SystemExit(f"{TOOLKIT_DIR} exists but does not look like ai-toolkit")
         log(f"Cloning AI Toolkit into {TOOLKIT_DIR}")
         run(["git", "clone", "--depth", "1", TOOLKIT_REPO, str(TOOLKIT_DIR)])
-        if TOOLKIT_REF != "main":
-            log(f"Checking out AI Toolkit ref {TOOLKIT_REF}")
+
+    if TOOLKIT_REF != "main":
+        # Pinned to a specific commit: enforce it on EVERY run, not just on
+        # fresh clones. A persistent /workspace volume keeps an older
+        # checkout around (the bootstrap doesn't re-clone), so without this
+        # an existing volume could stay on a different commit than the pin.
+        current = _ai_toolkit_head_sha()
+        if not _sha_matches(current, TOOLKIT_REF):
+            log(f"Pinning AI Toolkit to {TOOLKIT_REF} (was {current or 'unknown'})")
             run(["git", "fetch", "--depth", "1", "origin", TOOLKIT_REF], cwd=TOOLKIT_DIR)
             run(["git", "checkout", "--force", "FETCH_HEAD"], cwd=TOOLKIT_DIR)
-    elif py_bool(os.environ.get("IGGLEPIXEL_AI_TOOLKIT_UPDATE"), False):
-        log(f"Updating AI Toolkit to {TOOLKIT_REF}")
-        run(["git", "fetch", "--depth", "1", "origin", TOOLKIT_REF], cwd=TOOLKIT_DIR)
+        else:
+            log(f"AI Toolkit already at pinned commit {TOOLKIT_REF[:12]}")
+    elif py_bool(os.environ.get("IGGLEPIXEL_AI_TOOLKIT_UPDATE"), False) and not fresh:
+        log("Updating AI Toolkit to latest main")
+        run(["git", "fetch", "--depth", "1", "origin", "main"], cwd=TOOLKIT_DIR)
         run(["git", "reset", "--hard", "FETCH_HEAD"], cwd=TOOLKIT_DIR)
 
     run(["git", "submodule", "update", "--init", "--recursive"], cwd=TOOLKIT_DIR)
     _log_ai_toolkit_sha()
     return TOOLKIT_DIR
+
+
+def _sha_matches(current: str, ref: str) -> bool:
+    """True if the checked-out HEAD `current` matches the requested `ref`
+    (full or abbreviated SHA, either direction)."""
+    if not current or not ref:
+        return False
+    return current == ref or current.startswith(ref) or ref.startswith(current)
 
 
 def _ai_toolkit_head_sha() -> str:
