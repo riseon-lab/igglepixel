@@ -96,7 +96,39 @@ def ensure_ai_toolkit() -> Path:
         run(["git", "reset", "--hard", "FETCH_HEAD"], cwd=TOOLKIT_DIR)
 
     run(["git", "submodule", "update", "--init", "--recursive"], cwd=TOOLKIT_DIR)
+    _log_ai_toolkit_sha()
     return TOOLKIT_DIR
+
+
+def _ai_toolkit_head_sha() -> str:
+    try:
+        return subprocess.check_output(
+            ["git", "rev-parse", "HEAD"],
+            cwd=str(TOOLKIT_DIR),
+            text=True,
+            stderr=subprocess.DEVNULL,
+        ).strip()
+    except Exception:
+        return ""
+
+
+def _log_ai_toolkit_sha() -> None:
+    """Print the resolved AI Toolkit commit to the trainer log so it's
+    visible in the UI Terminal tab — no pod shell needed. If we're still
+    tracking `main`, spell out the exact env var to set in the RunPod pod
+    template to FREEZE this working version and stop dependency drift."""
+    sha = _ai_toolkit_head_sha()
+    if not sha:
+        return
+    if TOOLKIT_REF == "main":
+        log("")
+        log(f"AI Toolkit commit: {sha}  (tracking 'main' — moves over time)")
+        log(f"  ↳ To freeze this exact version and stop the dependency drift,")
+        log(f"    add this env var to your RunPod pod template (no shell needed):")
+        log(f"        IGGLEPIXEL_AI_TOOLKIT_REF={sha}")
+        log("")
+    else:
+        log(f"AI Toolkit commit: {sha}  (pinned via IGGLEPIXEL_AI_TOOLKIT_REF)")
 
 
 def ensure_venv(toolkit_dir: Path) -> Path:
