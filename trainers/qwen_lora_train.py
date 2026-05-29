@@ -178,19 +178,29 @@ def ensure_qwen3_vl_transformers(py: Path) -> None:
 
 
 def torch_imports_with_cuda(py: Path) -> tuple[bool, str, bool, str]:
-    """Probe torch: does it import, what CUDA build is it, and can the
-    pod's driver actually run it?
+    """Probe torch: does it FUNCTION for training, what CUDA build is it,
+    and can the pod's driver run it?
 
     Returns (import_ok, cuda_version, cuda_usable, raw_output):
-      - import_ok:   `import torch` succeeded.
+      - import_ok:   `import torch` AND `import torch._dynamo` both
+                     succeeded. The _dynamo import is the load-bearing
+                     check: torch 2.12.0 imports fine and reports CUDA
+                     available, but its `_dynamo/polyfills/sys.py`
+                     references `sys.get_int_max_str_digits` and crashes
+                     on this Python — which then takes down every
+                     diffusers/transformers import the trainer needs.
+                     A plain `import torch` would falsely pass it.
       - cuda_version: torch.version.cuda string ('12.8', '13.0', ...) or
                       '' for a CPU build / failed import.
-      - cuda_usable: torch imported, is a CUDA build, AND
-                     torch.cuda.is_available() is True — i.e. the wheel
-                     matches the driver and can run on this pod.
+      - cuda_usable: torch is functional (import_ok), is a CUDA build,
+                     AND torch.cuda.is_available() is True.
     """
     code = (
         "import torch\n"
+        # The thing that actually breaks with the latest torch on this
+        # Python — import it explicitly so a broken-but-loadable torch
+        # fails the probe instead of slipping through.
+        "import torch._dynamo  # noqa: F401\n"
         "avail = False\n"
         "try:\n"
         "    avail = torch.cuda.is_available()\n"
@@ -215,30 +225,32 @@ def torch_imports_with_cuda(py: Path) -> tuple[bool, str, bool, str]:
 
 
 def ensure_cuda_torch_stack(py: Path) -> None:
-    """Make sure torch imports AND can use the pod's GPU; only force the
-    known-good cu128 stack when it can't.
+    """Make sure torch is actually usable for training; only force the
+    known-good cu128 2.8.0 stack when it isn't.
 
     AI Toolkit's requirements.txt doesn't pin torch, so a clean install
-    grabs the newest PyPI torch. On a CUDA 12.8 pod that's a CUDA-13 build
-    which can't run (import fails / driver too old) — so we fall back to
-    the cu128 torch 2.8.0 stack that does.
+    grabs the newest PyPI torch — currently 2.12.0, which is broken for
+    our use on this Python regardless of CUDA: it imports and reports
+    CUDA available, but `torch._dynamo` crashes on
+    `sys.get_int_max_str_digits`, which takes down every diffusers /
+    transformers import the trainer needs. torch 2.8.0 (cu128) works and
+    runs on both CUDA 12.8 and 13 drivers (CUDA is backward-compatible).
 
-    CUDA-version-agnostic: we DON'T insist on a specific CUDA major. If
-    torch imports and `torch.cuda.is_available()` is True, the wheel
-    already matches this pod's driver (whether that's 12.x, 13.x, or
-    newer) and we leave it alone — so a CUDA-13 pod keeps its native
-    torch instead of being needlessly downgraded to cu128. We only force
-    the cu128 stack when torch is broken (won't import) or CPU-only /
-    driver-mismatched (cuda.is_available() False).
+    "Usable" therefore means: torch AND torch._dynamo import, it's a CUDA
+    build, and torch.cuda.is_available() is True (see the probe). We're
+    CUDA-version-agnostic — a genuinely-working newer torch on a CUDA-13
+    pod would be left alone — but a broken-but-loadable torch (like
+    2.12.0) gets replaced rather than slipping through on an import+
+    is_available() check.
     """
     import_ok, cuda, usable, output = torch_imports_with_cuda(py)
     if usable:
         log(f"AI Toolkit torch is usable on CUDA {cuda}; leaving torch stack as-is")
         return
     if import_ok:
-        log(f"AI Toolkit torch imports but the GPU isn't usable (build CUDA '{cuda or 'none'}', cuda.is_available=False) — installing the known-good cu128 stack")
+        log(f"AI Toolkit torch imports + torch._dynamo OK but the GPU isn't usable (build CUDA '{cuda or 'none'}', cuda.is_available=False) — installing the known-good cu128 stack")
     else:
-        log("AI Toolkit torch failed to import (unpinned requirements likely pulled a mismatched CUDA build); installing the known-good cu128 stack")
+        log("AI Toolkit torch is broken for training (import torch / torch._dynamo failed — likely a too-new torch); installing the known-good cu128 2.8.0 stack")
         for line in output.splitlines()[-6:]:
             log("  " + line)
     install_cuda128_torch_stack(py)
