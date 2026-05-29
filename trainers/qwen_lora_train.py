@@ -536,13 +536,25 @@ def is_flux_klein_base(base_model: str) -> bool:
 
 
 def model_arch(base_model: str) -> str:
-    if is_flux_klein_base(base_model):
-        return "flux2_klein_base_9b"
+    # FLUX.2 klein: return "" so we DON'T write an `arch` field. AI Toolkit
+    # auto-detects the FLUX.2 architecture from the model repo — the
+    # official Black Forest Labs ai-toolkit config sets no arch. Forcing
+    # one (the old "flux2_klein_base_9b" / "flux2_klein_9b" strings) is not
+    # recognised by current ai-toolkit and makes it fall back to the
+    # vanilla StableDiffusionPipeline, which then fails because FLUX has a
+    # `transformer`, not a `unet` ("expected [...unet...] but only {...}").
     if is_flux_klein(base_model):
-        return "flux2_klein_4b" if "4b" in base_model.lower() else "flux2_klein_9b"
+        return ""
     if "Edit" in base_model:
         return "qwen_image_edit"
     return "qwen_image"
+
+
+def model_arch_line(base_model: str) -> str:
+    """The `      arch: "..."` YAML line, or '' to omit it entirely (so
+    ai-toolkit auto-detects — required for FLUX.2 klein)."""
+    arch = model_arch(base_model)
+    return f'      arch: "{arch}"\n' if arch else ""
 
 
 def model_quant_block(base_model: str) -> str:
@@ -743,8 +755,7 @@ config:
       disable_sampling: {str(disable_sampling).lower()}
     model:
       name_or_path: "{base_model}"
-      arch: "{model_arch(base_model)}"
-{model_quant_block(base_model)}    sample:
+{model_arch_line(base_model)}{model_quant_block(base_model)}    sample:
       sampler: "flowmatch"
       sample_every: {save_every}
       width: {resolution}
