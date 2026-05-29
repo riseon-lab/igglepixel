@@ -829,6 +829,17 @@ def run_training(py: Path, toolkit_dir: Path, config_path: Path) -> None:
     env.setdefault("PYTHONFAULTHANDLER", "1")
     env.setdefault("TORCH_SHOW_CPP_STACKTRACES", "1")
     env.setdefault("TOKENIZERS_PARALLELISM", "false")
+    # Disable TorchScript. We pin torch to 2.8.0 (the latest, 2.12.0, has a
+    # broken torch._dynamo on this Python), but the rest of the resolved
+    # stack — notably kornia 0.8.x — was built for newer torch. kornia
+    # `@torch.jit.script`-compiles helpers at import time, and that version
+    # skew SEGFAULTs the TorchScript compiler during model load
+    # (kornia/geometry/epipolar/_metrics.py -> torch.jit.script -> SIGSEGV).
+    # PYTORCH_JIT=0 makes torch.jit.script a no-op pass-through, so those
+    # helpers run in eager mode (functionally identical, and not in the LoRA
+    # training hot loop so the perf cost is negligible). Override via the pod
+    # template if a future torch/kornia combo wants JIT back on.
+    env.setdefault("PYTORCH_JIT", "0")
     patch_dir = write_transformers_startup_patch(config_path.parents[1])
     env["PYTHONPATH"] = (
         str(patch_dir)
