@@ -282,9 +282,16 @@ def ensure_cuda_torch_stack(py: Path) -> None:
     if import_ok:
         log(f"AI Toolkit torch imports + torch._dynamo OK but the GPU isn't usable (build CUDA '{cuda or 'none'}', cuda.is_available=False) — installing the known-good cu128 stack")
     else:
-        log("AI Toolkit torch is broken for training (import torch / torch._dynamo failed — likely a too-new torch); installing the known-good cu128 2.8.0 stack")
+        log("=" * 64)
+        log("EXPECTED self-heal (NOT a crash): the unpinned install pulled a")
+        log("too-new torch whose torch._dynamo won't load on this Python.")
+        log("Auto-repairing now — installing the known-good cu128 torch 2.8.0")
+        log("stack. The traceback just below is the probe's diagnostic showing")
+        log("WHY the pulled torch is unusable; training continues after this.")
+        log("-" * 64)
         for line in output.splitlines()[-6:]:
-            log("  " + line)
+            log("    [torch probe] " + line)
+        log("=" * 64)
     install_cuda128_torch_stack(py)
     import_ok, cuda, usable, output = torch_imports_with_cuda(py)
     if not usable:
