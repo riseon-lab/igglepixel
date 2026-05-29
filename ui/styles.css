@@ -5421,8 +5421,17 @@ button.hf-file-row {
   font-size: 11px;
   line-height: 1.6;
   color: var(--px-text-dim);
-  overflow-x: auto;
-  white-space: pre;
+  /* The launch-command preview embeds the sample prompts — a long
+   * prompt was a single unwrapped line that stretched the whole
+   * trainer page sideways. Wrap it (pre-wrap keeps the arg spacing)
+   * and let long unbroken tokens break, with min-width:0 so it can
+   * never force its container wider than the page. */
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: hidden;
 }
 .px-theme .cmd-block .arg { color: var(--px-cyan); }
 .px-theme .cmd-block .val { color: var(--px-text); }
@@ -5547,27 +5556,52 @@ button.hf-file-row {
   font-family: var(--font-mono);
   font-size: 12.5px;
   line-height: 1.65;
-  white-space: pre;
-  word-break: normal;
+  /* Wrap long lines instead of letting the <pre> grow as wide as its
+   * longest line — a long prompt echoed in the trainer command was a
+   * single unwrapped line that stretched the whole page sideways.
+   * pre-wrap keeps indentation/newlines; overflow-wrap breaks very long
+   * unbroken tokens (paths, no-space prompts) so they can't overflow. */
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  min-width: 0;
+  max-width: 100%;
   min-height: 58vh;
   max-height: 68vh;
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
 }
 
 /* Config tab — frozen row table */
 .px-theme .config-rows { display: flex; flex-direction: column; }
 .px-theme .config-rows > .row {
   display: flex;
-  align-items: center;
+  align-items: baseline;
   justify-content: space-between;
+  gap: 16px;
   padding: 10px 0;
   border-bottom: 1px dashed var(--px-border);
   font-family: var(--px-font-mono);
   font-size: 12px;
 }
 .px-theme .config-rows > .row:last-child { border-bottom: 0; }
-.px-theme .config-rows .k { color: var(--px-text-mute); text-transform: uppercase; font-size: 10.5px; letter-spacing: 0.08em; }
-.px-theme .config-rows .v { color: var(--px-text); }
+.px-theme .config-rows .k {
+  color: var(--px-text-mute);
+  text-transform: uppercase;
+  font-size: 10.5px;
+  letter-spacing: 0.08em;
+  flex: 0 0 auto;        /* label keeps its width */
+  white-space: nowrap;
+}
+.px-theme .config-rows .v {
+  color: var(--px-text);
+  /* Long values (full command line, big sample prompt) wrap within the
+   * row instead of forcing the panel wider. */
+  min-width: 0;
+  text-align: right;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
 
 /* Samples grid */
 .px-theme .sample-grid { display: grid; gap: 8px; align-items: start; }
@@ -7510,6 +7544,13 @@ select,
   min-width: 0;
   justify-content: center;
   padding-inline: 10px;
+}
+
+/* Check / Start / Stop sit in the 3-col row; the destructive Delete
+ * Weights gets its own full-width row so the grid isn't left with a
+ * lone orphan button + two empty cells. */
+.caption-runtime-actions #btnDeleteCaptionWeights {
+  grid-column: 1 / -1;
 }
 
 .caption-runtime-log {
