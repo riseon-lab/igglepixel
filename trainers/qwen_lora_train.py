@@ -536,23 +536,28 @@ def is_flux_klein_base(base_model: str) -> bool:
 
 
 def model_arch(base_model: str) -> str:
-    # FLUX.2 klein: return "" so we DON'T write an `arch` field. AI Toolkit
-    # auto-detects the FLUX.2 architecture from the model repo — the
-    # official Black Forest Labs ai-toolkit config sets no arch. Forcing
-    # one (the old "flux2_klein_base_9b" / "flux2_klein_9b" strings) is not
-    # recognised by current ai-toolkit and makes it fall back to the
-    # vanilla StableDiffusionPipeline, which then fails because FLUX has a
-    # `transformer`, not a `unet` ("expected [...unet...] but only {...}").
+    # ai-toolkit's arch identifier is the model ARCHITECTURE, not the
+    # specific checkpoint variant. FLUX.2 klein (both the distilled and
+    # the *-base* checkpoints) is "flux2_klein_9b" / "flux2_klein_4b".
+    #
+    # History/regression: this worked with "flux2_klein_9b" until commit
+    # bc00869 (2026-05-28) added a separate is_flux_klein_base branch
+    # returning "flux2_klein_base_9b" — a string ai-toolkit does NOT
+    # recognise, so load_model fell back to the vanilla
+    # StableDiffusionPipeline (expects a `unet`; FLUX has a `transformer`)
+    # and errored. The "base" suffix is a checkpoint variant, not a
+    # distinct arch — so base-9B uses the same "flux2_klein_9b" arch.
     if is_flux_klein(base_model):
-        return ""
+        return "flux2_klein_4b" if "4b" in base_model.lower() else "flux2_klein_9b"
     if "Edit" in base_model:
         return "qwen_image_edit"
     return "qwen_image"
 
 
 def model_arch_line(base_model: str) -> str:
-    """The `      arch: "..."` YAML line, or '' to omit it entirely (so
-    ai-toolkit auto-detects — required for FLUX.2 klein)."""
+    """The `      arch: "..."` YAML line. ai-toolkit requires arch to pick
+    the right pipeline class — without it (or with an unrecognised value)
+    it defaults to StableDiffusionPipeline."""
     arch = model_arch(base_model)
     return f'      arch: "{arch}"\n' if arch else ""
 
