@@ -5955,7 +5955,15 @@ def get_train_job_samples(job_id: str):
             "name":        p.name,
         })
 
+    # Stable, human-natural order within each step so the same prompt lands
+    # in the same position at every checkpoint (lets the eye track one
+    # prompt down the timeline). Natural-key keeps `__2` before `__10`.
+    def _natural_key(name: str):
+        return [int(t) if t.isdigit() else t for t in re.split(r"(\d+)", name.lower())]
+
     checkpoints = sorted(by_step.keys())
+    for s in checkpoints:
+        by_step[s].sort(key=lambda item: _natural_key(item["name"]))
     return {
         "checkpoints": [
             {"step": s, "samples": by_step[s]} for s in checkpoints

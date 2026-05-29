@@ -5603,39 +5603,63 @@ button.hf-file-row {
   word-break: break-word;
 }
 
-/* Samples grid */
-.px-theme .sample-grid { display: grid; gap: 8px; align-items: start; }
-.px-theme .sample-grid .col-head {
+/* Sample timeline — one gallery per checkpoint, newest first. Each step is
+ * self-contained (no cross-step matrix), so there are never empty filler
+ * cells. Thumbnails keep their true aspect ratio (fixed height, auto width)
+ * so portraits aren't cropped, and wrap freely so the panel never needs to
+ * scroll horizontally. */
+.px-theme .sample-timeline { display: flex; flex-direction: column; gap: 18px; }
+.px-theme .sample-step-group { display: flex; flex-direction: column; gap: 10px; }
+.px-theme .sample-step-label {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--px-border);
   font-family: var(--px-font-pixel);
   font-size: 10px;
-  color: var(--px-text-mute);
   letter-spacing: 0.08em;
   text-transform: uppercase;
-  text-align: center;
+  color: var(--px-text-mute);
 }
-.px-theme .sample-grid .row-head {
+.px-theme .sample-step-count {
   font-family: var(--px-font-mono);
-  font-size: 11px;
-  color: var(--px-text-dim);
-  padding-right: 8px;
+  font-size: 10px;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--px-text-faint);
+}
+.px-theme .sample-thumbs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: flex-end;
+}
+.px-theme .sample-thumb {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.px-theme .sample-thumb img {
+  display: block;
+  height: 150px;
+  width: auto;
+  max-width: 280px;
+  object-fit: contain;
+  background: var(--px-panel-2);
+  border: 1px solid var(--px-border);
+  border-radius: 4px;
+}
+.px-theme .sample-thumb figcaption {
+  max-width: 200px;
+  font-family: var(--px-font-mono);
+  font-size: 9.5px;
+  color: var(--px-text-faint);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-}
-.px-theme .sample-cell {
-  position: relative;
-  aspect-ratio: 1;
-  background: var(--px-panel-2);
-  border: 1px solid var(--px-border);
-  overflow: hidden;
-}
-.px-theme .sample-cell img { display: block; width: 100%; height: 100%; object-fit: cover; }
-.px-theme .sample-cell.empty {
-  display: grid;
-  place-items: center;
-  font-family: var(--px-font-mono);
-  font-size: 10px;
-  color: var(--px-text-faint);
 }
 
 .px-theme .run-gpu-row {
