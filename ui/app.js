@@ -10675,12 +10675,11 @@ function mockTrainers() {
         configured: true,
         command_env: 'IGGLEPIXEL_FLUX_LORA_TRAIN_CMD',
         base_models: [
-          { id: 'black-forest-labs/FLUX.2-klein-9B', label: 'FLUX.2 [klein] 9B Turbo' },
           { id: 'black-forest-labs/FLUX.2-klein-base-9B', label: 'FLUX.2 [klein] 9B Base' },
         ],
         model_families: [
           { id: 'qwen', label: 'Qwen Image', status: 'live', description: 'Character LoRA training is wired today, including checkpoints and library import.' },
-          { id: 'flux', label: 'Flux Klein', status: 'live', description: 'Flux.2 Klein 9B turbo/base LoRA training uses the same guided dataset, config, and monitor workflow.' },
+          { id: 'flux', label: 'Flux Klein', status: 'live', description: 'Flux.2 Klein 9B Base LoRA training uses the same guided dataset, config, and monitor workflow (the distilled 4-step Klein is inference-only).' },
           { id: 'z-image', label: 'Z Image', status: 'planned', description: 'Planned after Flux once the wrapper and validation path are proven.' },
         ],
       },
