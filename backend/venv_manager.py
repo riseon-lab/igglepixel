@@ -238,7 +238,7 @@ def _ensure_git_clone(spec: dict, log: Callable[[str], None]) -> None:
         raise RuntimeError(f"git fetch failed: {repo}@{ref}")
 
 
-def _create_venv(runtime_id: str, python_version: Optional[str], log: Callable[[str], None]) -> None:
+def _create_venv(runtime_id: str, python_version: Optional[str], log: Callable[[str], None], *, system_site_packages: bool = True) -> None:
     """Create the venv with the requested Python version.
 
     Prefers uv (handles Python version installs + venv in one step).
@@ -286,7 +286,9 @@ def _create_venv(runtime_id: str, python_version: Optional[str], log: Callable[[
             if rc != 0:
                 _fail(f"uv python install {python_version}")
 
-        cmd = ["uv", "venv", str(venv), "--system-site-packages"]
+        cmd = ["uv", "venv", str(venv)]
+        if system_site_packages:
+            cmd.append("--system-site-packages")
         if python_version:
             cmd.extend(["--python", python_version])
         rc = _run(cmd, tee)
@@ -304,7 +306,10 @@ def _create_venv(runtime_id: str, python_version: Optional[str], log: Callable[[
             py_bin = candidate
         else:
             log(f"WARN: no python{python_version} binary found; using {py_bin}")
-    rc = _run([py_bin, "-m", "venv", str(venv), "--system-site-packages"], log)
+    cmd = [py_bin, "-m", "venv", str(venv)]
+    if system_site_packages:
+        cmd.append("--system-site-packages")
+    rc = _run(cmd, log)
     if rc == 0:
         return
 
@@ -318,9 +323,63 @@ def _create_venv(runtime_id: str, python_version: Optional[str], log: Callable[[
         if install_rc != 0:
             raise RuntimeError(f"python -m venv failed and virtualenv could not be installed for runtime '{runtime_id}'")
 
-    rc = _run([py_bin, "-m", "virtualenv", str(venv), "--system-site-packages"], log)
+    cmd = [py_bin, "-m", "virtualenv", str(venv)]
+    if system_site_packages:
+        cmd.append("--system-site-packages")
+    rc = _run(cmd, log)
     if rc != 0:
         raise RuntimeError(f"python -m venv and virtualenv failed for runtime '{runtime_id}'")
+
+
+def _torch_backend_from_version(version: str) -> Optional[str]:
+    version = (version or "").strip()
+    if not version:
+        return None
+    parts = version.split(".")
+    if len(parts) < 2:
+        return None
+    major, minor = parts[0], parts[1]
+    if not (major.isdigit() and minor.isdigit()):
+        return None
+    if int(major) == 13:
+        return "cu130"
+    return f"cu{major}{minor}"
+
+
+def _detect_torch_backend(log: Callable[[str], None]) -> str:
+    """Best-effort pip fallback for uv's `--torch-backend=auto`.
+
+    uv handles this natively by inspecting the platform/driver. Plain pip does
+    not, so when uv is unavailable we map the container's visible CUDA runtime
+    to the closest PyTorch wheel index. The managed pod images track CUDA 12.8
+    and 13.x, but the fallback also covers older CUDA 12 variants.
+    """
+    for env_key in ("IGGLEPIXEL_TORCH_BACKEND", "UV_TORCH_BACKEND"):
+        val = os.environ.get(env_key, "").strip().lower()
+        if val and val != "auto":
+            return val
+
+    try:
+        import torch
+        backend = _torch_backend_from_version(getattr(torch.version, "cuda", "") or "")
+        if backend:
+            return backend
+    except Exception:
+        pass
+
+    for path in (Path("/usr/local/cuda/version.json"), Path("/usr/local/cuda/version.txt")):
+        try:
+            text = path.read_text()
+        except OSError:
+            continue
+        import re
+        match = re.search(r"(\d+)\.(\d+)", text)
+        if match:
+            major, minor = match.group(1), match.group(2)
+            return "cu130" if int(major) == 13 else f"cu{major}{minor}"
+
+    log("WARN: could not detect CUDA toolkit for pip fallback; using PyTorch cu128 wheels")
+    return "cu128"
 
 
 def _pip_install(runtime_id: str, packages: list[str], log: Callable[[str], None], extra_args: Optional[list[str]] = None) -> None:
@@ -365,6 +424,8 @@ def _pip_install(runtime_id: str, packages: list[str], log: Callable[[str], None
         for a in args:
             if a.startswith("--torch-backend="):
                 backend = a.split("=", 1)[1]
+                if backend == "auto":
+                    backend = _detect_torch_backend(log)
                 pip_args.append(f"--extra-index-url=https://download.pytorch.org/whl/{backend}")
             elif a == "--torch-backend" or a.startswith("--torch-backend "):
                 # Not handling --torch-backend with space-separated value
@@ -466,8 +527,9 @@ def ensure_runtime(spec: dict, log: Callable[[str], None] = print) -> Path:
     # Step 2: venv. We always recreate when the venv isn't already ready
     # (caller checks is_runtime_ready before invoking ensure_runtime when
     # they want a fast no-op).
-    log(f"== venv: {runtime_id} (python={spec.get('python', 'system')}) ==")
-    _create_venv(runtime_id, spec.get("python"), log)
+    system_site_packages = bool(spec.get("system_site_packages", True))
+    log(f"== venv: {runtime_id} (python={spec.get('python', 'system')}, system_site_packages={int(system_site_packages)}) ==")
+    _create_venv(runtime_id, spec.get("python"), log, system_site_packages=system_site_packages)
 
     # Step 3: pip install. `pip_extra_args` is a list of CLI flags to
     # inject between `install` and the package list — used for things

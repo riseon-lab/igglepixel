@@ -12,13 +12,17 @@ report `loading=true` on /healthz before paying the cold-start cost.
 
 from __future__ import annotations
 
+import os
 from typing import Optional
 
 from .base import Runner as RunnerBase, WORKSPACE, save_latent_preview
 from .diffusers_quant import (
     pipeline_bnb_quantization_config,
+    pipeline_torchao_fp8_quantization_config,
     pipeline_torchao_int8_quantization_config,
     seed_torch_for_pipeline,
+    torchao_fp8_component_quantization_config,
+    torchao_int8_component_quantization_config,
 )
 
 
@@ -41,29 +45,65 @@ class Runner(RunnerBase):
         import torch
         from diffusers import QwenImagePipeline
 
-        import os
         token = os.environ.get("HF_TOKEN")
         quant = os.environ.get("FORGE_QUANT", "bf16").lower()
+        if quant in ("fp8wo", "fp8-weight-only", "fp8_weight_only"):
+            quant = "fp8"
+        elif quant in ("fp8dyn", "fp8-dynamic", "fp8_dynamic"):
+            quant = "fp8"
+            os.environ["FORGE_QWEN_FP8_DYNAMIC"] = "1"
 
-        # Build quantisation config when requested. bnb auto-places the
-        # quantised model on GPU during from_pretrained, so we skip the
-        # post-load .to("cuda") / offload dance below for int8 and nf4.
+        # Build quantisation config when requested. Qwen 2512 is sensitive to
+        # blanket text-encoder quantization, so TorchAO paths target only the
+        # DiT transformer and keep text encoder / VAE in BF16.
         kwargs = {"torch_dtype": torch.bfloat16, "token": token}
+        quant_backend = ""
+        quant_is_torchao = False
         if quant == "int8":
             backend = os.environ.get("FORGE_QWEN_INT8_BACKEND", "torchao").strip().lower()
             if backend in ("torchao", "ao"):
                 kwargs["quantization_config"] = pipeline_torchao_int8_quantization_config()
+                quant_backend = "torchao-int8"
+                quant_is_torchao = True
                 print("[runner] loading QwenImagePipeline with int8 TorchAO quantisation…", flush=True)
             else:
                 kwargs["quantization_config"] = pipeline_bnb_quantization_config(quant, torch)
+                quant_backend = "bitsandbytes-int8"
                 print("[runner] loading QwenImagePipeline with int8 bitsandbytes quantisation…", flush=True)
+        elif quant == "fp8":
+            dynamic_fp8 = os.environ.get("FORGE_QWEN_FP8_DYNAMIC", "0").strip().lower() in ("1", "true", "yes", "on")
+            try:
+                kwargs["quantization_config"] = pipeline_torchao_fp8_quantization_config(torch, dynamic=dynamic_fp8)
+                quant_backend = "torchao-fp8-dynamic" if dynamic_fp8 else "torchao-fp8-weight-only"
+            except RuntimeError as e:
+                fallback = os.environ.get("FORGE_QWEN_FP8_FALLBACK", "int8").strip().lower()
+                if fallback not in ("int8", "torchao-int8"):
+                    raise
+                kwargs["quantization_config"] = pipeline_torchao_int8_quantization_config()
+                quant = "int8"
+                quant_backend = "torchao-int8"
+                print(f"[runner] WARN: FP8 unavailable ({e}); falling back to TorchAO INT8", flush=True)
+            quant_is_torchao = True
+            print(f"[runner] loading QwenImagePipeline with {quant_backend} transformer quantisation…", flush=True)
         elif quant == "nf4":
             kwargs["quantization_config"] = pipeline_bnb_quantization_config(quant, torch)
+            quant_backend = "bitsandbytes-nf4"
             print("[runner] loading QwenImagePipeline with nf4 bitsandbytes quantisation…", flush=True)
         else:
+            quant = "bf16"
             print("[runner] loading QwenImagePipeline (bf16)…", flush=True)
 
-        pipe = QwenImagePipeline.from_pretrained(self.HF_REPO, **kwargs)
+        try:
+            pipe = QwenImagePipeline.from_pretrained(self.HF_REPO, **kwargs)
+        except Exception as e:
+            if not quant_is_torchao:
+                raise
+            print(
+                f"[runner] WARN: pipeline-level {quant_backend} quantization failed "
+                f"({type(e).__name__}: {e}); retrying with explicit transformer load",
+                flush=True,
+            )
+            pipe = self._load_with_quantized_transformer(QwenImagePipeline, torch, token, quant, kwargs)
 
         if torch.cuda.is_available() and quant == "bf16":
             try:
@@ -75,10 +115,39 @@ class Runner(RunnerBase):
                     pipe.enable_sequential_cpu_offload()
             except Exception:
                 pipe.enable_sequential_cpu_offload()
-        # int8 / nf4: bnb already placed weights on GPU during from_pretrained
+        elif torch.cuda.is_available() and quant_is_torchao:
+            try:
+                pipe.to("cuda")
+            except Exception as e:
+                print(f"[runner] WARN: could not move quantized Qwen pipeline to CUDA ({type(e).__name__}: {e}); enabling CPU offload", flush=True)
+                try:
+                    pipe.enable_model_cpu_offload()
+                except Exception:
+                    pipe.enable_sequential_cpu_offload()
+        # bnb int8 / nf4: diffusers/bnb handles quantized module placement.
         print("[runner] ready", flush=True)
 
         self._pipe = pipe
+
+    def _load_with_quantized_transformer(self, pipeline_cls, torch, token, quant: str, base_kwargs: dict):
+        from diffusers import QwenImageTransformer2DModel
+
+        dynamic_fp8 = os.environ.get("FORGE_QWEN_FP8_DYNAMIC", "0").strip().lower() in ("1", "true", "yes", "on")
+        if quant == "fp8":
+            qcfg = torchao_fp8_component_quantization_config(torch, dynamic=dynamic_fp8)
+        else:
+            qcfg = torchao_int8_component_quantization_config()
+
+        transformer = QwenImageTransformer2DModel.from_pretrained(
+            self.HF_REPO,
+            subfolder="transformer",
+            torch_dtype=torch.bfloat16,
+            token=token,
+            quantization_config=qcfg,
+        )
+        kwargs = {k: v for k, v in base_kwargs.items() if k != "quantization_config"}
+        kwargs["transformer"] = transformer
+        return pipeline_cls.from_pretrained(self.HF_REPO, **kwargs)
 
     # ── Inference ────────────────────────────────────────────────────
     def generate(self, params: dict, loras: Optional[list] = None) -> dict:

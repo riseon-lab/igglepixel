@@ -172,6 +172,24 @@ class ModelLauncher:
                     "message": f"Runtime profile '{runtime_id}' is missing or stale. Start again to prepare it.",
                 }
             python_bin = str(rp)
+            venv_dir = rp.parent.parent
+            env["VIRTUAL_ENV"] = str(venv_dir)
+            env["PATH"] = f"{venv_dir / 'bin'}{os.pathsep}{env.get('PATH', '')}"
+            if runtime.get("system_site_packages") is False:
+                env["PYTHONNOUSERSITE"] = "1"
+            for key, value in (runtime.get("env") or {}).items():
+                if value is None:
+                    env.pop(str(key), None)
+                else:
+                    env[str(key)] = str(value)
+            extra_ld_paths = []
+            for raw in runtime.get("ld_library_paths") or []:
+                p = Path(str(raw))
+                if p.exists():
+                    extra_ld_paths.append(str(p))
+            if extra_ld_paths:
+                current_ld = env.get("LD_LIBRARY_PATH", "")
+                env["LD_LIBRARY_PATH"] = os.pathsep.join([*extra_ld_paths, current_ld] if current_ld else extra_ld_paths)
 
         cmd = [python_bin, "-m", "backend.runner_host", runner_module, str(port)]
 
