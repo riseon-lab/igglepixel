@@ -93,9 +93,41 @@ def pipeline_torchao_int8_quantization_config(*, components_to_quantize="transfo
     on some pod images. TorchAO's weight-only int8 path avoids bnb entirely
     and is the preferred Qwen text-to-image INT8 backend.
     """
+    return _pipeline_torchao_quantization_config(
+        _torchao_int8_component_config(),
+        components_to_quantize=components_to_quantize,
+    )
+
+
+def pipeline_torchao_fp8_quantization_config(torch, *, components_to_quantize="transformer", dynamic=False):
+    """Return a Diffusers pipeline-level TorchAO FP8 config.
+
+    This intentionally targets the Qwen DiT transformer by default. Qwen's
+    text encoder has multimodal alignment-sensitive layers; leaving it in
+    BF16 avoids the startup failures and prompt-conditioning drift seen when
+    generic pipeline hooks try to quantize every large component.
+    """
+    _check_fp8_runtime_compat(torch)
+    return _pipeline_torchao_quantization_config(
+        _torchao_fp8_component_config(torch, dynamic=dynamic),
+        components_to_quantize=components_to_quantize,
+    )
+
+
+def torchao_int8_component_quantization_config():
+    """Return a component-level Diffusers TorchAoConfig for explicit loaders."""
+    return _torchao_int8_component_config()
+
+
+def torchao_fp8_component_quantization_config(torch, *, dynamic=False):
+    """Return a component-level Diffusers TorchAoConfig for explicit loaders."""
+    _check_fp8_runtime_compat(torch)
+    return _torchao_fp8_component_config(torch, dynamic=dynamic)
+
+
+def _torchao_int8_component_config():
     try:
         from diffusers import TorchAoConfig
-        from diffusers.quantizers import PipelineQuantizationConfig
         from torchao.quantization import Int8WeightOnlyConfig
     except Exception as e:
         raise RuntimeError(
@@ -103,11 +135,66 @@ def pipeline_torchao_int8_quantization_config(*, components_to_quantize="transfo
             "or `python -m pip install 'torchao>=0.15'`, then restart the runner."
         ) from e
 
+    return TorchAoConfig(Int8WeightOnlyConfig())
+
+
+def _torchao_fp8_component_config(torch, *, dynamic=False):
+    try:
+        from diffusers import TorchAoConfig
+        from torchao.quantization import Float8WeightOnlyConfig
+    except Exception as e:
+        raise RuntimeError(
+            "TorchAO FP8 is not installed. Use the Qwen quant runtime profile "
+            "or install a torch/torchao pair that exposes Float8WeightOnlyConfig."
+        ) from e
+
+    if not hasattr(torch, "float8_e4m3fn"):
+        raise RuntimeError("This PyTorch build does not expose torch.float8_e4m3fn; install a current CUDA PyTorch wheel.")
+
+    if dynamic:
+        try:
+            from torchao.quantization import Float8DynamicActivationFloat8WeightConfig
+        except Exception as e:
+            raise RuntimeError(
+                "TorchAO dynamic FP8 is unavailable in this torchao build; use weight-only FP8 or INT8."
+            ) from e
+        return TorchAoConfig(Float8DynamicActivationFloat8WeightConfig())
+
+    return TorchAoConfig(Float8WeightOnlyConfig(weight_dtype=torch.float8_e4m3fn))
+
+
+def _pipeline_torchao_quantization_config(component_config, *, components_to_quantize="transformer"):
+    try:
+        from diffusers.quantizers import PipelineQuantizationConfig
+    except Exception as e:
+        raise RuntimeError(
+            "Diffusers PipelineQuantizationConfig is not installed. Use the Qwen "
+            "quant runtime profile or update diffusers, then restart the runner."
+        ) from e
+
     return PipelineQuantizationConfig(
         quant_mapping={
-            components_to_quantize: TorchAoConfig(Int8WeightOnlyConfig()),
+            components_to_quantize: component_config,
         }
     )
+
+
+def _check_fp8_runtime_compat(torch) -> None:
+    """Fail early on GPUs without useful FP8 inference support."""
+    try:
+        if not torch.cuda.is_available():
+            return
+        capability = torch.cuda.get_device_capability(0)
+    except Exception:
+        return
+    if not capability:
+        return
+    major, minor = capability[:2]
+    if (major, minor) < (8, 9):
+        raise RuntimeError(
+            f"TorchAO FP8 needs an Ada/Hopper/Blackwell-class GPU (compute capability >= 8.9); "
+            f"this device reports sm_{major}{minor}. Use FORGE_QUANT=int8 on this GPU."
+        )
 
 
 def seed_torch_for_pipeline(torch, seed: int) -> None:

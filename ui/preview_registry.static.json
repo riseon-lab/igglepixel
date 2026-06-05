@@ -122,6 +122,61 @@
         "fastapi", "uvicorn", "pydantic", "cryptography"
       ],
       "verify_imports": ["sensenova_u1", "transformers", "torch", "fastapi", "uvicorn", "cryptography"]
+    },
+    "qwen-diffusers-quant": {
+      "id": "qwen-diffusers-quant",
+      "label": "Qwen Diffusers quant runtime",
+      "python": "3.12",
+      "system_site_packages": false,
+      "pip_extra_args": ["--torch-backend=auto"],
+      "env": {
+        "FORGE_QWEN_INT8_BACKEND": "torchao",
+        "FORGE_QWEN_FP8_FALLBACK": "int8",
+        "PYTHONNOUSERSITE": "1",
+        "TOKENIZERS_PARALLELISM": "false"
+      },
+      "ld_library_paths": [
+        "/usr/local/cuda/compat",
+        "/usr/local/cuda/lib64",
+        "/usr/lib/x86_64-linux-gnu"
+      ],
+      "pip": [
+        "torch==2.11.0",
+        "torchvision==0.26.0",
+        "torchaudio==2.11.0",
+        "diffusers==0.38.0",
+        "transformers==4.57.6",
+        "accelerate>=1.11,<2",
+        "torchao==0.17.0",
+        "bitsandbytes>=0.48.0",
+        "peft==0.17.1",
+        "huggingface_hub",
+        "safetensors",
+        "sentencepiece",
+        "protobuf",
+        "einops",
+        "ftfy",
+        "numpy",
+        "Pillow",
+        "imageio",
+        "imageio-ffmpeg",
+        "fastapi",
+        "uvicorn[standard]",
+        "pydantic",
+        "cryptography==44.0.0"
+      ],
+      "verify_imports": [
+        "fastapi",
+        "uvicorn",
+        "torch",
+        "diffusers",
+        "transformers",
+        "accelerate",
+        "torchao",
+        "bitsandbytes",
+        "PIL",
+        "cryptography"
+      ]
     }
   },
   "upscalers": [
@@ -1397,6 +1452,7 @@
       "description": "December refresh of Qwen-Image. Stronger realism, natural detail, and text rendering while staying Apache 2.0.",
       "runner_module": "backend.runners.qwen_image_2512",
       "hf_repo": "Qwen/Qwen-Image-2512",
+      "runtime_profile": "qwen-diffusers-quant",
       "license": {
         "type": "commercial",
         "label": "Apache 2.0",
@@ -1413,6 +1469,7 @@
       ],
       "quants": [
         { "id": "bf16", "label": "BF16", "description": "Best quality, high VRAM", "vram_gb": 80, "auto_min_vram_gb": 80 },
+        { "id": "fp8",  "label": "FP8",  "description": "TorchAO transformer FP8", "vram_gb": 24, "auto_min_vram_gb": 47 },
         { "id": "int8", "label": "INT8", "description": "Faster, near-bf16",  "vram_gb": 24, "auto_min_vram_gb": 36 },
         { "id": "nf4",  "label": "NF4",  "description": "Fits any modern card","vram_gb": 14, "auto_min_vram_gb": 0  }
       ],
