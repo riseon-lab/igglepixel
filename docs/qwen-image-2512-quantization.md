@@ -44,7 +44,7 @@ The isolated profile `qwen-diffusers-quant` pins the quant stack locally:
 
 - `torch==2.11.0`, `torchvision==0.26.0`, `torchaudio==2.11.0`
 - `diffusers==0.38.0`, `transformers==4.57.6`, `accelerate>=1.11,<2`
-- `torchao==0.17.0`
+- `torchao>=0.15.0`
 - `bitsandbytes>=0.48.0`
 
 `pip_extra_args: ["--torch-backend=auto"]` lets uv pick `cu128` or `cu130`
