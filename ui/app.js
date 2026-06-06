@@ -56,6 +56,7 @@ const state = {
   recents:       {},          // model_id -> [asset, …] (this session only)
   activePreviews: {},         // model_id -> focused asset in the hero preview
   imgInputs:     {},          // { model_id -> { ref:{img,enabled}, pose:{...}, ... } }
+  imgRefPanels:  readJSONStorage('forge_img_ref_panels', {}), // model_id -> References details open/closed
   loraStates:    readJSONStorage('forge_lora_states', {}), // persisted per-model LoRA toggles + strengths
   trainers:      [],
   trainJobs:     [],
@@ -3747,8 +3748,11 @@ function renderImgStrip(m) {
 
   const strip = $('#wsImgStrip');
   strip.classList.toggle('has-media', hasMedia);
+  const panelOpen = state.imgRefPanels[m.id] !== undefined
+    ? !!state.imgRefPanels[m.id]
+    : true;
   strip.innerHTML = `${generatedCellHtml(latest)}
-    <details class="img-ref-panel"${hasMedia ? '' : ' open'}>
+    <details class="img-ref-panel"${panelOpen ? ' open' : ''}>
       <summary>
         <span>References</span>
         <em>${cells.length} optional input${cells.length === 1 ? '' : 's'}</em>
@@ -3847,6 +3851,13 @@ function bindImgStrip(m) {
     if (latest) showAssetMenu(latest, b);
   }));
   // Toggle on/off per cell
+  const refPanel = $('.img-ref-panel', $('#wsImgStrip'));
+  if (refPanel) {
+    refPanel.addEventListener('toggle', () => {
+      state.imgRefPanels[m.id] = refPanel.open;
+      writeJSONStorage('forge_img_ref_panels', state.imgRefPanels);
+    });
+  }
   $$('[data-toggle-input]', $('#wsImgStrip')).forEach(b => b.addEventListener('click', (e) => {
     e.stopPropagation();
     slots[b.dataset.toggleInput].enabled = !slots[b.dataset.toggleInput].enabled;
