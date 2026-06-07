@@ -53,17 +53,20 @@ class Runner(RunnerBase):
             quant = "fp8"
             os.environ["FORGE_QWEN_FP8_DYNAMIC"] = "1"
 
-        # Build quantisation config when requested. Qwen 2512 is sensitive to
-        # blanket text-encoder quantization, so TorchAO paths target only the
-        # DiT transformer and keep text encoder / VAE in BF16.
+        # Build quantisation config when requested. By default Qwen quantizes
+        # the DiT transformer; the 2512 runtime profile can opt into the
+        # Qwen2.5-VL text encoder too. Quantized paths can apply VAE
+        # tiling/slicing because that pressure is a decode-time memory spike
+        # more than a weight-footprint issue.
         kwargs = {"torch_dtype": torch.bfloat16, "token": token}
         quant_backend = ""
         quant_is_torchao = False
         if quant == "int8":
             backend = os.environ.get("FORGE_QWEN_INT8_BACKEND", "torchao").strip().lower()
             if backend in ("torchao", "ao"):
-                kwargs["quantization_config"] = pipeline_torchao_int8_quantization_config()
-                quant_backend = "torchao-int8"
+                components = self._torchao_quant_components("int8")
+                kwargs["quantization_config"] = pipeline_torchao_int8_quantization_config(components_to_quantize=components)
+                quant_backend = f"torchao-int8 ({'+'.join(components)})"
                 quant_is_torchao = True
                 print("[runner] loading QwenImagePipeline with int8 TorchAO quantisation…", flush=True)
             else:
@@ -72,19 +75,20 @@ class Runner(RunnerBase):
                 print("[runner] loading QwenImagePipeline with int8 bitsandbytes quantisation…", flush=True)
         elif quant == "fp8":
             dynamic_fp8 = os.environ.get("FORGE_QWEN_FP8_DYNAMIC", "0").strip().lower() in ("1", "true", "yes", "on")
+            components = self._torchao_quant_components("fp8")
             try:
-                kwargs["quantization_config"] = pipeline_torchao_fp8_quantization_config(torch, dynamic=dynamic_fp8)
-                quant_backend = "torchao-fp8-dynamic" if dynamic_fp8 else "torchao-fp8-weight-only"
+                kwargs["quantization_config"] = pipeline_torchao_fp8_quantization_config(torch, components_to_quantize=components, dynamic=dynamic_fp8)
+                quant_backend = f"{'torchao-fp8-dynamic' if dynamic_fp8 else 'torchao-fp8-weight-only'} ({'+'.join(components)})"
             except RuntimeError as e:
                 fallback = os.environ.get("FORGE_QWEN_FP8_FALLBACK", "int8").strip().lower()
                 if fallback not in ("int8", "torchao-int8"):
                     raise
-                kwargs["quantization_config"] = pipeline_torchao_int8_quantization_config()
+                kwargs["quantization_config"] = pipeline_torchao_int8_quantization_config(components_to_quantize=components)
                 quant = "int8"
-                quant_backend = "torchao-int8"
+                quant_backend = f"torchao-int8 ({'+'.join(components)})"
                 print(f"[runner] WARN: FP8 unavailable ({e}); falling back to TorchAO INT8", flush=True)
             quant_is_torchao = True
-            print(f"[runner] loading QwenImagePipeline with {quant_backend} transformer quantisation…", flush=True)
+            print(f"[runner] loading QwenImagePipeline with {quant_backend} component quantisation…", flush=True)
         elif quant == "nf4":
             kwargs["quantization_config"] = pipeline_bnb_quantization_config(quant, torch)
             quant_backend = "bitsandbytes-nf4"
@@ -104,6 +108,9 @@ class Runner(RunnerBase):
                 flush=True,
             )
             pipe = self._load_with_quantized_transformer(QwenImagePipeline, torch, token, quant, kwargs)
+
+        if quant_is_torchao:
+            self._apply_vae_memory_policy(pipe)
 
         if torch.cuda.is_available() and quant == "bf16":
             try:
@@ -128,6 +135,44 @@ class Runner(RunnerBase):
         print("[runner] ready", flush=True)
 
         self._pipe = pipe
+
+    @staticmethod
+    def _torchao_quant_components(quant: str) -> list[str]:
+        env_key = "FORGE_QWEN_FP8_COMPONENTS" if quant == "fp8" else "FORGE_QWEN_INT8_COMPONENTS"
+        raw = os.environ.get(env_key) or os.environ.get("FORGE_QWEN_QUANT_COMPONENTS") or "transformer"
+        requested = [p.strip().lower() for p in raw.replace(";", ",").split(",") if p.strip()]
+        allowed = {"transformer", "text_encoder"}
+        components = []
+        ignored = []
+        for name in requested:
+            if name in allowed:
+                if name not in components:
+                    components.append(name)
+            else:
+                ignored.append(name)
+        if ignored:
+            print(f"[runner] WARN: ignoring unsupported Qwen quant component(s): {', '.join(ignored)}", flush=True)
+        return components or ["transformer"]
+
+    @staticmethod
+    def _apply_vae_memory_policy(pipe) -> None:
+        policy = os.environ.get("FORGE_QWEN_VAE_MEMORY", "tiling").strip().lower()
+        if policy in ("", "0", "off", "none", "false", "no"):
+            return
+        want_slicing = policy in ("slice", "slicing", "sliced", "both")
+        want_tiling = policy in ("1", "true", "yes", "on", "auto", "tile", "tiling", "tiled", "both")
+        if want_slicing and hasattr(pipe, "enable_vae_slicing"):
+            try:
+                pipe.enable_vae_slicing()
+                print("[runner] enabled Qwen VAE slicing", flush=True)
+            except Exception as e:
+                print(f"[runner] WARN: Qwen VAE slicing unavailable ({type(e).__name__}: {e})", flush=True)
+        if want_tiling and hasattr(pipe, "enable_vae_tiling"):
+            try:
+                pipe.enable_vae_tiling()
+                print("[runner] enabled Qwen VAE tiling", flush=True)
+            except Exception as e:
+                print(f"[runner] WARN: Qwen VAE tiling unavailable ({type(e).__name__}: {e})", flush=True)
 
     def _load_with_quantized_transformer(self, pipeline_cls, torch, token, quant: str, base_kwargs: dict):
         from diffusers import QwenImageTransformer2DModel

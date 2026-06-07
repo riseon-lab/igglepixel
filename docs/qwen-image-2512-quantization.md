@@ -2,27 +2,37 @@
 
 Date: 2026-06-05
 
-This project runs Qwen-Image-2512 through Diffusers, but the 8-bit path must be
-more selective than a generic "quantize the pipeline" hook. Qwen's prompt
-conditioning depends on a multimodal text stack, so the default runtime keeps
-the text encoder and VAE in BF16 and quantizes only the DiT transformer.
+This project runs Qwen-Image-2512 through Diffusers, but the 8-bit path should
+stay selective rather than using a generic "quantize the pipeline" hook. The
+stable FP8 default quantizes the DiT transformer and Qwen2.5-VL text encoder
+with TorchAO, while the VAE remains BF16 and uses tiled decoding on that
+quantized path to reduce the decode-time memory spike. Native BF16 keeps the
+plain Diffusers VAE behavior.
 
 ## Implementation pattern
 
-Use `FORGE_QUANT=fp8` or `FORGE_QUANT=int8`.
+Use `FORGE_QUANT=fp8`.
 
 The runner first tries Diffusers pipeline-level quantization:
 
 ```python
 PipelineQuantizationConfig(
     quant_mapping={
-        "transformer": TorchAoConfig(Float8WeightOnlyConfig(...))
+        "transformer": TorchAoConfig(Float8WeightOnlyConfig(...)),
+        "text_encoder": TorchAoConfig(Float8WeightOnlyConfig(...)),
     }
 )
 ```
 
-For INT8, it uses `TorchAoConfig(Int8WeightOnlyConfig())`. If the pipeline-level
-hook fails, the runner falls back to explicitly loading:
+The Qwen-Image-2512 runtime profile sets the FP8/TorchAO policy:
+
+```text
+FORGE_QWEN_FP8_COMPONENTS=transformer,text_encoder
+FORGE_QWEN_VAE_MEMORY=tiling
+```
+
+If the pipeline-level hook fails, the runner falls back to explicitly loading a
+quantized transformer:
 
 ```python
 QwenImageTransformer2DModel.from_pretrained(
@@ -35,12 +45,20 @@ QwenImageTransformer2DModel.from_pretrained(
 
 and injects that transformer into `QwenImagePipeline.from_pretrained(...)`.
 
-This avoids quantizing alignment-sensitive text-encoder layers while still
-cutting the 20B diffusion transformer weight footprint to an 8-bit state.
+This preserves the known-good transformer-only escape hatch while allowing the
+default 2512 path to reduce the large Qwen2.5-VL text encoder footprint. The
+VAE is not weight-quantized here because its main pressure is the final decode
+activation peak; Diffusers' Qwen pipeline exposes `enable_vae_tiling()` for that
+case. The runner only applies this VAE policy when TorchAO quantization is
+active, so `FORGE_QUANT=bf16` remains the known-good native path.
 
 ## CUDA 12.8 / 13 package rules
 
-The isolated profile `qwen-diffusers-quant` pins the quant stack locally:
+The isolated profile `qwen-diffusers-quant` pins the quant stack locally and is
+used only for Qwen-Image-2512 FP8 launches via
+`runtime_profile_quants: ["fp8"]`. BF16 launches intentionally stay on the
+container/global interpreter, matching the native Diffusers behavior used by
+the other Qwen image runners.
 
 - `torch==2.11.0`, `torchvision==0.26.0`, `torchaudio==2.11.0`
 - `diffusers==0.38.0`, `transformers==4.57.6`, `accelerate>=1.11,<2`

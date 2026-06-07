@@ -94,7 +94,7 @@ def pipeline_torchao_int8_quantization_config(*, components_to_quantize="transfo
     and is the preferred Qwen text-to-image INT8 backend.
     """
     return _pipeline_torchao_quantization_config(
-        _torchao_int8_component_config(),
+        _torchao_int8_component_config,
         components_to_quantize=components_to_quantize,
     )
 
@@ -109,7 +109,7 @@ def pipeline_torchao_fp8_quantization_config(torch, *, components_to_quantize="t
     """
     _check_fp8_runtime_compat(torch)
     return _pipeline_torchao_quantization_config(
-        _torchao_fp8_component_config(torch, dynamic=dynamic),
+        lambda: _torchao_fp8_component_config(torch, dynamic=dynamic),
         components_to_quantize=components_to_quantize,
     )
 
@@ -163,7 +163,20 @@ def _torchao_fp8_component_config(torch, *, dynamic=False):
     return TorchAoConfig(Float8WeightOnlyConfig(weight_dtype=torch.float8_e4m3fn))
 
 
-def _pipeline_torchao_quantization_config(component_config, *, components_to_quantize="transformer"):
+def _component_names(components_to_quantize) -> list[str]:
+    if isinstance(components_to_quantize, str):
+        raw = components_to_quantize.replace(";", ",").split(",")
+    else:
+        raw = list(components_to_quantize or [])
+    names: list[str] = []
+    for item in raw:
+        name = str(item).strip()
+        if name and name not in names:
+            names.append(name)
+    return names or ["transformer"]
+
+
+def _pipeline_torchao_quantization_config(component_config_factory, *, components_to_quantize="transformer"):
     try:
         from diffusers.quantizers import PipelineQuantizationConfig
     except Exception as e:
@@ -172,9 +185,10 @@ def _pipeline_torchao_quantization_config(component_config, *, components_to_qua
             "quant runtime profile or update diffusers, then restart the runner."
         ) from e
 
+    names = _component_names(components_to_quantize)
     return PipelineQuantizationConfig(
         quant_mapping={
-            components_to_quantize: component_config,
+            name: component_config_factory() for name in names
         }
     )
 

@@ -68,6 +68,23 @@ def _free_port(start: int) -> int:
     raise RuntimeError("No free runner port in range")
 
 
+def _normalise_quant(quant: Optional[str]) -> str:
+    q = (quant or "bf16").strip().lower()
+    if q == "auto":
+        return "bf16"
+    if q in ("fp8wo", "fp8-weight-only", "fp8_weight_only", "fp8dyn", "fp8-dynamic", "fp8_dynamic"):
+        return "fp8"
+    return q
+
+
+def _runtime_applies_to_quant(model: dict, quant: Optional[str]) -> bool:
+    allowed = model.get("runtime_profile_quants") or model.get("runtime_quants")
+    if not allowed:
+        return True
+    q = _normalise_quant(quant)
+    return q in {str(item).strip().lower() for item in allowed}
+
+
 class ModelLauncher:
     def __init__(self):
         self._procs: dict[str, dict] = {}     # model_id -> {proc, name, port, pid, status, log_path}
@@ -162,6 +179,8 @@ class ModelLauncher:
         # Other runners pass through to sys.executable as before.
         python_bin = sys.executable
         runtime = model.get("runtime") or {}
+        if runtime and not _runtime_applies_to_quant(model, quant):
+            runtime = {}
         runtime_id = runtime.get("id")
         if runtime_id:
             rp = venv_manager.runtime_python(runtime_id, runtime)

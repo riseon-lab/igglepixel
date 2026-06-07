@@ -1892,7 +1892,7 @@ function renderModels() {
   // every poll and visibly flickered. Include the per-model state bits
   // that actually change the rendered card (phase / ready / running).
   const signature = filtered.map(m => {
-    const phase = drawerPhase(m.id);
+    const phase = drawerPhase(m.id, m);
     return `${m.id}|${phase}|${(state.modelStates[m.id]?.ready ? 1 : 0)}|${(state.running?.[m.id] ? 1 : 0)}`;
   }).join(',') + `|q=${search}|f=${state.filter}|gpu=${gpu?.type || ''}`;
   if (grid.dataset.modelSignature === signature) return;
@@ -1900,7 +1900,7 @@ function renderModels() {
   grid.innerHTML = filtered.map(m => {
     const vram = gpuVramGb(gpu);
     const vramProfile = modelVramProfile(m);
-    const phase = drawerPhase(m.id);
+    const phase = drawerPhase(m.id, m);
     let btnText = 'Configure';
     if (phase === 'ready') btnText = 'Open';
     else if (phase === 'downloaded') btnText = 'Start';
@@ -2178,8 +2178,31 @@ function pickAutoQuant(m, vramGb) {
 
 function selectedQuantId(m) {
   const saved = modelStateOf(m.id).quant || 'auto';
-  if (saved !== 'auto') return saved;
+  if (saved !== 'auto') {
+    const valid = quantsFor(m).some(q => q.id === saved);
+    if (valid) return saved;
+    setModelState(m.id, { quant: 'auto' });
+  }
   return pickAutoQuant(m, state.gpu?.vram_gb || 0)?.id || null;
+}
+
+function normaliseRuntimeQuant(quant) {
+  const q = String(quant || 'bf16').trim().toLowerCase();
+  if (['fp8wo', 'fp8-weight-only', 'fp8_weight_only', 'fp8dyn', 'fp8-dynamic', 'fp8_dynamic'].includes(q)) return 'fp8';
+  return q;
+}
+
+function runtimeRequiredForQuant(m, quant) {
+  if (!m?.runtime) return false;
+  const allowed = Array.isArray(m.runtime_profile_quants)
+    ? m.runtime_profile_quants
+    : (Array.isArray(m.runtime_quants) ? m.runtime_quants : null);
+  if (!allowed?.length) return true;
+  const rawQuant = normaliseRuntimeQuant(quant);
+  const q = rawQuant === 'auto'
+    ? normaliseRuntimeQuant(pickAutoQuant(m, state.gpu?.vram_gb || 0)?.id || 'bf16')
+    : rawQuant;
+  return allowed.map(x => String(x).trim().toLowerCase()).includes(q);
 }
 
 // Quants list to render in the drawer dropdown — comes from the currently
@@ -2216,9 +2239,9 @@ function resolveContextConfig(m) {
   return cfg;
 }
 
-function drawerPhase(id) {
+function drawerPhase(id, m = null) {
   const s = modelStateOf(id);
-  const rt = state.runtimes[id];
+  const rt = m && !runtimeRequiredForQuant(m, selectedQuantId(m) || 'bf16') ? null : state.runtimes[id];
   if (s.error)             return 'error';
   if (s.ready)             return 'ready';
   if (rt?.state === 'installing') return 'starting';
@@ -2263,7 +2286,11 @@ async function openDrawer(id) {
   await refreshWeightState(m);
   // Runtime profile status is informational here; Start will prepare/repair
   // the profile automatically before launching.
-  if (m.runtime) await refreshRuntimeStatus(m.id);
+  if (runtimeRequiredForQuant(m, selectedQuantId(m) || 'bf16')) {
+    await refreshRuntimeStatus(m.id);
+  } else {
+    delete state.runtimes[m.id];
+  }
   try {
     const h = await api.runnerHealth(m.id);
     if (h.ready)           setModelState(m.id, { ready: true,  starting: false, error: null });
@@ -2282,10 +2309,10 @@ function closeDrawer() {
 function renderDrawerBody() {
   const m = state.selected;
   if (!m) return;
-  const phase = drawerPhase(m.id);
+  const phase = drawerPhase(m.id, m);
   const access = downloadAccessFor(m);
   const sizeStr = modelVramProfile(m).label;
-  const rt = m.runtime ? state.runtimes[m.id] : null;
+  const rt = runtimeRequiredForQuant(m, selectedQuantId(m) || 'bf16') ? state.runtimes[m.id] : null;
   const startingTitle = rt?.state === 'installing' ? 'Preparing runtime…' : 'Starting runner…';
   const startingSub = rt?.state === 'installing'
     ? `${m.runtime?.label || 'Runtime'} dependencies are being prepared.`
@@ -2394,7 +2421,8 @@ function renderDrawerBody() {
       if (!quants.length) return '';
       const vram = state.gpu?.vram_gb || 0;
       const auto = pickAutoQuant(m, vram);
-      const cur  = modelStateOf(m.id).quant || 'auto';
+      const saved = modelStateOf(m.id).quant || 'auto';
+      const cur = saved !== 'auto' && quants.some(q => q.id === saved) ? saved : 'auto';
       const autoHint = auto ? `auto picks ${auto.label} on this GPU` : 'auto';
       const opts = quants.map(q => {
         const tooBig = vram > 0 && vram < (q.vram_gb - 4);
@@ -2461,6 +2489,12 @@ function renderDrawerBody() {
   // remembers what the user picked.
   $('#drawerQuant')?.addEventListener('change', (e) => {
     setModelState(m.id, { quant: e.target.value });
+    if (runtimeRequiredForQuant(m, e.target.value)) {
+      refreshRuntimeStatus(m.id).then(() => renderDrawerBody());
+    } else {
+      delete state.runtimes[m.id];
+      renderDrawerBody();
+    }
   });
   // Variant change resets quant to 'auto' (since quant options differ per
   // variant) and re-renders the drawer so the quant dropdown shows the new
@@ -2531,9 +2565,9 @@ function renderDrawerPrimary() {
   if (!m) return;
   const btn = $('#drawerPrimary');
 
-  const phase = drawerPhase(m.id);
+  const phase = drawerPhase(m.id, m);
   const access = downloadAccessFor(m);
-  const rt = m.runtime ? state.runtimes[m.id] : null;
+  const rt = runtimeRequiredForQuant(m, selectedQuantId(m) || 'bf16') ? state.runtimes[m.id] : null;
   const startingHtml = rt?.state === 'installing'
     ? '<span class="spinner"></span><span>Preparing runtime…</span>'
     : '<span class="spinner"></span><span>Starting…</span>';
@@ -2906,8 +2940,8 @@ async function waitForRuntimeInstall(m, jobId) {
   }
 }
 
-async function ensureRuntimeReady(m) {
-  if (!m.runtime) return true;
+async function ensureRuntimeReady(m, quant = selectedQuantId(m) || 'bf16') {
+  if (!runtimeRequiredForQuant(m, quant)) return true;
   let status = await api.runtimeStatus(m.id);
   if (!status.required) return true;
   setRuntimeState(m.id, {
@@ -3032,7 +3066,9 @@ async function startRunner(m) {
       variant = variantSel;
     }
   }
-  const quantSel = $('#drawerQuant')?.value || modelStateOf(m.id).quant || 'auto';
+  const savedQuant = modelStateOf(m.id).quant || 'auto';
+  const validSavedQuant = savedQuant !== 'auto' && quantsFor(m).some(q => q.id === savedQuant) ? savedQuant : 'auto';
+  const quantSel = $('#drawerQuant')?.value || validSavedQuant;
   let quant = quantSel;
   if (quantSel === 'auto' && (m.quants?.length || m.variants?.length)) {
     const auto = pickAutoQuant(m, state.gpu?.vram_gb || 0);
@@ -3056,7 +3092,7 @@ async function startRunner(m) {
   renderDrawerBody();
   let logEs = null;
   try {
-    await ensureRuntimeReady(m);
+    await ensureRuntimeReady(m, quant);
     renderDrawerBody();
     const launched = await api.launch({ model_id: m.id, loras: [], hf_token: hfToken, quant, variant, components });
     if (launched.status !== 'launched' && launched.status !== 'already_running') {
@@ -10630,6 +10666,7 @@ function mockModels() {
       runner_module: 'backend.runners.qwen_image_2512',
       hf_repo: 'Qwen/Qwen-Image-2512',
       runtime_profile: 'qwen-diffusers-quant',
+      runtime_profile_quants: ['fp8'],
       min_vram_gb: 14, recommended_vram_gb: 47,
       supports_lora: true, gpu_support: ['nvidia'],
       default_size_by_vram: [
@@ -10639,9 +10676,7 @@ function mockModels() {
       ],
       quants: [
         { id: 'bf16', label: 'BF16', description: 'Best quality',              vram_gb: 80, auto_min_vram_gb: 80 },
-        { id: 'fp8',  label: 'FP8',  description: 'TorchAO transformer FP8',   vram_gb: 24, auto_min_vram_gb: 47 },
-        { id: 'int8', label: 'INT8', description: 'Faster, near-bf16',         vram_gb: 24, auto_min_vram_gb: 36 },
-        { id: 'nf4',  label: 'NF4',  description: 'Fits any modern card',      vram_gb: 14, auto_min_vram_gb: 0  },
+        { id: 'fp8',  label: 'FP8',  description: 'Transformer + text encoder FP8', vram_gb: 40, auto_min_vram_gb: 0 },
       ],
       param_groups: ['prompt', 'generation', 'dimensions'],
       param_keys:   ['prompt', 'negative_prompt', 'seed', 'steps', 'cfg', 'width', 'height'],

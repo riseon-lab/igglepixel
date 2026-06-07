@@ -173,6 +173,8 @@
       "env": {
         "FORGE_QWEN_INT8_BACKEND": "torchao",
         "FORGE_QWEN_FP8_FALLBACK": "int8",
+        "FORGE_QWEN_FP8_COMPONENTS": "transformer,text_encoder",
+        "FORGE_QWEN_VAE_MEMORY": "tiling",
         "PYTHONNOUSERSITE": "1",
         "TOKENIZERS_PARALLELISM": "false"
       },
@@ -1515,6 +1517,7 @@
       "runner_module": "backend.runners.qwen_image_2512",
       "hf_repo": "Qwen/Qwen-Image-2512",
       "runtime_profile": "qwen-diffusers-quant",
+      "runtime_profile_quants": ["fp8"],
       "license": {
         "type": "commercial",
         "label": "Apache 2.0",
@@ -1531,9 +1534,7 @@
       ],
       "quants": [
         { "id": "bf16", "label": "BF16", "description": "Best quality, high VRAM", "vram_gb": 80, "auto_min_vram_gb": 80 },
-        { "id": "fp8",  "label": "FP8",  "description": "TorchAO transformer FP8", "vram_gb": 24, "auto_min_vram_gb": 47 },
-        { "id": "int8", "label": "INT8", "description": "Faster, near-bf16",  "vram_gb": 24, "auto_min_vram_gb": 36 },
-        { "id": "nf4",  "label": "NF4",  "description": "Fits any modern card","vram_gb": 14, "auto_min_vram_gb": 0  }
+        { "id": "fp8",  "label": "FP8",  "description": "Transformer + text encoder FP8", "vram_gb": 40, "auto_min_vram_gb": 0 }
       ],
       "param_groups": ["prompt", "generation", "dimensions"],
       "param_keys":   ["prompt", "negative_prompt", "seed", "steps", "cfg", "width", "height"],
