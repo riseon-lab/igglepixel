@@ -130,8 +130,12 @@ fi
 # if the image is rebuilt or the pod is recreated on the same volume.
 if [ -f "requirements-runtime.txt" ]; then
     log "installing requirements-runtime.txt (pip cache: $PIP_CACHE_DIR)"
-    pip install -r requirements-runtime.txt || \
-        log "WARN: requirements-runtime.txt install failed; continuing"
+    if ! pip install -r requirements-runtime.txt; then
+        log "WARN: requirements-runtime.txt install failed; retrying once in 5s"
+        sleep 5
+        pip install -r requirements-runtime.txt || \
+            log "ERROR: requirements-runtime.txt install failed twice. Starting anyway — the image ships the same pinned versions, but any package added to requirements-runtime.txt since the image was built will be missing. Check network/PyPI and restart the pod."
+    fi
 fi
 
 # ── Run ────────────────────────────────────────────────────────────────

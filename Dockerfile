@@ -26,19 +26,22 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         ffmpeg libavcodec-dev libavformat-dev \
     && rm -rf /var/lib/apt/lists/*
 
-RUN curl -sS https://bootstrap.pypa.io/get-pip.py | python3.11
+RUN curl -sS https://bootstrap.pypa.io/get-pip.py | python3.11 - "pip==26.1.2"
 
 RUN ln -sf /usr/bin/python3.11 /usr/bin/python && \
     ln -sf /usr/local/bin/pip3.11 /usr/bin/pip && \
     git lfs install
 
 # ── Python base deps (API + runner host) ──
+# Everything below is pinned on purpose: this image is rebuilt rarely, so an
+# unpinned rebuild silently picks up whatever PyPI serves that day. Bump
+# versions deliberately, in lockstep with requirements-runtime.txt.
 RUN pip install --no-cache-dir \
-        fastapi 'uvicorn[standard]' \
-        httpx \
-        'huggingface_hub[cli]' \
-        python-multipart \
-        pydantic \
+        fastapi==0.136.3 'uvicorn[standard]==0.49.0' \
+        httpx==0.28.1 \
+        'huggingface_hub[cli]==0.36.2' \
+        python-multipart==0.0.32 \
+        pydantic==2.13.4 \
         cryptography==44.0.0
 
 # ── ML stack (used by backend/runners/*) ──
@@ -48,18 +51,21 @@ RUN pip install --no-cache-dir \
 # Older cu121 wheels did NOT have sm_120 and refused to launch on Blackwell.
 # New runners can pull extra packages at boot via requirements-runtime.txt
 # in the repo root — no rebuild needed.
+# Pinned to the exact versions requirements-runtime.txt enforces at boot, so
+# the boot-time install is a no-op instead of a multi-GB downgrade that could
+# also swap the cu128 build for PyPI's default CUDA variant (losing sm_120).
 RUN pip install --no-cache-dir \
         --index-url https://download.pytorch.org/whl/cu128 \
-        torch torchvision
+        torch==2.8.0 torchvision==0.23.0 torchaudio==2.8.0
 RUN pip install --no-cache-dir \
-        diffusers \
-        transformers \
-        accelerate \
-        safetensors \
-        sentencepiece \
-        Pillow \
-        bitsandbytes \
-        spandrel
+        diffusers==0.38.0 \
+        transformers==4.57.6 \
+        accelerate==1.14.0 \
+        safetensors==0.8.0 \
+        sentencepiece==0.2.1 \
+        Pillow==12.2.0 \
+        bitsandbytes==0.49.2 \
+        spandrel==0.4.2
 
 # ── Entrypoint ──
 COPY docker/entrypoint.sh /entrypoint.sh

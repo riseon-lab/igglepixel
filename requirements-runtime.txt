@@ -46,12 +46,13 @@
 #   `python -m venv` / ensurepip path, so the backend prefers uv and falls
 #   back to virtualenv before giving up.
 #
-# Why bitsandbytes>=0.46:
+# Why bitsandbytes==0.49.2 (was >=0.46):
 #   Blackwell (RTX 5090, sm_120) requires bnb 0.46+ for working int8
 #   kernels. Older versions (<0.45) raise `AttributeError: ... getCurrentStream`
 #   from the int8 functional path because they call into a CUDA stream
 #   context that doesn't exist on sm_120. BF16 doesn't go through bnb so it
-#   masks the issue — only int8/NF4 paths break.
+#   masks the issue — only int8/NF4 paths break. Pinned exactly (and matched
+#   in the Dockerfile) so a pod reboot can't drift onto an untested release.
 #
 # Why torchao==0.14.1:
 #   Qwen text-to-image INT8 uses Diffusers' TorchAO quantization backend by
@@ -81,12 +82,12 @@
 diffusers==0.38.0
 transformers==4.57.6
 peft==0.17.1
-ftfy
-imageio
-imageio-ffmpeg
-uv
-virtualenv
-bitsandbytes>=0.46
+ftfy==6.3.1
+imageio==2.37.3
+imageio-ffmpeg==0.6.0
+uv==0.11.21
+virtualenv==21.4.3
+bitsandbytes==0.49.2
 torch==2.8.0
 torchvision==0.23.0
 torchaudio==2.8.0

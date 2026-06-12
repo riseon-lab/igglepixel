@@ -1,0 +1,15 @@
+# The image only COPYs docker/entrypoint.sh — everything else is git-cloned
+# at pod boot. This file keeps the build-context upload small and guarantees
+# nothing sensitive or heavy can leak into a future COPY.
+.git
+.claude
+output
+*.png
+*.jpg
+*.jpeg
+local-captioner
+**/__pycache__
+**/venv
+**/.venv
+.env
+.env.*
