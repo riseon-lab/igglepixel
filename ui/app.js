@@ -546,6 +546,7 @@ async function apiCall(url, opts = {}) {
       }
     } catch {}
     const err = new Error(msg);
+    err.status = res.status;
     if (moderation) err.moderation = moderation;
     throw err;
   }
@@ -4448,13 +4449,26 @@ function bindLoraCards(m) {
   });
 }
 
+// Asset paths arrive in two historical forms: WORKSPACE-relative from the
+// /api/assets listing ("assets/generated/x.png") and absolute from older
+// runner responses ("/workspace/assets/generated/x.png"). Compare via this
+// normaliser so deletes/selection match across both forms.
+function normalizeAssetPath(p) {
+  if (!p) return '';
+  return String(p).replace(/^\/?workspace\//, '').replace(/^\.?\//, '');
+}
+
+function samePath(a, b) {
+  return !!a && !!b && normalizeAssetPath(a) === normalizeAssetPath(b);
+}
+
 function assetKey(asset) {
-  return asset ? (asset.path || asset.url || asset.name || '') : '';
+  return asset ? (normalizeAssetPath(asset.path) || asset.url || asset.name || '') : '';
 }
 
 function sameAsset(a, b) {
   if (!a || !b) return false;
-  if (a.path && b.path) return a.path === b.path;
+  if (a.path && b.path) return samePath(a.path, b.path);
   return !!a.name && a.name === b.name && (!a.kind || !b.kind || a.kind === b.kind);
 }
 
@@ -4979,17 +4993,20 @@ async function deleteAssetAnywhere(asset) {
 
   // 2. Remove the underlying file (or fake-delete in preview mode).
   if (asset.path && !state.preview) {
-    state.assets = state.assets.filter(a => a.path !== asset.path);
+    state.assets = state.assets.filter(a => !samePath(a.path, asset.path));
     renderAssets();
     try {
       await api.deleteAsset(asset.path);
       refreshAssetsSoon();
     } catch (e) {
-      toast(`Delete failed: ${e.message || 'unknown'}`, 'error');
+      // 404 = the file is already gone (deleted earlier from another view,
+      // pod restart, …). The local prune above is the part that matters —
+      // treat it as success instead of dead-ending on "Asset not found".
+      if (e.status !== 404) toast(`Delete failed: ${e.message || 'unknown'}`, 'error');
       refreshAssetsSoon();
     }
   } else {
-    state.assets = state.assets.filter(a => a.path !== asset.path);
+    state.assets = state.assets.filter(a => !samePath(a.path, asset.path));
     renderAssets();
   }
 
@@ -5007,7 +5024,7 @@ function pruneFromRecents(asset) {
   if (!asset?.path) return;
   const removedKey = assetKey(asset);
   for (const id of Object.keys(state.recents)) {
-    state.recents[id] = state.recents[id].filter(a => a.path !== asset.path);
+    state.recents[id] = state.recents[id].filter(a => !samePath(a.path, asset.path));
     if (assetKey(state.activePreviews[id]) === removedKey) delete state.activePreviews[id];
   }
 }
@@ -5023,9 +5040,15 @@ function pruneFromImgInputs(asset) {
     if (!slots) continue;
     for (const key of Object.keys(slots)) {
       const slot = slots[key];
-      if (slot?.img?.path === asset.path) {
-        slots[key] = { ...slot, img: null, enabled: false };
-      }
+      if (!slot?.images?.length) continue;
+      const kept = slot.images.filter(img => !samePath(img?.path, asset.path));
+      if (kept.length === slot.images.length) continue;
+      slots[key] = {
+        ...slot,
+        images: kept,
+        idx: Math.max(0, Math.min(slot.idx ?? 0, kept.length - 1)),
+        enabled: kept.length ? slot.enabled : false,
+      };
     }
   }
 }
@@ -5554,14 +5577,28 @@ function startJobProgress(job) {
   return es;
 }
 
-async function generateWithBackendJob(payload) {
+async function generateWithBackendJob(payload, watchJob = null) {
   const started = await api.startGenerateJob(payload);
   if (!started.job_id) throw new Error('Generation job did not start');
+  // Stall guard: a crashed runner surfaces as status "error", but a wedged
+  // one (e.g. CUDA hang) reports "running" forever and used to pin the queue
+  // until a tab reload. Only armed once step progress has actually been seen,
+  // so models that never emit "[gen] step" logs keep the old behaviour.
+  const STALL_MS = 20 * 60 * 1000;
+  let lastStep = 0;
+  let lastAdvance = Date.now();
   for (;;) {
     await delay(1500);
     const job = await api.generationJob(started.job_id);
     if (job.status === 'done') return job.result || {};
     if (job.status === 'error') throw new Error(job.error || 'Generation failed');
+    const step = watchJob?.progressStep || 0;
+    if (step > lastStep) {
+      lastStep = step;
+      lastAdvance = Date.now();
+    } else if (lastStep > 0 && Date.now() - lastAdvance > STALL_MS) {
+      throw new Error('No step progress for 20 minutes — the runner looks stuck. Stop and restart the model, then retry.');
+    }
   }
 }
 
@@ -5676,6 +5713,7 @@ async function runJob(job) {
   let previewInterval = null;
   let progressStream = null;
   let previewProgressInterval = null;
+  let lastPreviewObjUrl = null;
   const m = state.models.find(x => x.id === job.model_id);
   job.startedAt = Date.now();
   job.progress = 0;
@@ -5694,6 +5732,8 @@ async function runJob(job) {
         const blob = await r.blob();
         if (!blob.size) return;
         const objUrl = URL.createObjectURL(blob);
+        if (lastPreviewObjUrl) { try { URL.revokeObjectURL(lastPreviewObjUrl); } catch {} }
+        lastPreviewObjUrl = objUrl;
         const genCell = document.querySelector('.img-cell.generated');
         if (!genCell) return;
         const content = genCell.querySelector('.img-cell-content');
@@ -5705,8 +5745,6 @@ async function runJob(job) {
           img = document.createElement('img');
           content.appendChild(img);
         }
-        if (img._previewUrl) URL.revokeObjectURL(img._previewUrl);
-        img._previewUrl = objUrl;
         img.src = objUrl;
         genCell.classList.add('has-media');
         genCell.closest('.img-strip')?.classList.add('has-media');
@@ -5758,7 +5796,7 @@ async function runJob(job) {
           return { filename: l.filename, strength: l.strength ?? 1.0 };
         }),
         hf_token: currentHFToken('#wsHFToken') || null,
-      });
+      }, job);
     }
     // Moderation: backend signals a flagged output by returning empty assets
     // with meta.flagged = true. Show a neutral toast and skip the rest of the
@@ -5803,6 +5841,10 @@ async function runJob(job) {
     if (previewInterval) clearInterval(previewInterval);
     if (previewProgressInterval) clearInterval(previewProgressInterval);
     if (progressStream) progressStream.close();
+    // The final asset render replaces the preview <img>, so the last blob
+    // URL would otherwise outlive the job (~100KB per generation). Revoking
+    // is safe even if it is still painted — decoded pixels persist.
+    if (lastPreviewObjUrl) { try { URL.revokeObjectURL(lastPreviewObjUrl); } catch {} }
   }
 }
 
@@ -6122,7 +6164,12 @@ function fakeAsset(m, params) {
 async function cancelGenerate() {
   const m = state.selected;
   if (!m) return;
-  try { await api.cancel(m.id); toast('Cancelling…', 'info'); } catch {}
+  try {
+    await api.cancel(m.id);
+    toast('Cancelling…', 'info');
+  } catch (e) {
+    toast(`Cancel failed: ${e.message || 'runner not responding'}`, 'error');
+  }
 }
 
 async function waitForRunner(modelId, maxSeconds) {

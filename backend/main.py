@@ -1336,6 +1336,11 @@ async def _generate_result(req: GenerateRequest) -> dict:
             p = Path(a.get("path", ""))
             rel = p.relative_to(WORKSPACE.resolve()) if p.is_absolute() else p
             a["url"] = _sign_url(rel.as_posix())
+            # Normalise the path to the same WORKSPACE-relative form the
+            # /api/assets listing uses. Runners emit absolute paths; leaving
+            # them absolute meant the UI's recents/ref entries never compared
+            # equal to the assets-page entries, so deletes left ghosts behind.
+            a["path"] = rel.as_posix()
         except (ValueError, OSError):
             pass
     return result
@@ -1424,6 +1429,13 @@ async def _run_generation_job(job_id: str, req: GenerateRequest):
 
 @app.post("/api/generate-jobs")
 async def start_generate_job(req: GenerateRequest):
+    # Prune finished jobs so a long-lived pod doesn't accumulate result
+    # payloads forever. An hour leaves plenty of slack for the UI's 1.5s
+    # poll loop (and any human inspecting a job id) to collect results.
+    cutoff = time.time() - 3600
+    for jid, j in list(generation_jobs.items()):
+        if j.get("status") in ("done", "error") and j.get("finished_at", 0) < cutoff:
+            generation_jobs.pop(jid, None)
     job_id = secrets.token_urlsafe(12)
     generation_jobs[job_id] = {
         "id": job_id,
@@ -1503,6 +1515,8 @@ async def runner_preview(model_id: str):
     a runner that does not emit step previews). This keeps expected polling
     misses out of access/error logs.
     """
+    if "/" in model_id or "\\" in model_id or ".." in model_id:
+        return Response(status_code=204, headers={"Cache-Control": "no-store"})
     path = WORKSPACE / "assets" / f".preview_{model_id}.jpg"
     if not path.exists():
         return Response(status_code=204, headers={"Cache-Control": "no-store"})
