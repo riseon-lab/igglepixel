@@ -125,7 +125,27 @@ def save_latent_preview(pipe, latents, height: int, width: int, path: Path) -> b
         with torch.no_grad():
             latents = latents.detach()
             vae = pipe.vae
-            if hasattr(pipe, "_unpack_latents") and latents.ndim == 3:
+            if latents.ndim == 3 and hasattr(pipe, "_unpatchify_latents") and hasattr(vae, "bn"):
+                # FLUX.2 [klein]: callbacks expose only the packed target
+                # tokens (latent ids are not a callback tensor input), but
+                # text-to-image tokens keep their row-major creation order,
+                # so a plain reshape mirrors _unpack_latents_with_ids.
+                # Un-normalise with the VAE's BatchNorm running stats, then
+                # unpatchify the 2x2 patches before decoding.
+                th = int(height) // (pipe.vae_scale_factor * 2)
+                tw = int(width) // (pipe.vae_scale_factor * 2)
+                b, n, ch = latents.shape
+                if n != th * tw:
+                    raise ValueError(f"unexpected token count {n} for {th}x{tw} grid")
+                lat = latents.view(b, th, tw, ch).permute(0, 3, 1, 2)
+                mean = vae.bn.running_mean.view(1, -1, 1, 1).to(lat.device, lat.dtype)
+                std = torch.sqrt(
+                    vae.bn.running_var.view(1, -1, 1, 1) + vae.config.batch_norm_eps
+                ).to(lat.device, lat.dtype)
+                lat = lat * std + mean
+                lat = pipe._unpatchify_latents(lat)
+                image = vae.decode(lat.to(vae.dtype), return_dict=False)[0]
+            elif hasattr(pipe, "_unpack_latents") and latents.ndim == 3:
                 latents = pipe._unpack_latents(latents, height, width, pipe.vae_scale_factor)
                 latents = latents.to(vae.dtype)
                 cfg = vae.config

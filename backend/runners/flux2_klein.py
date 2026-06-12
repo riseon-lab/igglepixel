@@ -12,7 +12,7 @@ from importlib import metadata
 from pathlib import Path
 from typing import Optional
 
-from .base import Runner as RunnerBase, WORKSPACE, ensure_transformers_compat
+from .base import Runner as RunnerBase, WORKSPACE, ensure_transformers_compat, save_latent_preview
 
 
 class Flux2KleinRunner(RunnerBase):
@@ -167,11 +167,18 @@ class Flux2KleinRunner(RunnerBase):
         gen = torch.Generator(device=device).manual_seed(seed)
 
         runner = self
+        preview_path = WORKSPACE / "assets" / f".preview_{self.model_id}.jpg"
+        # Klein distilled models run 4 steps by default — an every-5 cadence
+        # would only ever capture step 0 (pure noise). Emit every step for
+        # short runs; the 50-step base model gets the standard cadence.
+        preview_every = 1 if steps <= 8 else 5
 
         def _on_step(pipe, step, timestep, callback_kwargs):
             if runner._cancel:
                 pipe._interrupt = True
             print(f"[gen] step {step + 1}/{steps}", flush=True)
+            if step % preview_every == 0 and "latents" in callback_kwargs:
+                save_latent_preview(pipe, callback_kwargs["latents"], height, width, preview_path)
             return callback_kwargs
 
         pipe_kwargs = dict(
