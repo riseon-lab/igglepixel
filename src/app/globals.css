@@ -1,26 +1,128 @@
 @import "tailwindcss";
 
+/* ============================================================
+   Citivia Studio — Design System
+   Tokens derived directly from plan.md "Design Language"
+   ============================================================ */
+
+@theme {
+  /* Brand */
+  --color-lilac: #a97de0;
+  --color-lilac-dark: #7852b0;
+
+  /* Surfaces */
+  --color-background: #121212;
+  --color-surface: #1a1a1a;
+  --color-surface-hover: #222222;
+  --color-border: #2d2d2d;
+
+  /* Text */
+  --color-text: #ffffff;
+  --color-text-secondary: #b0b0b0;
+  --color-text-muted: #808080;
+
+  /* Status */
+  --color-danger: #b3261e;
+  --color-success: #3fae7a;
+  --color-warning: #d9a441;
+
+  /* Radius */
+  --radius-control: 12px;
+  --radius-card: 16px;
+  --radius-panel: 24px;
+
+  /* Typography scale */
+  --text-body: 16px;
+  --text-label: 16px;
+  --text-section: 20px;
+  --text-page: 28px;
+  --text-hero: 36px;
+
+  --font-sans: var(--font-geist-sans, Inter), system-ui, sans-serif;
+}
+
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  color-scheme: dark;
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+html,
+body {
+  background: var(--color-background);
+  color: var(--color-text);
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-sans);
+  font-size: 16px;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Prevent iOS zoom: inputs never below 16px */
+input,
+textarea,
+select,
+button {
+  font-size: 16px;
+}
+
+/* Thin, unobtrusive scrollbars to match the premium dark aesthetic */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-border) transparent;
+}
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-thumb {
+  background: var(--color-border);
+  border-radius: 999px;
+}
+
+/* Subtle fade used across the app */
+@keyframes fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-fade-in {
+  animation: fade-in 0.25s ease-out;
+}
+
+/* Custom range input (sliders) — lilac per design language */
+.citivia-range {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 6px;
+  border-radius: 999px;
+  outline: none;
+  cursor: pointer;
+}
+.citivia-range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 20px;
+  height: 20px;
+  border-radius: 999px;
+  background: var(--color-lilac);
+  border: 3px solid var(--color-background);
+  box-shadow: 0 0 0 1px var(--color-lilac);
+  transition: transform 0.15s ease;
+}
+.citivia-range::-webkit-slider-thumb:hover {
+  transform: scale(1.12);
+}
+.citivia-range::-moz-range-thumb {
+  width: 20px;
+  height: 20px;
+  border-radius: 999px;
+  background: var(--color-lilac);
+  border: 3px solid var(--color-background);
 }
