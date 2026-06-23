@@ -1,5 +1,4 @@
 // Shared domain types for Citivia Studio.
-// These describe the preview-build data model (mock today, real runners later).
 
 export type ModelId = "qwen-2512" | "qwen-edit-2511";
 
@@ -48,6 +47,8 @@ export interface Lora {
   sizeBytes: number;
   triggerWords: string[];
   installedAt: string;
+  /** Path relative to the runner LORA_DIR. */
+  path: string;
 }
 
 export type DownloadKind = "model" | "lora";
@@ -86,4 +87,8 @@ export interface QueueJob {
   progress: number;
   hue: number;
   createdAt: string;
+  imageDataUrl?: string;
+  outputPath?: string;
+  error?: string;
+  loras?: string[];
 }

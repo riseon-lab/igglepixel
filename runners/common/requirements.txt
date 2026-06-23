@@ -1,0 +1,9 @@
+accelerate
+git+https://github.com/huggingface/diffusers
+huggingface_hub
+pillow
+protobuf
+safetensors
+sentencepiece
+tokenizers
+transformers

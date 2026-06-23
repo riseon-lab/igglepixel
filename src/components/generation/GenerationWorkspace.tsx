@@ -2,15 +2,14 @@
 
 import { clsx } from "clsx";
 import {
-  Ban,
   Dice5,
   Download,
   ImagePlus,
+  Layers,
   ListPlus,
   Maximize2,
   RotateCcw,
   Sparkles,
-  Square,
   Trash2,
   X,
 } from "lucide-react";
@@ -22,7 +21,7 @@ import { Card } from "@/components/ui/Card";
 import { Textarea } from "@/components/ui/Field";
 import { Slider } from "@/components/ui/Slider";
 import { DEFAULT_NEGATIVE_PROMPT, QUEUE, RESOLUTION_PRESETS } from "@/lib/mock";
-import type { ModelInfo, QueueJob, ResolutionPreset } from "@/lib/types";
+import type { Lora, ModelInfo, QueueJob, ResolutionPreset } from "@/lib/types";
 import { ResolutionPicker } from "./ResolutionPicker";
 import { QueuePanel } from "./QueuePanel";
 
@@ -60,9 +59,14 @@ export function GenerationWorkspace({ model }: { model: ModelInfo }) {
   const [seedMode, setSeedMode] = useState<SeedMode>("random");
   const [seed, setSeed] = useState(randomSeed());
   const [lastSeed, setLastSeed] = useState<number | null>(null);
-  const [reference, setReference] = useState<{ hue: number; name: string } | null>(
-    null,
-  );
+  const [loras, setLoras] = useState<Lora[]>([]);
+  const [selectedLoras, setSelectedLoras] = useState<string[]>([]);
+  const [loraError, setLoraError] = useState<string | null>(null);
+  const [reference, setReference] = useState<{
+    hue: number;
+    name: string;
+    dataUrl: string;
+  } | null>(null);
   const refInput = useRef<HTMLInputElement>(null);
 
   // ---- Queue / preview ----
@@ -73,13 +77,18 @@ export function GenerationWorkspace({ model }: { model: ModelInfo }) {
     () => QUEUE.find((j) => j.model === model.id && j.status === "completed") ?? null,
   );
   const [lightbox, setLightbox] = useState<QueueJob | null>(null);
-  const runningRef = useRef<NodeJS.Timeout | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
 
   useEffect(() => {
-    return () => {
-      if (runningRef.current) clearInterval(runningRef.current);
-    };
+    fetch("/api/loras", { cache: "no-store" })
+      .then((res) => {
+        if (!res.ok) throw new Error("Could not load LoRAs.");
+        return res.json();
+      })
+      .then(setLoras)
+      .catch((err) =>
+        setLoraError(err instanceof Error ? err.message : "Could not load LoRAs."),
+      );
   }, []);
 
   function buildJob(status: QueueJob["status"]): QueueJob {
@@ -98,68 +107,64 @@ export function GenerationWorkspace({ model }: { model: ModelInfo }) {
       progress: 0,
       hue: (useSeed % 360),
       createdAt: new Date().toISOString(),
+      loras: selectedLoras,
     };
   }
 
-  function startRun(job: QueueJob) {
-    setBusyId(job.id);
-    setFocused(job);
-    setLastSeed(job.seed);
-    if (runningRef.current) clearInterval(runningRef.current);
-    runningRef.current = setInterval(() => {
-      setJobs((prev) => {
-        const cur = prev.find((j) => j.id === job.id);
-        if (!cur || cur.status !== "running") return prev;
-        const next = Math.min(100, cur.progress + 7);
-        const updated: QueueJob = {
-          ...cur,
-          progress: next,
-          status: next >= 100 ? "completed" : "running",
-        };
-        if (next >= 100 && runningRef.current) {
-          clearInterval(runningRef.current);
-          runningRef.current = null;
-          setBusyId(null);
-        }
-        setFocused((f) => (f && f.id === job.id ? updated : f));
-        return prev.map((j) => (j.id === job.id ? updated : j));
-      });
-    }, 220);
-  }
-
-  function generate() {
+  async function generate() {
     const job = buildJob("running");
     setJobs((prev) => [job, ...prev.filter((j) => j.status !== "running")]);
-    startRun(job);
+    setFocused(job);
+    setBusyId(job.id);
+    setLastSeed(job.seed);
+    try {
+      const res = await fetch("/api/generate", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: model.id,
+          prompt: job.prompt,
+          negativePrompt: negative,
+          width: job.width,
+          height: job.height,
+          steps: job.steps,
+          cfg: job.cfg,
+          seed: job.seed,
+          imageBase64: reference?.dataUrl,
+          loras: job.loras,
+        }),
+      });
+      if (!res.ok) throw new Error((await res.json()).error ?? "Runner failed.");
+      const result = await res.json();
+      const done: QueueJob = {
+        ...job,
+        width: result.width,
+        height: result.height,
+        seed: result.seed,
+        status: "completed",
+        progress: 100,
+        imageDataUrl: `data:${result.mime};base64,${result.image_base64}`,
+        outputPath: result.path,
+      };
+      setJobs((prev) => prev.map((j) => (j.id === job.id ? done : j)));
+      setFocused(done);
+    } catch (err) {
+      const failed: QueueJob = {
+        ...job,
+        status: "failed",
+        progress: 0,
+        error: err instanceof Error ? err.message : "Runner failed.",
+      };
+      setJobs((prev) => prev.map((j) => (j.id === job.id ? failed : j)));
+      setFocused(failed);
+    } finally {
+      setBusyId(null);
+    }
   }
 
   function addToQueue() {
     const job = buildJob("pending");
     setJobs((prev) => [...prev, job]);
-  }
-
-  function stop() {
-    // Finalize the current running job at its current progress.
-    if (runningRef.current) {
-      clearInterval(runningRef.current);
-      runningRef.current = null;
-    }
-    setJobs((prev) =>
-      prev.map((j) =>
-        j.id === busyId ? { ...j, status: "completed", progress: 100 } : j,
-      ),
-    );
-    setBusyId(null);
-  }
-
-  function cancel() {
-    if (runningRef.current) {
-      clearInterval(runningRef.current);
-      runningRef.current = null;
-    }
-    setJobs((prev) => prev.filter((j) => j.id !== busyId));
-    setFocused((f) => (f && f.id === busyId ? null : f));
-    setBusyId(null);
   }
 
   function removeJob(id: string) {
@@ -178,10 +183,18 @@ export function GenerationWorkspace({ model }: { model: ModelInfo }) {
     setCfg(job.cfg);
     setSeed(job.seed);
     setSeedMode("fixed");
+    setSelectedLoras(job.loras ?? []);
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
   function downloadJob(job: QueueJob) {
+    if (job.imageDataUrl) {
+      const link = document.createElement("a");
+      link.href = job.imageDataUrl;
+      link.download = `${job.id}.png`;
+      link.click();
+      return;
+    }
     const url = URL.createObjectURL(
       new Blob([svgForJob(job)], { type: "image/svg+xml" }),
     );
@@ -190,6 +203,14 @@ export function GenerationWorkspace({ model }: { model: ModelInfo }) {
     link.download = `${job.id}.svg`;
     link.click();
     URL.revokeObjectURL(url);
+  }
+
+  function toggleLora(loraPath: string) {
+    setSelectedLoras((prev) =>
+      prev.includes(loraPath)
+        ? prev.filter((item) => item !== loraPath)
+        : [...prev, loraPath],
+    );
   }
 
   const generating = busyId !== null;
@@ -208,13 +229,28 @@ export function GenerationWorkspace({ model }: { model: ModelInfo }) {
               hidden
               onChange={(e) => {
                 const f = e.target.files?.[0];
-                if (f) setReference({ hue: (f.size % 360) || 200, name: f.name });
+                if (!f) return;
+                const reader = new FileReader();
+                reader.onload = () => {
+                  setReference({
+                    hue: (f.size % 360) || 200,
+                    name: f.name,
+                    dataUrl: String(reader.result),
+                  });
+                };
+                reader.readAsDataURL(f);
               }}
             />
             {reference ? (
               <div className="flex items-center gap-4">
                 <div className="w-24 overflow-hidden rounded-[12px]">
-                  <PreviewTile hue={reference.hue} width={1} height={1} showLock={false} />
+                  <PreviewTile
+                    hue={reference.hue}
+                    width={1}
+                    height={1}
+                    src={reference.dataUrl}
+                    showLock={false}
+                  />
                 </div>
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-sm font-medium">{reference.name}</p>
@@ -253,6 +289,42 @@ export function GenerationWorkspace({ model }: { model: ModelInfo }) {
             value={negative}
             onChange={(e) => setNegative(e.target.value)}
           />
+        </Card>
+
+        <Card className="flex flex-col gap-3">
+          <div className="flex items-center justify-between">
+            <SectionLabel>LoRAs</SectionLabel>
+            <Badge tone={selectedLoras.length ? "lilac" : "neutral"}>
+              {selectedLoras.length}
+            </Badge>
+          </div>
+          {loraError && <p className="text-sm text-danger">{loraError}</p>}
+          {loras.length > 0 ? (
+            <div className="grid gap-2">
+              {loras.map((lora) => (
+                <label
+                  key={lora.id}
+                  className="flex cursor-pointer items-center gap-3 rounded-[12px] border border-border bg-background px-3 py-3 transition-colors hover:border-lilac"
+                >
+                  <input
+                    type="checkbox"
+                    checked={selectedLoras.includes(lora.path)}
+                    onChange={() => toggleLora(lora.path)}
+                    className="h-4 w-4 accent-lilac"
+                  />
+                  <Layers className="h-4 w-4 shrink-0 text-lilac" />
+                  <span className="min-w-0 flex-1 truncate text-sm font-medium">
+                    {lora.name}
+                  </span>
+                  <span className="hidden max-w-[180px] truncate font-mono text-xs text-text-muted sm:block">
+                    {lora.path}
+                  </span>
+                </label>
+              ))}
+            </div>
+          ) : (
+            <p className="text-sm text-text-muted">No installed LoRAs.</p>
+          )}
         </Card>
 
         <Card className="flex flex-col gap-3">
@@ -332,22 +404,16 @@ export function GenerationWorkspace({ model }: { model: ModelInfo }) {
 
         {/* Action bar */}
         <div className="sticky bottom-24 z-10 flex flex-wrap gap-3 rounded-[16px] border border-border bg-surface/90 p-3 backdrop-blur md:bottom-4">
-          <Button className="min-w-[180px] flex-1" onClick={generate} disabled={generating}>
+          <Button
+            className="min-w-[180px] flex-1"
+            onClick={generate}
+            disabled={generating || (isEdit && !reference)}
+          >
             <Sparkles className="h-4 w-4" /> Generate
           </Button>
           <Button className="min-w-[150px] flex-1" variant="secondary" onClick={addToQueue}>
             <ListPlus className="h-4 w-4" /> Add to Queue
           </Button>
-          {generating ? (
-            <>
-              <Button variant="secondary" onClick={stop}>
-                <Square className="h-4 w-4" /> Stop
-              </Button>
-              <Button variant="danger" onClick={cancel}>
-                <Ban className="h-4 w-4" /> Cancel
-              </Button>
-            </>
-          ) : null}
         </div>
       </div>
 
@@ -368,6 +434,7 @@ export function GenerationWorkspace({ model }: { model: ModelInfo }) {
                   hue={focused.hue}
                   width={focused.width}
                   height={focused.height}
+                  src={focused.imageDataUrl}
                   showLock={focused.status !== "running"}
                 />
                 {focused.status === "running" && (
@@ -444,6 +511,7 @@ export function GenerationWorkspace({ model }: { model: ModelInfo }) {
               hue={lightbox.hue}
               width={lightbox.width}
               height={lightbox.height}
+              src={lightbox.imageDataUrl}
               showLock={false}
             />
             <button

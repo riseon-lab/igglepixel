@@ -1,6 +1,5 @@
-// Mock data for the preview build. No real inference — this exists purely to
-// validate UX, navigation, layout and the queue/upload workflows (see plan.md
-// "Preview Build"). Swap these arrays for live API calls during integration.
+// Sample data for dashboards, default queues, and local empty states. Core
+// generation, auth, vault, and LoRA paths are backed by server APIs.
 
 import type {
   Asset,
@@ -64,10 +63,10 @@ export const ASSETS: Asset[] = [
 ];
 
 export const LORAS: Lora[] = [
-  { id: "l1", name: "Filmic Portrait v3", source: "civitai", baseModel: "Qwen 2512", sizeBytes: 223_000_000, triggerWords: ["filmic", "cinematic portrait"], installedAt: daysAgo(2) },
-  { id: "l2", name: "Studio Product Light", source: "huggingface", baseModel: "Qwen 2512", sizeBytes: 198_000_000, triggerWords: ["studio lighting", "product shot"], installedAt: daysAgo(5) },
-  { id: "l3", name: "Ink & Watercolour", source: "civitai", baseModel: "Qwen 2512", sizeBytes: 167_000_000, triggerWords: ["ink wash", "watercolour"], installedAt: daysAgo(9) },
-  { id: "l4", name: "Architectural Detail", source: "upload", baseModel: "Qwen Edit 2511", sizeBytes: 240_000_000, triggerWords: ["archviz"], installedAt: daysAgo(12) },
+  { id: "filmic-portrait-v3.safetensors", name: "Filmic Portrait v3", source: "civitai", baseModel: "Qwen 2512", sizeBytes: 223_000_000, triggerWords: ["filmic", "cinematic portrait"], installedAt: daysAgo(2), path: "filmic-portrait-v3.safetensors" },
+  { id: "studio-product-light.safetensors", name: "Studio Product Light", source: "huggingface", baseModel: "Qwen 2512", sizeBytes: 198_000_000, triggerWords: ["studio lighting", "product shot"], installedAt: daysAgo(5), path: "studio-product-light.safetensors" },
+  { id: "ink-watercolour.safetensors", name: "Ink & Watercolour", source: "civitai", baseModel: "Qwen 2512", sizeBytes: 167_000_000, triggerWords: ["ink wash", "watercolour"], installedAt: daysAgo(9), path: "ink-watercolour.safetensors" },
+  { id: "architectural-detail.safetensors", name: "Architectural Detail", source: "upload", baseModel: "Qwen Edit 2511", sizeBytes: 240_000_000, triggerWords: ["archviz"], installedAt: daysAgo(12), path: "architectural-detail.safetensors" },
 ];
 
 export const DOWNLOADS: DownloadItem[] = [

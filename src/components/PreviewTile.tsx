@@ -12,6 +12,7 @@ export function PreviewTile({
   className,
   showLock = true,
   label,
+  src,
 }: {
   hue: number;
   width: number;
@@ -19,6 +20,7 @@ export function PreviewTile({
   className?: string;
   showLock?: boolean;
   label?: string;
+  src?: string;
 }) {
   return (
     <div
@@ -28,7 +30,12 @@ export function PreviewTile({
       )}
       style={{ aspectRatio: `${width} / ${height}`, background: previewGradient(hue) }}
     >
-      <div className="absolute inset-0 bg-[radial-gradient(circle_at_30%_20%,rgba(255,255,255,0.12),transparent_60%)]" />
+      {src ? (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img src={src} alt="" className="h-full w-full object-cover" />
+      ) : (
+        <div className="absolute inset-0 bg-[radial-gradient(circle_at_30%_20%,rgba(255,255,255,0.12),transparent_60%)]" />
+      )}
       {label && (
         <span className="absolute bottom-2 left-2 rounded-md bg-black/40 px-2 py-0.5 text-xs text-white/90 backdrop-blur">
           {label}

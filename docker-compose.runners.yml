@@ -1,0 +1,51 @@
+services:
+  ui:
+    image: citivia-studio:linux-amd64
+    platform: linux/amd64
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      CITIVIA_AUTO_PULL: "0"
+      CITIVIA_DATA_DIR: /workspace
+      QWEN_2512_RUNNER_URL: http://qwen-2512-runner:8000
+      QWEN_EDIT_2511_RUNNER_URL: http://qwen-edit-2511-runner:8000
+    ports:
+      - "3000:3000"
+    volumes:
+      - citivia-workspace:/workspace
+
+  qwen-2512-runner:
+    image: qwen-2512-runner:linux-amd64
+    platform: linux/amd64
+    build:
+      context: .
+      dockerfile: runners/qwen-2512/Dockerfile
+    environment:
+      CITIVIA_DATA_DIR: /workspace
+    volumes:
+      - citivia-workspace:/workspace
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - capabilities: [gpu]
+
+  qwen-edit-2511-runner:
+    image: qwen-edit-2511-runner:linux-amd64
+    platform: linux/amd64
+    build:
+      context: .
+      dockerfile: runners/qwen-edit-2511/Dockerfile
+    environment:
+      CITIVIA_DATA_DIR: /workspace
+    volumes:
+      - citivia-workspace:/workspace
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - capabilities: [gpu]
+
+volumes:
+  citivia-workspace:

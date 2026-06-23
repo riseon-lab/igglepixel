@@ -1,14 +1,13 @@
 "use client";
 
 import { Layers, Link2, Trash2, Upload } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { Input } from "@/components/ui/Field";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { formatBytes, timeAgo } from "@/lib/format";
-import { LORAS } from "@/lib/mock";
 import type { Lora, LoraSource } from "@/lib/types";
 
 const SOURCE_LABEL: Record<LoraSource, string> = {
@@ -18,34 +17,77 @@ const SOURCE_LABEL: Record<LoraSource, string> = {
 };
 
 export default function LorasPage() {
-  const [loras, setLoras] = useState<Lora[]>(LORAS);
+  const fileInput = useRef<HTMLInputElement>(null);
+  const [loras, setLoras] = useState<Lora[]>([]);
   const [url, setUrl] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  function addFromUrl() {
-    if (!url.trim()) return;
-    const source: LoraSource = url.includes("huggingface")
-      ? "huggingface"
-      : "civitai";
-    const name =
-      decodeURIComponent(url.split("/").filter(Boolean).pop() ?? "New LoRA")
-        .replace(/[-_]/g, " ")
-        .slice(0, 40) || "New LoRA";
-    setLoras((prev) => [
-      {
-        id: `new-${Date.now()}`,
-        name,
-        source,
-        baseModel: "Qwen 2512",
-        sizeBytes: 190_000_000,
-        triggerWords: [],
-        installedAt: new Date().toISOString(),
-      },
-      ...prev,
-    ]);
-    setUrl("");
+  async function refresh() {
+    const res = await fetch("/api/loras", { cache: "no-store" });
+    if (!res.ok) throw new Error("Could not load LoRAs.");
+    setLoras(await res.json());
   }
 
-  function remove(id: string) {
+  useEffect(() => {
+    fetch("/api/loras", { cache: "no-store" })
+      .then((res) => {
+        if (!res.ok) throw new Error("Could not load LoRAs.");
+        return res.json();
+      })
+      .then(setLoras)
+      .catch((err) => setError(err instanceof Error ? err.message : "Could not load LoRAs."))
+      .finally(() => setLoading(false));
+  }, []);
+
+  async function addFromUrl() {
+    if (!url.trim()) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/loras", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ url: url.trim() }),
+      });
+      if (!res.ok) throw new Error((await res.json()).error ?? "LoRA install failed.");
+      setUrl("");
+      await refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "LoRA install failed.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function upload(file: File | undefined) {
+    if (!file) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const body = new FormData();
+      body.set("file", file);
+      const res = await fetch("/api/loras", { method: "POST", body });
+      if (!res.ok) throw new Error((await res.json()).error ?? "LoRA upload failed.");
+      await refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "LoRA upload failed.");
+    } finally {
+      setBusy(false);
+      if (fileInput.current) fileInput.current.value = "";
+    }
+  }
+
+  async function remove(id: string) {
+    setError(null);
+    const res = await fetch(`/api/loras/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    });
+    if (!res.ok) {
+      setError("Could not delete LoRA.");
+      return;
+    }
     setLoras((prev) => prev.filter((l) => l.id !== id));
   }
 
@@ -55,10 +97,17 @@ export default function LorasPage() {
         title="LoRAs"
         description="Install and manage LoRAs from Civitai, Hugging Face, or direct upload."
         actions={
-          <Button variant="secondary">
+          <Button variant="secondary" onClick={() => fileInput.current?.click()} disabled={busy}>
             <Upload className="h-4 w-4" /> Upload LoRA
           </Button>
         }
+      />
+      <input
+        ref={fileInput}
+        type="file"
+        accept=".safetensors,.pt,.ckpt,.bin"
+        hidden
+        onChange={(e) => upload(e.target.files?.[0])}
       />
 
       <Card className="flex flex-col gap-3">
@@ -76,19 +125,27 @@ export default function LorasPage() {
               onKeyDown={(e) => e.key === "Enter" && addFromUrl()}
             />
           </div>
-          <Button onClick={addFromUrl}>Download</Button>
+          <Button onClick={addFromUrl} disabled={busy || !url.trim()}>
+            {busy ? "Installing..." : "Install"}
+          </Button>
         </div>
         <p className="text-xs text-text-muted">
-          API keys are configured in Settings. Downloads appear on the Downloads page.
+          API keys are configured in Settings. Files are saved to the shared runner LoRA folder.
         </p>
+        {error && <p className="text-sm text-danger">{error}</p>}
       </Card>
 
       <section className="flex flex-col gap-4">
         <div className="flex items-center justify-between">
           <h2 className="text-[20px] font-semibold">Installed</h2>
-          <span className="text-sm text-text-muted">{loras.length} LoRAs</span>
+          <span className="text-sm text-text-muted">
+            {loading ? "Loading..." : `${loras.length} LoRAs`}
+          </span>
         </div>
         <div className="grid gap-4">
+          {!loading && loras.length === 0 && (
+            <Card className="text-sm text-text-muted">No installed LoRAs.</Card>
+          )}
           {loras.map((l) => (
             <Card key={l.id} className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
               <div className="flex items-start gap-4">
@@ -104,6 +161,7 @@ export default function LorasPage() {
                     {l.baseModel} · {formatBytes(l.sizeBytes)} · added{" "}
                     {timeAgo(l.installedAt)}
                   </p>
+                  <p className="mt-1 font-mono text-xs text-text-muted">{l.path}</p>
                   {l.triggerWords.length > 0 && (
                     <div className="mt-2 flex flex-wrap gap-1.5">
                       {l.triggerWords.map((t) => (

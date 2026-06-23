@@ -51,6 +51,7 @@ export function QueuePanel({
               hue={job.hue}
               width={job.width}
               height={job.height}
+              src={job.imageDataUrl}
               showLock={false}
               className="rounded-[8px]"
             />
@@ -71,6 +72,11 @@ export function QueuePanel({
             <p className="truncate text-sm text-text-secondary" title={job.prompt}>
               {job.prompt}
             </p>
+            {job.status === "failed" && job.error ? (
+              <p className="truncate text-xs text-[#ff8a80]" title={job.error}>
+                {job.error}
+              </p>
+            ) : null}
             {job.status === "running" ? (
               <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-border">
                 <div
