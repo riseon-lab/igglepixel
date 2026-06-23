@@ -24,7 +24,7 @@ git_sync() {
     if [ -d "$REPO_DIR/.git" ]; then
       cd "$REPO_DIR"
       git remote set-url origin "$REPO_URL" 2>/dev/null || true
-      git pull --ff-only origin "$REPO_REF" && return 0
+      git fetch origin "$REPO_REF" && git reset --hard FETCH_HEAD && return 0
     else
       git clone --branch "$REPO_REF" --depth 1 "$REPO_URL" "$REPO_DIR" && return 0
     fi
