@@ -1,12 +1,7 @@
 import { clsx } from "clsx";
 import { Lock } from "lucide-react";
-import { previewGradient } from "@/lib/format";
 
-// Stands in for a real (encrypted, client-decrypted) image preview. In the live
-// build this becomes an in-memory object URL produced by the decryption worker;
-// nothing is ever written to disk (see plan.md "Encryption").
 export function PreviewTile({
-  hue,
   width,
   height,
   className,
@@ -14,7 +9,6 @@ export function PreviewTile({
   label,
   src,
 }: {
-  hue: number;
   width: number;
   height: number;
   className?: string;
@@ -25,16 +19,14 @@ export function PreviewTile({
   return (
     <div
       className={clsx(
-        "relative overflow-hidden",
+        "relative overflow-hidden bg-background",
         className,
       )}
-      style={{ aspectRatio: `${width} / ${height}`, background: previewGradient(hue) }}
+      style={{ aspectRatio: `${width} / ${height}` }}
     >
-      {src ? (
+      {src && (
         // eslint-disable-next-line @next/next/no-img-element
         <img src={src} alt="" className="h-full w-full object-cover" />
-      ) : (
-        <div className="absolute inset-0 bg-[radial-gradient(circle_at_30%_20%,rgba(255,255,255,0.12),transparent_60%)]" />
       )}
       {label && (
         <span className="absolute bottom-2 left-2 rounded-md bg-black/40 px-2 py-0.5 text-xs text-white/90 backdrop-blur">

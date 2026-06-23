@@ -35,7 +35,7 @@ export default function SetupPage() {
       setSubmitting(false);
       return;
     }
-    router.replace("/models");
+    router.replace("/running");
   }
 
   return (

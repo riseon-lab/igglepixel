@@ -1,5 +1,5 @@
 import {
-  Boxes,
+  Activity,
   Images,
   Layers,
   DownloadCloud,
@@ -20,7 +20,7 @@ export interface NavItem {
 }
 
 export const NAV_ITEMS: NavItem[] = [
-  { label: "Models", href: "/models", icon: Boxes, primary: true },
+  { label: "Running", href: "/running", icon: Activity, primary: true },
   { label: "Assets", href: "/assets", icon: Images, primary: true },
   { label: "LoRAs", href: "/loras", icon: Layers, primary: true },
   { label: "Downloads", href: "/downloads", icon: DownloadCloud, primary: true },

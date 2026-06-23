@@ -43,13 +43,12 @@ export function QueuePanel({
           className="flex gap-3 rounded-[12px] border border-border bg-background p-3"
         >
           <button
-            onClick={() => onView(job)}
+            onClick={() => job.imageDataUrl && onView(job)}
             className="relative grid w-16 shrink-0 place-items-center overflow-hidden rounded-[8px] bg-surface"
             aria-label="View full size"
           >
             {job.imageDataUrl ? (
               <PreviewTile
-                hue={job.hue}
                 width={job.width}
                 height={job.height}
                 src={job.imageDataUrl}

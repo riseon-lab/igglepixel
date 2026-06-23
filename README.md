@@ -43,7 +43,7 @@ Use `--push` instead of `--load` when publishing directly to a registry.
 
 For a RunPod template, publish `citivia-runpod:linux-amd64`, expose HTTP port
 `3000`, mount persistent storage at `/workspace`, and set `HF_TOKEN` if the
-selected Hugging Face model requires access. Pressing **Start** on the Models
+selected Hugging Face model requires access. Pressing **Start** on the Running
 page calls the runner `/load` endpoint; first load downloads model weights into
 `/workspace/models`.
 
@@ -121,7 +121,7 @@ Routes: `GET/POST /api/vault`, `GET/DELETE /api/vault/[id]`, `GET /api/keys/salt
    Confirm with `xxd .vault/<id>.bin | head -1` that the stored bytes begin with
    `CITV` (the envelope magic) — not a PNG/JPEG header.
 
-## What's implemented (preview)
+## What's implemented
 
 - **Design system** — all tokens from the spec's Design Language (lilac brand,
   `#121212` canvas, 12/16/24px radii, 16px-minimum type, Geist) live in
@@ -131,7 +131,7 @@ Routes: `GET/POST /api/vault`, `GET/DELETE /api/vault/[id]`, `GET /api/keys/salt
 - **Auth / session** — server-side accounts (scrypt), httpOnly session cookie,
   single active session enforced server-side, gated API routes
   ([src/lib/auth/server.ts](src/lib/auth/server.ts)).
-- **Pages** — Models (live resource meters, start/stop, workspace links),
+- **Pages** — Running (runner start/stop, terminal logs, workspace links),
   Assets (upload/filter/delete, aspect-preserving previews), LoRAs (Civitai / HF
   / upload), Downloads (empty state), Settings (API keys, git pull,
   session).
@@ -140,31 +140,18 @@ Routes: `GET/POST /api/vault`, `GET/DELETE /api/vault/[id]`, `GET /api/keys/salt
   HTTP API, displays the returned PNG, and supports download/full-size viewing
   ([src/components/generation/](src/components/generation/)).
 
-## Mock vs. real
-
-Some dashboard sample data still lives in [src/lib/mock.ts](src/lib/mock.ts).
-Integration points for the real build:
-
-| Concern | Preview | Real build |
-| --- | --- | --- |
-| Auth/session | **server-side accounts (scrypt) + httpOnly session cookie + single active session** ✅ | + rate limiting, password reset |
-| Assets | **encrypted at rest (AES-256-GCM), worker decryption, server stores only ciphertext** ✅ | + auth on the vault API, encrypted filenames |
-| Generation | UI posts to `/api/generate` | Isolated per-model runners (independent Python/CUDA envs) |
-| Downloads | empty state | Civitai / Hugging Face APIs |
-| Storage | `.vault/` locally | `/workspace` via `CITIVIA_DATA_DIR` |
-
 ## Project layout
 
 ```
 src/
   app/
     (app)/            # authenticated routes (shared shell)
-      models/ assets/ loras/ downloads/ settings/
+      running/ assets/ loras/ downloads/ settings/
       generate/[model]/
     setup/ login/     # public auth routes
   components/
     ui/               # Button, Card, Slider, Toggle, Badge, Field, PageHeader
     generation/       # GenerationWorkspace, ResolutionPicker, QueuePanel
     AppShell, Topbar, AuthGate, PreviewTile
-  lib/                # types, mock data, nav config, formatting, session
+  lib/                # types, model config, nav config, formatting, session
 ```

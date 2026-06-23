@@ -21,7 +21,7 @@ export default function LoginPage() {
     if (!ready) return;
     if (!hasAccount) router.replace("/setup");
     // Only leave if fully ready: authenticated AND this tab has the key material.
-    else if (authenticated && hasKey) router.replace("/models");
+    else if (authenticated && hasKey) router.replace("/running");
   }, [ready, hasAccount, authenticated, hasKey, router]);
 
   async function onSubmit(e: React.FormEvent) {
@@ -34,7 +34,7 @@ export default function LoginPage() {
       setSubmitting(false);
       return;
     }
-    router.replace("/models");
+    router.replace("/running");
   }
 
   async function resetAccount() {

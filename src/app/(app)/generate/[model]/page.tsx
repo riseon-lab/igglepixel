@@ -3,7 +3,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { GenerationWorkspace } from "@/components/generation/GenerationWorkspace";
 import { Badge } from "@/components/ui/Badge";
-import { MODELS } from "@/lib/mock";
+import { MODELS } from "@/lib/models";
 import type { ModelId } from "@/lib/types";
 
 export function generateStaticParams() {
@@ -23,10 +23,10 @@ export default async function GeneratePage({
     <div className="flex flex-col gap-6">
       <div className="flex flex-col gap-3">
         <Link
-          href="/models"
+          href="/running"
           className="inline-flex w-fit items-center gap-1.5 text-sm text-text-muted transition-colors hover:text-white"
         >
-          <ArrowLeft className="h-4 w-4" /> Models
+          <ArrowLeft className="h-4 w-4" /> Running
         </Link>
         <div className="flex flex-wrap items-center gap-3">
           <h1 className="text-[28px] font-bold leading-tight">{model.name}</h1>

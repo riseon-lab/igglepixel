@@ -29,8 +29,6 @@ export interface Asset {
   /** ISO date string. */
   createdAt: string;
   sizeBytes: number;
-  /** Placeholder gradient seed so previews look distinct without real files. */
-  hue: number;
   encrypted: boolean;
 }
 
@@ -86,7 +84,6 @@ export interface QueueJob {
   status: JobStatus;
   /** 0–100, meaningful while running. */
   progress: number;
-  hue: number;
   createdAt: string;
   imageDataUrl?: string;
   outputPath?: string;

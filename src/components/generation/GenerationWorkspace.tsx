@@ -14,6 +14,7 @@ import {
   Trash2,
   X,
 } from "lucide-react";
+import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { PreviewTile } from "@/components/PreviewTile";
 import { Badge } from "@/components/ui/Badge";
@@ -22,7 +23,7 @@ import { Card } from "@/components/ui/Card";
 import { Textarea } from "@/components/ui/Field";
 import { Slider } from "@/components/ui/Slider";
 import { useToast } from "@/components/ui/Toast";
-import { DEFAULT_NEGATIVE_PROMPT, RESOLUTION_PRESETS } from "@/lib/mock";
+import { DEFAULT_NEGATIVE_PROMPT, RESOLUTION_PRESETS } from "@/lib/models";
 import type { RunnerHealth } from "@/lib/runners/client";
 import type {
   Lora,
@@ -61,7 +62,6 @@ export function GenerationWorkspace({ model }: { model: ModelInfo }) {
   const [loraToAdd, setLoraToAdd] = useState("");
   const [loraError, setLoraError] = useState<string | null>(null);
   const [reference, setReference] = useState<{
-    hue: number;
     name: string;
     dataUrl: string;
   } | null>(null);
@@ -129,7 +129,6 @@ export function GenerationWorkspace({ model }: { model: ModelInfo }) {
       seed: useSeed,
       status,
       progress: 0,
-      hue: (useSeed % 360),
       createdAt: new Date().toISOString(),
       loras: selectedLoras,
     };
@@ -185,7 +184,7 @@ export function GenerationWorkspace({ model }: { model: ModelInfo }) {
       toast.error(
         `${model.name} generation failed`,
         /unreachable|fetch failed|ECONNREFUSED|502/.test(message)
-          ? "The model runner isn't reachable. Start it on the Models page."
+          ? "The model runner isn't reachable. Start it on the Running page."
           : message,
       );
     } finally {
@@ -265,7 +264,6 @@ export function GenerationWorkspace({ model }: { model: ModelInfo }) {
                 const reader = new FileReader();
                 reader.onload = () => {
                   setReference({
-                    hue: (f.size % 360) || 200,
                     name: f.name,
                     dataUrl: String(reader.result),
                   });
@@ -277,7 +275,6 @@ export function GenerationWorkspace({ model }: { model: ModelInfo }) {
               <div className="flex items-center gap-4">
                 <div className="w-24 overflow-hidden rounded-[12px]">
                   <PreviewTile
-                    hue={reference.hue}
                     width={1}
                     height={1}
                     src={reference.dataUrl}
@@ -395,7 +392,12 @@ export function GenerationWorkspace({ model }: { model: ModelInfo }) {
               </Button>
             </div>
           ) : (
-            <p className="text-sm text-text-muted">Install LoRAs from the LoRAs page.</p>
+            <Link
+              href="/loras"
+              className="inline-flex h-10 w-fit items-center justify-center gap-2 rounded-[12px] border border-border bg-surface px-4 text-base font-semibold text-white transition-colors hover:bg-surface-hover"
+            >
+              <Plus className="h-4 w-4" /> Add LoRA
+            </Link>
           )}
         </Card>
 
@@ -501,7 +503,6 @@ export function GenerationWorkspace({ model }: { model: ModelInfo }) {
               {focused.imageDataUrl ? (
                 <div className="relative w-full overflow-hidden rounded-[12px] bg-background">
                   <PreviewTile
-                    hue={focused.hue}
                     width={focused.width}
                     height={focused.height}
                     src={focused.imageDataUrl}
@@ -576,7 +577,7 @@ export function GenerationWorkspace({ model }: { model: ModelInfo }) {
       </div>
 
       {/* Lightbox */}
-      {lightbox && (
+      {lightbox?.imageDataUrl && (
         <div
           className="fixed inset-0 z-50 grid place-items-center bg-black/80 p-4 backdrop-blur-sm animate-fade-in"
           onClick={() => setLightbox(null)}
@@ -586,7 +587,6 @@ export function GenerationWorkspace({ model }: { model: ModelInfo }) {
             onClick={(e) => e.stopPropagation()}
           >
             <PreviewTile
-              hue={lightbox.hue}
               width={lightbox.width}
               height={lightbox.height}
               src={lightbox.imageDataUrl}

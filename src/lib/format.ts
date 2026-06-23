@@ -18,8 +18,3 @@ export function timeAgo(iso: string, nowMs = Date.UTC(2026, 5, 23, 12, 0, 0)): s
   const days = Math.round(hrs / 24);
   return `${days}d ago`;
 }
-
-/** Deterministic placeholder preview gradient, used in lieu of real (encrypted) images. */
-export function previewGradient(hue: number): string {
-  return `linear-gradient(135deg, hsl(${hue} 45% 28%), hsl(${(hue + 40) % 360} 55% 18%))`;
-}
