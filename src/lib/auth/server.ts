@@ -5,6 +5,7 @@ import {
   getAccount,
   login,
   logout,
+  resetAccount,
   tokensMatch,
   type AccountRecord,
 } from "./store";
@@ -48,5 +49,5 @@ export function unauthorized(): Response {
   return new Response("Unauthorized", { status: 401 });
 }
 
-export { createAccount, getAccount, login, logout };
+export { createAccount, getAccount, login, logout, resetAccount };
 export type { AccountRecord };

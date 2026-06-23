@@ -46,6 +46,14 @@ export async function getAccount(): Promise<AccountRecord | null> {
   return readAccount();
 }
 
+export async function resetAccount(): Promise<void> {
+  try {
+    await fs.unlink(accountFile());
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+  }
+}
+
 export async function createAccount(
   username: string,
   password: string,

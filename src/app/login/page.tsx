@@ -15,6 +15,7 @@ export default function LoginPage() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [resetting, setResetting] = useState(false);
 
   useEffect(() => {
     if (!ready) return;
@@ -34,6 +35,30 @@ export default function LoginPage() {
       return;
     }
     router.replace("/models");
+  }
+
+  async function resetAccount() {
+    if (
+      !confirm(
+        "Reset this local account? Encrypted files stay on disk, but may not decrypt unless you recreate the account with the old password.",
+      )
+    )
+      return;
+    setError(null);
+    setResetting(true);
+    const res = await fetch("/api/auth/reset", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ confirm: "RESET" }),
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      setError(data.error ?? "Reset failed.");
+      setResetting(false);
+      return;
+    }
+    sessionStorage.removeItem("citivia.pw");
+    window.location.assign("/setup");
   }
 
   return (
@@ -65,6 +90,15 @@ export default function LoginPage() {
         {error && <p className="text-sm text-danger-text">{error}</p>}
         <Button type="submit" className="mt-2 w-full" disabled={submitting}>
           {submitting ? "Logging in…" : "Log in"}
+        </Button>
+        <Button
+          type="button"
+          variant="ghost"
+          className="w-full text-danger-text hover:text-danger-text"
+          disabled={submitting || resetting}
+          onClick={resetAccount}
+        >
+          {resetting ? "Resetting…" : "Reset local account"}
         </Button>
       </form>
     </AuthShell>

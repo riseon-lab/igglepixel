@@ -23,3 +23,11 @@ test("createAccount is race-safe: only one concurrent setup wins", async () => {
   assert.equal(results.filter((r) => "error" in r).length, 11);
   assert.ok(await auth.getAccount());
 });
+
+test("resetAccount removes the account so setup can run again", async () => {
+  await auth.resetAccount();
+  assert.equal(await auth.getAccount(), null);
+
+  const result = await auth.createAccount("admin", "password123");
+  assert.ok("token" in result);
+});
