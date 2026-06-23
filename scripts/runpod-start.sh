@@ -11,13 +11,22 @@ export HF_HOME="${HF_HOME:-/workspace/.cache/huggingface}"
 
 mkdir -p "$CITIVIA_DATA_DIR/models" "$CITIVIA_DATA_DIR/loras"
 
+# Prefer the runner from the pulled repo (kept current by start.sh's git pull)
+# over the baked copy, so runner updates ship without a full image rebuild.
+# Falls back to the baked runner on the very first boot.
+RUNNER_PY="/runner/runner.py"
+PULLED_RUNNER="${CITIVIA_REPO_DIR:-/workspace/igglepixel}/runners/common/runner.py"
+if [ -f "$PULLED_RUNNER" ]; then
+  RUNNER_PY="$PULLED_RUNNER"
+fi
+
 RUNNER_MODE=txt2img \
 MODEL_ID="${QWEN_2512_MODEL_ID:-Qwen/Qwen-Image-2512}" \
 MODEL_CACHE_DIR="$CITIVIA_DATA_DIR/models/qwen-2512" \
 OUTPUT_DIR="$CITIVIA_DATA_DIR/outputs/qwen-2512" \
 LORA_DIR="$CITIVIA_DATA_DIR/loras" \
 PORT=8011 \
-python /runner/runner.py &
+python "$RUNNER_PY" &
 QWEN_PID=$!
 
 RUNNER_MODE=edit \
@@ -26,7 +35,7 @@ MODEL_CACHE_DIR="$CITIVIA_DATA_DIR/models/qwen-edit-2511" \
 OUTPUT_DIR="$CITIVIA_DATA_DIR/outputs/qwen-edit-2511" \
 LORA_DIR="$CITIVIA_DATA_DIR/loras" \
 PORT=8012 \
-python /runner/runner.py &
+python "$RUNNER_PY" &
 EDIT_PID=$!
 
 cleanup() {
