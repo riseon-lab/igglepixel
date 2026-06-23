@@ -52,5 +52,5 @@ COPY --from=build /app/scripts/runpod-start.sh ./scripts/runpod-start.sh
 RUN chmod +x ./scripts/start.sh ./scripts/runpod-start.sh
 
 VOLUME ["/workspace"]
-EXPOSE 3000 8011 8012
+EXPOSE 3000
 CMD ["./scripts/runpod-start.sh"]
