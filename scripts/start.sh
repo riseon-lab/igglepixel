@@ -6,6 +6,8 @@ REPO_URL="${CITIVIA_REPO_URL:-https://github.com/riseon-lab/igglepixel.git}"
 REPO_REF="${CITIVIA_REPO_REF:-main}"
 REPO_DIR="${CITIVIA_REPO_DIR:-/workspace/igglepixel}"
 AUTO_PULL="${CITIVIA_AUTO_PULL:-1}"
+GIT_RETRIES="${CITIVIA_GIT_RETRIES:-20}"
+GIT_RETRY_SLEEP="${CITIVIA_GIT_RETRY_SLEEP:-5}"
 
 export PORT="${PORT:-3000}"
 export HOSTNAME="${HOSTNAME:-0.0.0.0}"
@@ -16,18 +18,29 @@ start_baked() {
   exec node server.js
 }
 
+git_sync() {
+  attempt=1
+  while [ "$attempt" -le "$GIT_RETRIES" ]; do
+    if [ -d "$REPO_DIR/.git" ]; then
+      cd "$REPO_DIR"
+      git remote set-url origin "$REPO_URL" 2>/dev/null || true
+      git pull --ff-only origin "$REPO_REF" && return 0
+    else
+      git clone --branch "$REPO_REF" --depth 1 "$REPO_URL" "$REPO_DIR" && return 0
+    fi
+
+    echo "Git sync failed ($attempt/$GIT_RETRIES); retrying in ${GIT_RETRY_SLEEP}s." >&2
+    attempt=$((attempt + 1))
+    sleep "$GIT_RETRY_SLEEP"
+  done
+  return 1
+}
+
 if [ "$AUTO_PULL" = "1" ]; then
   mkdir -p "$(dirname "$REPO_DIR")"
 
-  if [ -d "$REPO_DIR/.git" ]; then
-    cd "$REPO_DIR"
-    git remote set-url origin "$REPO_URL" 2>/dev/null || true
-    if ! git pull --ff-only origin "$REPO_REF"; then
-      echo "Git pull failed; starting baked image instead." >&2
-      start_baked
-    fi
-  elif ! git clone --branch "$REPO_REF" --depth 1 "$REPO_URL" "$REPO_DIR"; then
-    echo "Git clone failed; starting baked image instead." >&2
+  if ! git_sync; then
+    echo "Git sync failed after retries; starting baked image instead." >&2
     start_baked
   fi
 
