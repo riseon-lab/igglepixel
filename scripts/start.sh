@@ -46,9 +46,13 @@ if [ "$AUTO_PULL" = "1" ]; then
 
   cd "$REPO_DIR"
   if [ -f package-lock.json ]; then
-    npm ci --include=dev
-    npm run build
-    exec node .next/standalone/server.js
+    # Build the pulled repo; on any failure fall back to the baked image instead
+    # of crashing the container. Extra heap headroom for the production build.
+    if NODE_OPTIONS="${NODE_OPTIONS:---max-old-space-size=4096}" \
+        sh -c 'npm ci --include=dev && npm run build'; then
+      exec node .next/standalone/server.js
+    fi
+    echo "Build of pulled repo failed; starting baked image instead." >&2
   fi
 fi
 

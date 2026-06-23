@@ -501,13 +501,21 @@ export function GenerationWorkspace({ model }: { model: ModelInfo }) {
           {focused ? (
             <>
               {focused.imageDataUrl ? (
-                <div className="relative w-full overflow-hidden rounded-[12px] bg-background">
-                  <PreviewTile
-                    width={focused.width}
-                    height={focused.height}
+                <div
+                  className="relative w-full overflow-hidden rounded-[12px] bg-background"
+                  style={{ aspectRatio: `${focused.width} / ${focused.height}` }}
+                >
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
                     src={focused.imageDataUrl}
-                    showLock={false}
+                    alt=""
+                    className="h-full w-full object-contain"
                   />
+                  {focused.status === "running" && (
+                    <span className="absolute left-2 top-2 rounded-md bg-black/55 px-2 py-0.5 text-xs text-white/90 backdrop-blur">
+                      preview
+                    </span>
+                  )}
                 </div>
               ) : (
                 <div className="grid aspect-square place-items-center rounded-[12px] border border-border bg-background text-text-muted">
@@ -515,7 +523,7 @@ export function GenerationWorkspace({ model }: { model: ModelInfo }) {
                     {focused.status === "running" ? (
                       <>
                         <Loader2 className="h-8 w-8 animate-spin text-lilac" />
-                        <p className="text-sm">Generating image…</p>
+                        <p className="text-sm">Starting generation…</p>
                       </>
                     ) : (
                       <>
@@ -524,6 +532,20 @@ export function GenerationWorkspace({ model }: { model: ModelInfo }) {
                       </>
                     )}
                   </div>
+                </div>
+              )}
+              {focused.status === "running" && (
+                <div className="flex flex-col gap-1">
+                  <div className="h-1.5 overflow-hidden rounded-full bg-border">
+                    <div
+                      className="h-full rounded-full bg-lilac transition-all"
+                      style={{ width: `${focused.progress}%` }}
+                    />
+                  </div>
+                  <p className="text-center text-xs text-text-muted tabular-nums">
+                    Step {Math.round((focused.progress / 100) * focused.steps)} /{" "}
+                    {focused.steps}
+                  </p>
                 </div>
               )}
               <p className="text-xs text-text-muted">
@@ -576,25 +598,24 @@ export function GenerationWorkspace({ model }: { model: ModelInfo }) {
         </Card>
       </div>
 
-      {/* Lightbox */}
+      {/* Lightbox — shows the whole image at its real aspect ratio, no cropping */}
       {lightbox?.imageDataUrl && (
         <div
-          className="fixed inset-0 z-50 grid place-items-center bg-black/80 p-4 backdrop-blur-sm animate-fade-in"
+          className="fixed inset-0 z-50 grid place-items-center bg-black/85 p-4 backdrop-blur-sm animate-fade-in"
           onClick={() => setLightbox(null)}
         >
-          <div
-            className="relative max-h-[88dvh] w-full max-w-3xl overflow-hidden rounded-[16px]"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <PreviewTile
+          <div className="relative" onClick={(e) => e.stopPropagation()}>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={lightbox.imageDataUrl}
+              alt=""
               width={lightbox.width}
               height={lightbox.height}
-              src={lightbox.imageDataUrl}
-              showLock={false}
+              className="block max-h-[90dvh] max-w-[92vw] w-auto h-auto rounded-[12px] object-contain"
             />
             <button
               onClick={() => setLightbox(null)}
-              className="absolute right-3 top-3 grid h-9 w-9 place-items-center rounded-full bg-black/50 text-white hover:bg-black/70"
+              className="absolute right-3 top-3 grid h-9 w-9 place-items-center rounded-full bg-black/60 text-white hover:bg-black/80"
               aria-label="Close"
             >
               <X className="h-5 w-5" />

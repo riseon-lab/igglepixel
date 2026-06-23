@@ -18,7 +18,9 @@ async function run(cmd: string, args: string[], cwd?: string) {
   const { stdout, stderr } = await exec(cmd, args, {
     cwd,
     timeout: 10 * 60_000,
-    maxBuffer: 1024 * 1024,
+    maxBuffer: 8 * 1024 * 1024,
+    // Extra heap headroom so the production build doesn't OOM on the pod.
+    env: { ...process.env, NODE_OPTIONS: process.env.NODE_OPTIONS ?? "--max-old-space-size=4096" },
   });
   return [stdout, stderr].filter(Boolean).join("\n").trim();
 }

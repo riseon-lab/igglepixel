@@ -24,7 +24,7 @@ export const MODELS: ModelInfo[] = [
     description:
       "High-fidelity text-to-image generation. Best for original artwork, concepts and renders.",
     kind: "generation",
-    vramGb: 38,
+    vramGb: 57,
   },
   {
     id: "qwen-edit-2511",
@@ -33,6 +33,6 @@ export const MODELS: ModelInfo[] = [
     description:
       "Reference-guided editing. Supply an image and a prompt to transform, restyle or extend it.",
     kind: "editing",
-    vramGb: 41,
+    vramGb: 57,
   },
 ];

@@ -2,10 +2,10 @@
 
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
+import { AuthShell } from "@/components/AuthShell";
 import { Button } from "@/components/ui/Button";
 import { Input, Label } from "@/components/ui/Field";
 import { useSession } from "@/lib/session";
-import { AuthShell } from "../setup/page";
 
 export default function LoginPage() {
   const { ready, hasAccount, authenticated, password: hasKey, login } =

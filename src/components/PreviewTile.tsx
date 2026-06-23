@@ -8,6 +8,7 @@ export function PreviewTile({
   showLock = true,
   label,
   src,
+  fit = "cover",
 }: {
   width: number;
   height: number;
@@ -15,6 +16,8 @@ export function PreviewTile({
   showLock?: boolean;
   label?: string;
   src?: string;
+  /** "cover" crops to fill (thumbnails); "contain" shows the whole image. */
+  fit?: "cover" | "contain";
 }) {
   return (
     <div
@@ -26,7 +29,11 @@ export function PreviewTile({
     >
       {src && (
         // eslint-disable-next-line @next/next/no-img-element
-        <img src={src} alt="" className="h-full w-full object-cover" />
+        <img
+          src={src}
+          alt=""
+          className={clsx("h-full w-full", fit === "contain" ? "object-contain" : "object-cover")}
+        />
       )}
       {label && (
         <span className="absolute bottom-2 left-2 rounded-md bg-black/40 px-2 py-0.5 text-xs text-white/90 backdrop-blur">

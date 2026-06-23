@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "next build && node scripts/prepare-standalone.mjs",
+    "build": "next build --webpack && node scripts/prepare-standalone.mjs",
     "start": "node .next/standalone/server.js",
     "lint": "eslint",
     "test": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --test \"src/**/*.test.ts\"",

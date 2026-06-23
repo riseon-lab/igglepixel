@@ -33,7 +33,10 @@ GENERATION = {
 }
 
 MODE = os.getenv("RUNNER_MODE", "txt2img")
-MODEL_ID = os.getenv("MODEL_ID", "Qwen/Qwen-Image")
+MODEL_ID = os.getenv(
+  "MODEL_ID",
+  "Qwen/Qwen-Image-Edit-2511" if os.getenv("RUNNER_MODE") == "edit" else "Qwen/Qwen-Image-2512",
+)
 PORT = int(os.getenv("PORT", "8000"))
 WORKSPACE = Path(os.getenv("CITIVIA_DATA_DIR", "/workspace"))
 OUTPUT_DIR = Path(os.getenv("OUTPUT_DIR", WORKSPACE / "outputs" / MODE))
@@ -42,12 +45,18 @@ LORA_DIR = Path(os.getenv("LORA_DIR", WORKSPACE / "loras"))
 SAVE_OUTPUTS = os.getenv("RUNNER_SAVE_OUTPUTS") == "1"
 
 
+# Terminal output is silenced by default — set RUNNER_VERBOSE=1 to print to stdout.
+# The in-memory ring buffer is always kept so the UI's log view still works.
+VERBOSE = os.getenv("RUNNER_VERBOSE") == "1"
+
+
 def log_event(message):
   line = f"{time.strftime('%H:%M:%S')} {message}"
   with _LOG_LOCK:
     LOGS.append(line)
     del LOGS[:-120]
-  print(f"[{MODE}] {message}", flush=True)
+  if VERBOSE:
+    print(f"[{MODE}] {message}", flush=True)
 
 
 def recent_logs():
@@ -71,16 +80,31 @@ def image_base64(image):
   return base64.b64encode(buf.getvalue()).decode()
 
 
-def latent_preview_base64(latents):
+def latent_preview_base64(pipe, latents, height, width):
+  """Best-effort, correctly-oriented preview of the in-progress latents.
+
+  Wrapped so any failure just yields no preview — it never breaks generation.
+  """
   try:
     import torch
     from PIL import Image
 
-    if isinstance(latents, (list, tuple)):
-      latents = latents[0]
-    if not isinstance(latents, torch.Tensor):
+    tensor = latents
+    if isinstance(tensor, (list, tuple)):
+      tensor = tensor[0]
+    if not isinstance(tensor, torch.Tensor):
       return None
-    tensor = latents.detach()
+    tensor = tensor.detach()
+
+    # Qwen-Image hands the callback PACKED latents ([B, seq, c]); unpack them to a
+    # spatial [B, C, h, w] grid so the preview has the right aspect ratio.
+    if tensor.ndim == 3 and hasattr(pipe, "_unpack_latents"):
+      try:
+        vsf = getattr(pipe, "vae_scale_factor", 8) or 8
+        tensor = pipe._unpack_latents(tensor, height, width, vsf)
+      except Exception:
+        pass
+
     while tensor.ndim > 4:
       tensor = tensor[0]
     if tensor.ndim == 4:
@@ -94,8 +118,8 @@ def latent_preview_base64(latents):
     tensor = tensor[:3].float().cpu()
     if tensor.shape[0] == 1:
       tensor = tensor.repeat(3, 1, 1)
-    low = tensor.min()
-    high = tensor.max()
+    low = tensor.amin()
+    high = tensor.amax()
     tensor = (tensor - low) / (high - low).clamp_min(1e-6)
     array = (tensor * 255).byte().permute(1, 2, 0).numpy()
     image = Image.fromarray(array, "RGB")
@@ -105,9 +129,9 @@ def latent_preview_base64(latents):
     return None
 
 
-def progress_callback(total_steps, seed):
+def progress_callback(pipe, total_steps, seed, height, width):
   def callback(_pipe, step, _timestep, callback_kwargs):
-    preview = latent_preview_base64(callback_kwargs.get("latents"))
+    preview = latent_preview_base64(pipe, callback_kwargs.get("latents"), height, width)
     current = int(step) + 1
     set_generation(
       active=True,
@@ -123,9 +147,9 @@ def progress_callback(total_steps, seed):
   return callback
 
 
-def legacy_progress_callback(total_steps, seed):
+def legacy_progress_callback(pipe, total_steps, seed, height, width):
   def callback(step, _timestep, latents):
-    preview = latent_preview_base64(latents)
+    preview = latent_preview_base64(pipe, latents, height, width)
     current = int(step) + 1
     set_generation(
       active=True,
@@ -214,7 +238,26 @@ def load_pipe():
     log_event(f"loading {MODEL_ID}")
     log_event(f"using model cache {MODEL_CACHE_DIR}")
     pipe = cls.from_pretrained(MODEL_ID, **kwargs)
-    if os.getenv("RUNNER_CPU_OFFLOAD") == "1" and hasattr(pipe, "enable_model_cpu_offload"):
+
+    # Decide CPU offload. Forcing it keeps idle VRAM near-empty and is much slower,
+    # so only use it when the card can't hold the model. RUNNER_CPU_OFFLOAD=1/0
+    # overrides; unset = auto by total VRAM (Qwen-Image needs ~60GB in bf16).
+    offload_env = os.getenv("RUNNER_CPU_OFFLOAD")
+    if offload_env == "1":
+      offload = True
+    elif offload_env == "0":
+      offload = False
+    else:
+      total_gb = 0.0
+      if torch.cuda.is_available():
+        try:
+          total_gb = torch.cuda.mem_get_info()[1] / 1e9
+        except Exception:
+          total_gb = 0.0
+      offload = total_gb < 70  # full-GPU on 96GB cards; offload on smaller ones
+      log_event(f"auto offload={offload} (total VRAM {round(total_gb)}GB)")
+
+    if offload and hasattr(pipe, "enable_model_cpu_offload"):
       log_event("enabling CPU offload")
       pipe.enable_model_cpu_offload()
     else:
@@ -362,11 +405,11 @@ def generate(payload):
 
   params = inspect.signature(pipe.__call__).parameters
   if "callback_on_step_end" in params:
-    args["callback_on_step_end"] = progress_callback(steps, seed)
+    args["callback_on_step_end"] = progress_callback(pipe, steps, seed, height, width)
     if "callback_on_step_end_tensor_inputs" in params:
       args["callback_on_step_end_tensor_inputs"] = ["latents"]
   elif "callback" in params:
-    args["callback"] = legacy_progress_callback(steps, seed)
+    args["callback"] = legacy_progress_callback(pipe, steps, seed, height, width)
     if "callback_steps" in params:
       args["callback_steps"] = 1
 
@@ -451,7 +494,8 @@ class Handler(BaseHTTPRequestHandler):
       json_response(self, 500, {"error": str(exc)})
 
   def log_message(self, fmt, *args):
-    if self.command == "GET" and os.getenv("RUNNER_ACCESS_LOG") != "1":
+    # Silent by default; set RUNNER_ACCESS_LOG=1 to print HTTP access lines.
+    if os.getenv("RUNNER_ACCESS_LOG") != "1":
       return
     print(f"{self.address_string()} - {fmt % args}", flush=True)
 

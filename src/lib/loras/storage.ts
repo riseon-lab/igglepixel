@@ -12,6 +12,9 @@ import type {
 } from "@/lib/types";
 
 const LORA_EXTENSIONS = new Set([".bin", ".ckpt", ".pt", ".safetensors"]);
+// Civitai rejects some requests that lack a browser-like User-Agent.
+const BROWSER_UA =
+  "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36";
 const META_SUFFIX = ".meta.json";
 
 export function loraDir(): string {
@@ -58,10 +61,19 @@ async function uniqueFileName(dir: string, wanted: string): Promise<string> {
   throw new Error("Could not allocate a LoRA filename.");
 }
 
-function sourceFromUrl(url: string): LoraSource {
-  if (url.includes("huggingface.co")) return "huggingface";
-  if (url.includes("civitai.com")) return "civitai";
+function sourceFromUrl(hostname: string): LoraSource {
+  const host = hostname.toLowerCase();
+  if (host.includes("huggingface.co") || host.endsWith("hf.co")) {
+    return "huggingface";
+  }
+  // Match Civitai on any TLD (civitai.com, civitai.red, civitai.ai, …).
+  if (host.includes("civitai")) return "civitai";
   return "upload";
+}
+
+function civitaiApiOrigin(url: URL): string {
+  // Use the page's own origin so .com / .red / .ai each hit their own API.
+  return /civitai/i.test(url.hostname) ? url.origin : "https://civitai.com";
 }
 
 function displayName(fileName: string): string {
@@ -164,7 +176,8 @@ async function resolveCivitaiDownload(url: URL, token?: string): Promise<URL> {
   if (!modelId) return url;
 
   const api = new URL(`/api/v1/models/${modelId}`, url.origin);
-  const headers: HeadersInit = token ? { Authorization: `Bearer ${token}` } : {};
+  const headers: Record<string, string> = { "user-agent": BROWSER_UA };
+  if (token) headers.Authorization = `Bearer ${token}`;
   const res = await fetch(api, { headers, cache: "no-store" });
   if (!res.ok) throw new Error(`Civitai lookup failed (${res.status}).`);
   const data = (await res.json()) as {
@@ -216,9 +229,15 @@ interface CivitaiVersion {
   model?: { name?: string };
 }
 
-async function civitaiApi(apiPath: string, token?: string): Promise<unknown> {
-  const res = await fetch(`https://civitai.com${apiPath}`, {
-    headers: token ? { Authorization: `Bearer ${token}` } : {},
+async function civitaiApi(
+  origin: string,
+  apiPath: string,
+  token?: string,
+): Promise<unknown> {
+  const headers: Record<string, string> = { "user-agent": BROWSER_UA };
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const res = await fetch(`${origin}${apiPath}`, {
+    headers,
     cache: "no-store",
   });
   if (res.status === 401 || res.status === 403) {
@@ -248,9 +267,11 @@ function civitaiCandidates(version: CivitaiVersion): LoraCandidate[] {
 }
 
 async function resolveCivitai(url: URL, token?: string): Promise<LoraResolution> {
+  const origin = civitaiApiOrigin(url);
   const versionDownload = /^\/api\/download\/models\/(\d+)/.exec(url.pathname);
   if (versionDownload) {
     const v = (await civitaiApi(
+      origin,
       `/api/v1/model-versions/${versionDownload[1]}`,
       token,
     )) as CivitaiVersion;
@@ -263,7 +284,7 @@ async function resolveCivitai(url: URL, token?: string): Promise<LoraResolution>
 
   const modelPage = /^\/models\/(\d+)/.exec(url.pathname);
   if (modelPage) {
-    const data = (await civitaiApi(`/api/v1/models/${modelPage[1]}`, token)) as {
+    const data = (await civitaiApi(origin, `/api/v1/models/${modelPage[1]}`, token)) as {
       name?: string;
       modelVersions?: CivitaiVersion[];
     };
@@ -383,7 +404,7 @@ async function resolveDownload(urlValue: string): Promise<{
   if (source === "civitai") {
     if (keys.civitai) headers.Authorization = `Bearer ${keys.civitai}`;
     const resolved = await resolveCivitaiDownload(url, keys.civitai);
-    if (keys.civitai && resolved.hostname.includes("civitai.com")) {
+    if (keys.civitai && /civitai/i.test(resolved.hostname)) {
       resolved.searchParams.set("token", keys.civitai);
     }
     return { url: resolved, headers, source };
@@ -394,7 +415,10 @@ async function resolveDownload(urlValue: string): Promise<{
 export async function downloadLora(urlValue: string): Promise<Lora> {
   const dir = await ensureDir();
   const { url, headers, source } = await resolveDownload(urlValue);
-  const res = await fetch(url, { headers, redirect: "follow" });
+  const res = await fetch(url, {
+    headers: { "user-agent": BROWSER_UA, ...(headers as Record<string, string>) },
+    redirect: "follow",
+  });
   if (res.status === 401 || res.status === 403) {
     const where = source === "civitai" ? "Civitai" : "Hugging Face";
     throw new Error(

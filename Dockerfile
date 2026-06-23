@@ -32,8 +32,9 @@ ENV NODE_ENV=production \
     CITIVIA_DATA_DIR=/workspace \
     QWEN_2512_RUNNER_URL=http://127.0.0.1:8011 \
     QWEN_EDIT_2511_RUNNER_URL=http://127.0.0.1:8012 \
+    QWEN_2512_MODEL_ID=Qwen/Qwen-Image-2512 \
+    QWEN_EDIT_2511_MODEL_ID=Qwen/Qwen-Image-Edit-2511 \
     HF_HOME=/workspace/.cache/huggingface \
-    RUNNER_CPU_OFFLOAD=1 \
     PYTHONUNBUFFERED=1
 
 RUN apt-get update \
