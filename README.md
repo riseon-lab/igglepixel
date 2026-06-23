@@ -29,9 +29,12 @@ npm run test:crypto          # AES-256-GCM unit tests (node --test, no extra dep
 The image listens on port 3000 and stores data under `/workspace`.
 
 ```bash
-docker build -t citivia-studio .
-docker run --rm -p 3000:3000 -v citivia-workspace:/workspace citivia-studio
+docker buildx build --platform linux/amd64 -t citivia-studio:linux-amd64 --load .
+docker run --rm -p 3000:3000 -v citivia-workspace:/workspace citivia-studio:linux-amd64
 ```
+
+On Apple Silicon, the `--platform linux/amd64` target is required for RunPod.
+Use `--push` instead of `--load` when publishing directly to a registry.
 
 On startup the container pulls the latest UI from
 `https://github.com/riseon-lab/igglepixel.git` into `/workspace/igglepixel`,
