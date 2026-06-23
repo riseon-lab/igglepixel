@@ -16,7 +16,7 @@ ENV NEXT_TELEMETRY_DISABLED=1
 RUN npm run build
 
 # ---- runtime ----
-FROM pytorch/pytorch:2.5.1-cuda12.4-cudnn9-runtime AS runtime
+FROM pytorch/pytorch:2.7.0-cuda12.8-cudnn9-runtime AS runtime
 
 # Node/npm are needed for the baked Next standalone server and optional startup pull.
 COPY --from=deps /usr/local/bin/node /usr/local/bin/node

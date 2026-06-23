@@ -81,7 +81,7 @@ export default function SettingsPage() {
   const { username, logout } = useSession();
   const toast = useToast();
   const [pulling, setPulling] = useState(false);
-  const [pulled, setPulled] = useState(false);
+  const [pullResult, setPullResult] = useState<string | null>(null);
   const [singleSession, setSingleSession] = useState(true);
   const [keys, setKeys] = useState({ civitai: false, huggingface: false });
 
@@ -110,13 +110,20 @@ export default function SettingsPage() {
     }
   }
 
-  function pull() {
+  async function pull() {
     setPulling(true);
-    setPulled(false);
-    setTimeout(() => {
+    setPullResult(null);
+    try {
+      const res = await fetch("/api/settings/deployment/pull", { method: "POST" });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.error || "Git pull failed.");
+      setPullResult(`Pulled and built ${body.ref} in ${body.repoDir}. Restart the pod to launch it.`);
+      toast.success("Git pull complete", "Restart the pod to run the updated UI.");
+    } catch (err) {
+      toast.error("Git pull failed", err instanceof Error ? err.message : "Please check the pod logs.");
+    } finally {
       setPulling(false);
-      setPulled(true);
-    }, 1600);
+    }
   }
 
   return (
@@ -168,14 +175,14 @@ export default function SettingsPage() {
               Source · <span className="font-mono">riseon-lab/igglepixel</span> · main
             </p>
           </div>
-          <Button variant="secondary" onClick={pull} disabled={pulling} title="Handled by container startup">
+          <Button variant="secondary" onClick={pull} disabled={pulling}>
             <RefreshCw className={pulling ? "h-4 w-4 animate-spin" : "h-4 w-4"} />
-            {pulling ? "Checking..." : "Check startup pull"}
+            {pulling ? "Pulling..." : "Pull latest"}
           </Button>
         </div>
-        {pulled && (
+        {pullResult && (
           <p className="flex items-center gap-2 text-sm text-success">
-            <Check className="h-4 w-4" /> Pull runs automatically on container start.
+            <Check className="h-4 w-4" /> {pullResult}
           </p>
         )}
       </Card>
