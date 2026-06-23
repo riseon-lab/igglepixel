@@ -23,10 +23,10 @@ export default async function GeneratePage({
     <div className="flex flex-col gap-6">
       <div className="flex flex-col gap-3">
         <Link
-          href="/running"
+          href="/models"
           className="inline-flex w-fit items-center gap-1.5 text-sm text-text-muted transition-colors hover:text-white"
         >
-          <ArrowLeft className="h-4 w-4" /> Running
+          <ArrowLeft className="h-4 w-4" /> Models
         </Link>
         <div className="flex flex-wrap items-center gap-3">
           <h1 className="text-[28px] font-bold leading-tight">{model.name}</h1>

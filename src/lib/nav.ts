@@ -1,8 +1,7 @@
 import {
-  Activity,
+  Boxes,
   Images,
   Layers,
-  DownloadCloud,
   Database,
   GraduationCap,
   Settings,
@@ -20,10 +19,9 @@ export interface NavItem {
 }
 
 export const NAV_ITEMS: NavItem[] = [
-  { label: "Running", href: "/running", icon: Activity, primary: true },
+  { label: "Models", href: "/models", icon: Boxes, primary: true },
   { label: "Assets", href: "/assets", icon: Images, primary: true },
   { label: "LoRAs", href: "/loras", icon: Layers, primary: true },
-  { label: "Downloads", href: "/downloads", icon: DownloadCloud, primary: true },
   { label: "Data Studio", href: "/data-studio", icon: Database, future: true },
   { label: "Training", href: "/training", icon: GraduationCap, future: true },
   { label: "Settings", href: "/settings", icon: Settings, primary: true },

@@ -9,7 +9,7 @@
 //   - <cwd>/.vault              locally (gitignored)
 
 import { randomBytes, randomUUID } from "node:crypto";
-import { promises as fs } from "node:fs";
+import { existsSync, promises as fs } from "node:fs";
 import path from "node:path";
 import type { AssetMeta, NewAssetMeta } from "./types";
 
@@ -18,10 +18,16 @@ const ASSET_KINDS = new Set(["upload", "reference", "generated"]);
 export function vaultDir(): string {
   const base = process.env.CITIVIA_DATA_DIR;
   if (base) return `${base.replace(/\/+$/, "")}/vault`;
-  // In production (e.g. the RunPod image) default to the persistent /workspace
-  // volume rather than the ephemeral working directory, so uploads survive
-  // restarts even if CITIVIA_DATA_DIR was somehow not set.
-  if (process.env.NODE_ENV === "production") return "/workspace/vault";
+  // Mirror the runner, which defaults its data root to /workspace: whenever the
+  // persistent volume exists, always resolve there — regardless of NODE_ENV or
+  // the current working directory. This is what keeps the account/session from
+  // landing in a moving/ephemeral path across restarts (the bug where models
+  // persisted on /workspace but the login did not).
+  try {
+    if (existsSync("/workspace")) return "/workspace/vault";
+  } catch {
+    /* fall through */
+  }
   return ".vault";
 }
 

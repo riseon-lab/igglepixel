@@ -1,6 +1,11 @@
 import type { NextRequest } from "next/server";
 import { requireSession, unauthorized } from "@/lib/auth/server";
-import { runnerHealth, runnerLoad, runnerUnload } from "@/lib/runners/client";
+import {
+  runnerDeleteWeights,
+  runnerHealth,
+  runnerLoad,
+  runnerUnload,
+} from "@/lib/runners/client";
 import type { ModelId } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -61,6 +66,29 @@ export async function POST(
           err instanceof Error
             ? err.message
             : `Could not reach the ${model} runner.`,
+      },
+      { status: 502 },
+    );
+  }
+}
+
+// DELETE → unload the model and remove its cached weights from disk.
+export async function DELETE(
+  req: NextRequest,
+  { params }: { params: Promise<{ model: string }> },
+) {
+  if (!(await requireSession(req))) return unauthorized();
+  const { model } = await params;
+  if (!isModel(model)) return new Response("Unknown model", { status: 404 });
+
+  try {
+    return Response.json(await runnerDeleteWeights(model));
+  } catch (err) {
+    return Response.json(
+      {
+        ok: false,
+        error:
+          err instanceof Error ? err.message : `Could not reach the ${model} runner.`,
       },
       { status: 502 },
     );

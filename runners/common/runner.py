@@ -316,6 +316,22 @@ def unload_pipe():
   log_event("model unloaded")
 
 
+def delete_weights():
+  """Unload the model and remove its cached weights from disk."""
+  import shutil
+
+  unload_pipe()
+  try:
+    if MODEL_CACHE_DIR.exists():
+      shutil.rmtree(MODEL_CACHE_DIR)
+    MODEL_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+  except Exception as exc:
+    log_event(f"delete weights failed: {exc}")
+    return {"ok": False, "error": str(exc)}
+  log_event("weights deleted")
+  return {"ok": True, "loaded": False, "loading": False}
+
+
 def lora_selection(value):
   if isinstance(value, str):
     return safe_lora_path(value), 1.0
@@ -487,6 +503,8 @@ class Handler(BaseHTTPRequestHandler):
           200,
           {"ok": True, "loaded": False, "loading": False, "logs": recent_logs()},
         )
+      if self.path == "/delete-weights":
+        return json_response(self, 200, delete_weights())
       if self.path == "/generate":
         return json_response(self, 200, generate(decode_json(self)))
       json_response(self, 404, {"error": "not found"})

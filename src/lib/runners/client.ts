@@ -90,6 +90,16 @@ export async function runnerUnload(model: ModelId): Promise<RunnerHealth> {
   return res.json();
 }
 
+/** Unload and delete the model's cached weights from disk. */
+export async function runnerDeleteWeights(model: ModelId): Promise<RunnerHealth> {
+  const res = await fetch(`${runnerUrl(model)}/delete-weights`, { method: "POST" });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok || body.ok === false) {
+    throw new Error(body.error || `Could not delete weights (${res.status}).`);
+  }
+  return body;
+}
+
 export async function runGeneration(
   body: RunnerGenerateBody,
 ): Promise<RunnerGenerateResult> {
