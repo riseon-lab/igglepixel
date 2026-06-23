@@ -42,7 +42,7 @@ const TONES: Record<
   { icon: typeof Info; ring: string; iconColor: string }
 > = {
   success: { icon: CheckCircle2, ring: "border-success/40", iconColor: "text-success" },
-  error: { icon: XCircle, ring: "border-danger/50", iconColor: "text-[#ff8a80]" },
+  error: { icon: XCircle, ring: "border-danger/50", iconColor: "text-danger-text" },
   warning: { icon: AlertTriangle, ring: "border-warning/40", iconColor: "text-warning" },
   info: { icon: Info, ring: "border-lilac/40", iconColor: "text-lilac" },
 };

@@ -249,7 +249,7 @@ export function EncryptionSelfTest() {
                 {s.status === "pass" ? (
                   <CheckCircle2 className="h-5 w-5 text-success" />
                 ) : s.status === "fail" ? (
-                  <XCircle className="h-5 w-5 text-[#ff8a80]" />
+                  <XCircle className="h-5 w-5 text-danger-text" />
                 ) : (
                   <Loader2 className="h-5 w-5 animate-spin text-lilac" />
                 )}
@@ -267,7 +267,7 @@ export function EncryptionSelfTest() {
                   <p
                     className={clsx(
                       "mt-0.5 text-sm",
-                      s.status === "fail" ? "text-[#ff8a80]" : "text-text-muted",
+                      s.status === "fail" ? "text-danger-text" : "text-text-muted",
                     )}
                   >
                     {s.detail}

@@ -307,7 +307,7 @@ export function GenerationWorkspace({ model }: { model: ModelInfo }) {
               {selectedLoras.length}
             </Badge>
           </div>
-          {loraError && <p className="text-sm text-danger">{loraError}</p>}
+          {loraError && <p className="text-sm text-danger-text">{loraError}</p>}
           {loras.length > 0 ? (
             <div className="grid gap-2">
               {loras.map((lora) => (

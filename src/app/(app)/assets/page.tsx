@@ -194,7 +194,7 @@ export default function AssetsPage() {
       </div>
 
       {error ? (
-        <Card className="py-16 text-center text-danger">
+        <Card className="py-16 text-center text-danger-text">
           Could not initialise encryption: {error}
         </Card>
       ) : !ready || loading ? (

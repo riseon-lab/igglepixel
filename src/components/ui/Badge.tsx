@@ -7,7 +7,7 @@ const tones: Record<Tone, string> = {
   neutral: "bg-surface-hover text-text-secondary",
   lilac: "bg-lilac/15 text-lilac",
   success: "bg-success/15 text-success",
-  danger: "bg-danger/20 text-[#ff8a80]",
+  danger: "bg-danger/20 text-danger-text",
   warning: "bg-warning/15 text-warning",
 };
 

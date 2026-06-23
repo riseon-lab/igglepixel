@@ -219,7 +219,7 @@ export default function RunningPage() {
 
       {loadErrors.map((e) => (
         <Card key={e.model} className="flex items-start gap-3 border-danger/50">
-          <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-[#ff8a80]" />
+          <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-danger-text" />
           <div>
             <p className="font-medium">Load failed: {e.model}</p>
             <p className="mt-1 text-sm text-text-secondary">{e.detail?.load_error}</p>

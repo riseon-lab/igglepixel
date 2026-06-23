@@ -73,7 +73,7 @@ export function QueuePanel({
               {job.prompt}
             </p>
             {job.status === "failed" && job.error ? (
-              <p className="truncate text-xs text-[#ff8a80]" title={job.error}>
+              <p className="truncate text-xs text-danger-text" title={job.error}>
                 {job.error}
               </p>
             ) : null}

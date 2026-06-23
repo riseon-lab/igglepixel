@@ -142,7 +142,7 @@ export default function LorasPage() {
         <p className="text-xs text-text-muted">
           API keys are configured in Settings. Files are saved to the shared runner LoRA folder.
         </p>
-        {error && <p className="text-sm text-danger">{error}</p>}
+        {error && <p className="text-sm text-danger-text">{error}</p>}
       </Card>
 
       <section className="flex flex-col gap-4">

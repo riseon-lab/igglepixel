@@ -74,7 +74,7 @@ export default function SetupPage() {
             autoComplete="new-password"
           />
         </div>
-        {error && <p className="text-sm text-[#ff8a80]">{error}</p>}
+        {error && <p className="text-sm text-danger-text">{error}</p>}
         <Button type="submit" className="mt-2 w-full" disabled={submitting}>
           {submitting ? "Creating…" : "Create account & enter studio"}
         </Button>
