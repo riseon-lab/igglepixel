@@ -4,7 +4,12 @@ import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type { ReadableStream as NodeReadableStream } from "node:stream/web";
 import { readApiKeys } from "@/lib/settings/keys";
-import type { Lora, LoraSource } from "@/lib/types";
+import type {
+  Lora,
+  LoraCandidate,
+  LoraResolution,
+  LoraSource,
+} from "@/lib/types";
 
 const LORA_EXTENSIONS = new Set([".bin", ".ckpt", ".pt", ".safetensors"]);
 const META_SUFFIX = ".meta.json";
@@ -186,6 +191,178 @@ function resolveHuggingFaceDownload(url: URL): URL {
   return url;
 }
 
+function isLoraFile(name?: string | null): boolean {
+  return !!name && LORA_EXTENSIONS.has(path.extname(name).toLowerCase());
+}
+
+// ---------------------------------------------------------------------------
+// Resolve a Civitai / Hugging Face URL into the list of installable files so the
+// UI can show a picker (instead of silently guessing one file).
+// ---------------------------------------------------------------------------
+
+interface CivitaiFile {
+  id?: number;
+  name?: string;
+  sizeKB?: number;
+  type?: string;
+  primary?: boolean;
+  downloadUrl?: string;
+}
+interface CivitaiVersion {
+  id?: number;
+  name?: string;
+  baseModel?: string;
+  files?: CivitaiFile[];
+  model?: { name?: string };
+}
+
+async function civitaiApi(apiPath: string, token?: string): Promise<unknown> {
+  const res = await fetch(`https://civitai.com${apiPath}`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    cache: "no-store",
+  });
+  if (res.status === 401 || res.status === 403) {
+    throw new Error("Civitai requires an API key for this model — add one in Settings.");
+  }
+  if (!res.ok) throw new Error(`Civitai lookup failed (${res.status}).`);
+  return res.json();
+}
+
+function civitaiCandidates(version: CivitaiVersion): LoraCandidate[] {
+  return (version.files ?? [])
+    .filter(
+      (f) =>
+        f.downloadUrl &&
+        (isLoraFile(f.name) || (f.type ?? "").toLowerCase() === "model"),
+    )
+    .map((f) => ({
+      id: `civitai-${version.id}-${f.id ?? f.name}`,
+      fileName: toSafeFileName(f.name ?? `${version.name ?? "lora"}.safetensors`),
+      label: `${version.name ?? "version"} · ${f.name ?? "model.safetensors"}`,
+      downloadUrl: f.downloadUrl!,
+      sizeBytes: f.sizeKB ? Math.round(f.sizeKB * 1024) : undefined,
+      versionName: version.name,
+      baseModel: version.baseModel,
+      recommended: !!f.primary,
+    }));
+}
+
+async function resolveCivitai(url: URL, token?: string): Promise<LoraResolution> {
+  const versionDownload = /^\/api\/download\/models\/(\d+)/.exec(url.pathname);
+  if (versionDownload) {
+    const v = (await civitaiApi(
+      `/api/v1/model-versions/${versionDownload[1]}`,
+      token,
+    )) as CivitaiVersion;
+    return {
+      source: "civitai",
+      modelName: v.model?.name ?? v.name,
+      candidates: civitaiCandidates(v),
+    };
+  }
+
+  const modelPage = /^\/models\/(\d+)/.exec(url.pathname);
+  if (modelPage) {
+    const data = (await civitaiApi(`/api/v1/models/${modelPage[1]}`, token)) as {
+      name?: string;
+      modelVersions?: CivitaiVersion[];
+    };
+    const wanted = url.searchParams.get("modelVersionId");
+    const versions = (data.modelVersions ?? []).filter(
+      (v) => !wanted || String(v.id) === wanted,
+    );
+    return {
+      source: "civitai",
+      modelName: data.name,
+      candidates: versions.flatMap(civitaiCandidates),
+    };
+  }
+
+  throw new Error(
+    "Unrecognised Civitai URL. Use a model page (civitai.com/models/…) or a download link.",
+  );
+}
+
+async function resolveHuggingFace(url: URL, token?: string): Promise<LoraResolution> {
+  const parts = url.pathname.split("/").filter(Boolean);
+
+  // Direct file link: /<owner>/<repo>/(blob|resolve)/<rev>/<path...>
+  const fileMatch = /\/(?:blob|resolve)\/([^/]+)\/(.+)$/.exec(url.pathname);
+  if (fileMatch && isLoraFile(fileMatch[2])) {
+    const dl = new URL(url.toString());
+    dl.pathname = dl.pathname.replace("/blob/", "/resolve/");
+    const name = decodeURIComponent(fileMatch[2].split("/").pop()!);
+    return {
+      source: "huggingface",
+      modelName: parts.length >= 2 ? `${parts[0]}/${parts[1]}` : undefined,
+      candidates: [
+        {
+          id: `hf-${name}`,
+          fileName: toSafeFileName(name),
+          label: fileMatch[2],
+          downloadUrl: dl.toString(),
+          recommended: true,
+        },
+      ],
+    };
+  }
+
+  // Repo URL (optionally /tree/<rev>) → list the repo's LoRA files.
+  if (parts.length >= 2) {
+    const [owner, repo] = parts;
+    const rev = /\/tree\/([^/]+)/.exec(url.pathname)?.[1] ?? "main";
+    const api =
+      `https://huggingface.co/api/models/${owner}/${repo}` +
+      (rev !== "main" ? `/revision/${encodeURIComponent(rev)}` : "");
+    const res = await fetch(api, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      cache: "no-store",
+    });
+    if (res.status === 401 || res.status === 403) {
+      throw new Error(
+        "This Hugging Face repo is gated — add an access token in Settings.",
+      );
+    }
+    if (!res.ok) throw new Error(`Hugging Face lookup failed (${res.status}).`);
+    const data = (await res.json()) as { siblings?: Array<{ rfilename?: string }> };
+    const files = (data.siblings ?? [])
+      .map((s) => s.rfilename)
+      .filter((n): n is string => isLoraFile(n));
+    return {
+      source: "huggingface",
+      modelName: `${owner}/${repo}`,
+      candidates: files.map((name) => ({
+        id: `hf-${name}`,
+        fileName: toSafeFileName(name.split("/").pop()!),
+        label: name,
+        downloadUrl: `https://huggingface.co/${owner}/${repo}/resolve/${rev}/${name}`,
+        recommended: files.length === 1,
+      })),
+    };
+  }
+
+  throw new Error("Unrecognised Hugging Face URL.");
+}
+
+export async function resolveLoraCandidates(
+  urlValue: string,
+): Promise<LoraResolution> {
+  const keys = await readApiKeys();
+  let url: URL;
+  try {
+    url = new URL(urlValue);
+  } catch {
+    throw new Error("That doesn't look like a valid URL.");
+  }
+  if (url.protocol !== "https:") {
+    throw new Error("LoRA installs require an HTTPS URL.");
+  }
+  const source = sourceFromUrl(url.hostname);
+  if (source === "civitai") return resolveCivitai(url, keys.civitai);
+  if (source === "huggingface") return resolveHuggingFace(url, keys.huggingface);
+  throw new Error("Use a Civitai or Hugging Face URL, or upload a LoRA file.");
+}
+
 async function resolveDownload(urlValue: string): Promise<{
   url: URL;
   headers: HeadersInit;
@@ -218,6 +395,12 @@ export async function downloadLora(urlValue: string): Promise<Lora> {
   const dir = await ensureDir();
   const { url, headers, source } = await resolveDownload(urlValue);
   const res = await fetch(url, { headers, redirect: "follow" });
+  if (res.status === 401 || res.status === 403) {
+    const where = source === "civitai" ? "Civitai" : "Hugging Face";
+    throw new Error(
+      `${where} rejected the download (auth required) — add your ${where} API key in Settings.`,
+    );
+  }
   if (!res.ok) throw new Error(`LoRA download failed (${res.status}).`);
   if (!res.body) throw new Error("LoRA download response was empty.");
 

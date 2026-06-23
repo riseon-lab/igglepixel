@@ -6,9 +6,10 @@ import {
   Download,
   ImagePlus,
   Layers,
-  ListPlus,
   Maximize2,
+  Loader2,
   RotateCcw,
+  Plus,
   Sparkles,
   Trash2,
   X,
@@ -21,29 +22,23 @@ import { Card } from "@/components/ui/Card";
 import { Textarea } from "@/components/ui/Field";
 import { Slider } from "@/components/ui/Slider";
 import { useToast } from "@/components/ui/Toast";
-import { DEFAULT_NEGATIVE_PROMPT, QUEUE, RESOLUTION_PRESETS } from "@/lib/mock";
-import type { Lora, ModelInfo, QueueJob, ResolutionPreset } from "@/lib/types";
+import { DEFAULT_NEGATIVE_PROMPT, RESOLUTION_PRESETS } from "@/lib/mock";
+import type { RunnerHealth } from "@/lib/runners/client";
+import type {
+  Lora,
+  LoraSelection,
+  ModelInfo,
+  QueueJob,
+  ResolutionPreset,
+} from "@/lib/types";
 import { ResolutionPicker } from "./ResolutionPicker";
 import { QueuePanel } from "./QueuePanel";
 
 type SeedMode = "random" | "fixed";
+const GENERATION_POLL_MS = 500;
 
 function randomSeed() {
   return Math.floor(Math.random() * 1_000_000);
-}
-
-function svgForJob(job: QueueJob): string {
-  const h2 = (job.hue + 40) % 360;
-  const prompt = job.prompt.replace(/[<>&"]/g, (c) =>
-    ({ "<": "&lt;", ">": "&gt;", "&": "&amp;", '"': "&quot;" })[c]!,
-  );
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${job.width}" height="${job.height}" viewBox="0 0 ${job.width} ${job.height}">
-<defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop stop-color="hsl(${job.hue} 45% 28%)"/><stop offset="1" stop-color="hsl(${h2} 55% 18%)"/></linearGradient></defs>
-<rect width="100%" height="100%" fill="url(#g)"/>
-<circle cx="${job.width * 0.3}" cy="${job.height * 0.22}" r="${Math.min(job.width, job.height) * 0.22}" fill="rgba(255,255,255,0.12)"/>
-<text x="50%" y="50%" text-anchor="middle" fill="white" font-family="system-ui, sans-serif" font-size="${Math.max(24, Math.round(job.width / 22))}" font-weight="700">Citivia Preview</text>
-<text x="50%" y="57%" text-anchor="middle" fill="rgba(255,255,255,0.72)" font-family="system-ui, sans-serif" font-size="${Math.max(14, Math.round(job.width / 48))}">seed ${job.seed} · ${prompt}</text>
-</svg>`;
 }
 
 export function GenerationWorkspace({ model }: { model: ModelInfo }) {
@@ -62,7 +57,8 @@ export function GenerationWorkspace({ model }: { model: ModelInfo }) {
   const [seed, setSeed] = useState(randomSeed());
   const [lastSeed, setLastSeed] = useState<number | null>(null);
   const [loras, setLoras] = useState<Lora[]>([]);
-  const [selectedLoras, setSelectedLoras] = useState<string[]>([]);
+  const [selectedLoras, setSelectedLoras] = useState<LoraSelection[]>([]);
+  const [loraToAdd, setLoraToAdd] = useState("");
   const [loraError, setLoraError] = useState<string | null>(null);
   const [reference, setReference] = useState<{
     hue: number;
@@ -72,12 +68,8 @@ export function GenerationWorkspace({ model }: { model: ModelInfo }) {
   const refInput = useRef<HTMLInputElement>(null);
 
   // ---- Queue / preview ----
-  const [jobs, setJobs] = useState<QueueJob[]>(() =>
-    QUEUE.filter((j) => j.model === model.id),
-  );
-  const [focused, setFocused] = useState<QueueJob | null>(
-    () => QUEUE.find((j) => j.model === model.id && j.status === "completed") ?? null,
-  );
+  const [jobs, setJobs] = useState<QueueJob[]>([]);
+  const [focused, setFocused] = useState<QueueJob | null>(null);
   const [lightbox, setLightbox] = useState<QueueJob | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
 
@@ -92,6 +84,36 @@ export function GenerationWorkspace({ model }: { model: ModelInfo }) {
         setLoraError(err instanceof Error ? err.message : "Could not load LoRAs."),
       );
   }, []);
+
+  useEffect(() => {
+    if (!busyId) return;
+
+    async function pollGeneration() {
+      try {
+        const res = await fetch(`/api/runners/${model.id}`, { cache: "no-store" });
+        if (!res.ok) return;
+        const health: RunnerHealth = await res.json();
+        const generation = health.generation;
+        if (!generation) return;
+        const progress = Math.max(0, Math.min(100, Math.round(generation.progress)));
+        const preview = generation.preview_base64
+          ? `data:${generation.preview_mime ?? "image/png"};base64,${generation.preview_base64}`
+          : undefined;
+        const update = (job: QueueJob): QueueJob =>
+          job.id === busyId
+            ? { ...job, progress, imageDataUrl: preview ?? job.imageDataUrl }
+            : job;
+        setJobs((prev) => prev.map(update));
+        setFocused((job) => (job?.id === busyId ? update(job) : job));
+      } catch {
+        // Final /generate error handling owns user-visible failures.
+      }
+    }
+
+    void pollGeneration();
+    const timer = setInterval(() => void pollGeneration(), GENERATION_POLL_MS);
+    return () => clearInterval(timer);
+  }, [busyId, model.id]);
 
   function buildJob(status: QueueJob["status"]): QueueJob {
     const useSeed = seedMode === "random" ? randomSeed() : seed;
@@ -163,17 +185,12 @@ export function GenerationWorkspace({ model }: { model: ModelInfo }) {
       toast.error(
         `${model.name} generation failed`,
         /unreachable|fetch failed|ECONNREFUSED|502/.test(message)
-          ? "The model runner isn't reachable. Start it on the Running page."
+          ? "The model runner isn't reachable. Start it on the Models page."
           : message,
       );
     } finally {
       setBusyId(null);
     }
-  }
-
-  function addToQueue() {
-    const job = buildJob("pending");
-    setJobs((prev) => [...prev, job]);
   }
 
   function removeJob(id: string) {
@@ -197,32 +214,38 @@ export function GenerationWorkspace({ model }: { model: ModelInfo }) {
   }
 
   function downloadJob(job: QueueJob) {
-    if (job.imageDataUrl) {
-      const link = document.createElement("a");
-      link.href = job.imageDataUrl;
-      link.download = `${job.id}.png`;
-      link.click();
-      return;
-    }
-    const url = URL.createObjectURL(
-      new Blob([svgForJob(job)], { type: "image/svg+xml" }),
-    );
+    if (!job.imageDataUrl) return toast.error("No image to download yet.");
     const link = document.createElement("a");
-    link.href = url;
-    link.download = `${job.id}.svg`;
+    link.href = job.imageDataUrl;
+    link.download = `${job.id}.png`;
     link.click();
-    URL.revokeObjectURL(url);
   }
 
-  function toggleLora(loraPath: string) {
+  function addLora() {
+    if (!loraToAdd) return;
     setSelectedLoras((prev) =>
-      prev.includes(loraPath)
-        ? prev.filter((item) => item !== loraPath)
-        : [...prev, loraPath],
+      prev.some((item) => item.path === loraToAdd)
+        ? prev
+        : [...prev, { path: loraToAdd, strength: 1 }],
+    );
+    setLoraToAdd("");
+  }
+
+  function removeLora(path: string) {
+    setSelectedLoras((prev) => prev.filter((item) => item.path !== path));
+  }
+
+  function setLoraStrength(path: string, strength: number) {
+    setSelectedLoras((prev) =>
+      prev.map((item) =>
+        item.path === path ? { ...item, strength: Math.max(0.1, strength) } : item,
+      ),
     );
   }
 
   const generating = busyId !== null;
+  const selectedPaths = new Set(selectedLoras.map((item) => item.path));
+  const availableLoras = loras.filter((lora) => !selectedPaths.has(lora.path));
 
   return (
     <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(320px,380px)]">
@@ -308,31 +331,71 @@ export function GenerationWorkspace({ model }: { model: ModelInfo }) {
             </Badge>
           </div>
           {loraError && <p className="text-sm text-danger-text">{loraError}</p>}
-          {loras.length > 0 ? (
-            <div className="grid gap-2">
-              {loras.map((lora) => (
-                <label
-                  key={lora.id}
-                  className="flex cursor-pointer items-center gap-3 rounded-[12px] border border-border bg-background px-3 py-3 transition-colors hover:border-lilac"
-                >
-                  <input
-                    type="checkbox"
-                    checked={selectedLoras.includes(lora.path)}
-                    onChange={() => toggleLora(lora.path)}
-                    className="h-4 w-4 accent-lilac"
-                  />
-                  <Layers className="h-4 w-4 shrink-0 text-lilac" />
-                  <span className="min-w-0 flex-1 truncate text-sm font-medium">
-                    {lora.name}
-                  </span>
-                  <span className="hidden max-w-[180px] truncate font-mono text-xs text-text-muted sm:block">
-                    {lora.path}
-                  </span>
-                </label>
-              ))}
+          {selectedLoras.length > 0 ? (
+            <div className="grid gap-3">
+              {selectedLoras.map((selection) => {
+                const lora = loras.find((item) => item.path === selection.path);
+                return (
+                  <div
+                    key={selection.path}
+                    className="rounded-[12px] border border-border bg-background p-3"
+                  >
+                    <div className="flex items-center gap-3">
+                      <Layers className="h-4 w-4 shrink-0 text-lilac" />
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-sm font-medium">
+                          {lora?.name ?? selection.path}
+                        </p>
+                        <p className="truncate font-mono text-xs text-text-muted">
+                          {selection.path}
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => removeLora(selection.path)}
+                        className="rounded-md p-2 text-text-muted transition-colors hover:bg-surface-hover hover:text-white"
+                        aria-label={`Remove ${lora?.name ?? selection.path}`}
+                      >
+                        <X className="h-4 w-4" />
+                      </button>
+                    </div>
+                    <Slider
+                      className="mt-3"
+                      label="Strength"
+                      min={0.1}
+                      max={2}
+                      step={0.1}
+                      value={selection.strength}
+                      onChange={(value) => setLoraStrength(selection.path, value)}
+                      format={(value) => value.toFixed(1)}
+                    />
+                  </div>
+                );
+              })}
             </div>
           ) : (
-            <p className="text-sm text-text-muted">No installed LoRAs.</p>
+            <p className="text-sm text-text-muted">No LoRAs selected.</p>
+          )}
+          {loras.length > 0 ? (
+            <div className="flex gap-2">
+              <select
+                value={loraToAdd}
+                onChange={(e) => setLoraToAdd(e.target.value)}
+                className="h-12 min-w-0 flex-1 rounded-[12px] border border-border bg-background px-3 text-base text-white focus:border-lilac focus:outline-none"
+              >
+                <option value="">Add installed LoRA...</option>
+                {availableLoras.map((lora) => (
+                  <option key={lora.id} value={lora.path}>
+                    {lora.name}
+                  </option>
+                ))}
+              </select>
+              <Button variant="secondary" onClick={addLora} disabled={!loraToAdd}>
+                <Plus className="h-4 w-4" /> Add
+              </Button>
+            </div>
+          ) : (
+            <p className="text-sm text-text-muted">Install LoRAs from the LoRAs page.</p>
           )}
         </Card>
 
@@ -420,9 +483,6 @@ export function GenerationWorkspace({ model }: { model: ModelInfo }) {
           >
             <Sparkles className="h-4 w-4" /> Generate
           </Button>
-          <Button className="min-w-[150px] flex-1" variant="secondary" onClick={addToQueue}>
-            <ListPlus className="h-4 w-4" /> Add to Queue
-          </Button>
         </div>
       </div>
 
@@ -438,34 +498,38 @@ export function GenerationWorkspace({ model }: { model: ModelInfo }) {
 
           {focused ? (
             <>
-              <div className="relative w-full overflow-hidden rounded-[12px] bg-background">
-                <PreviewTile
-                  hue={focused.hue}
-                  width={focused.width}
-                  height={focused.height}
-                  src={focused.imageDataUrl}
-                  showLock={focused.status !== "running"}
-                />
-                {focused.status === "running" && (
-                  <div className="absolute inset-x-0 bottom-0 p-3">
-                    <div className="h-1.5 overflow-hidden rounded-full bg-black/40">
-                      <div
-                        className="h-full rounded-full bg-lilac transition-all"
-                        style={{ width: `${focused.progress}%` }}
-                      />
-                    </div>
-                    <p className="mt-1 text-center text-xs text-white/80">
-                      Step {Math.round((focused.progress / 100) * focused.steps)} /{" "}
-                      {focused.steps}
-                    </p>
+              {focused.imageDataUrl ? (
+                <div className="relative w-full overflow-hidden rounded-[12px] bg-background">
+                  <PreviewTile
+                    hue={focused.hue}
+                    width={focused.width}
+                    height={focused.height}
+                    src={focused.imageDataUrl}
+                    showLock={false}
+                  />
+                </div>
+              ) : (
+                <div className="grid aspect-square place-items-center rounded-[12px] border border-border bg-background text-text-muted">
+                  <div className="flex flex-col items-center gap-2 text-center">
+                    {focused.status === "running" ? (
+                      <>
+                        <Loader2 className="h-8 w-8 animate-spin text-lilac" />
+                        <p className="text-sm">Generating image…</p>
+                      </>
+                    ) : (
+                      <>
+                        <Trash2 className="h-8 w-8 text-danger-text" />
+                        <p className="text-sm">{focused.error ?? "Generation failed."}</p>
+                      </>
+                    )}
                   </div>
-                )}
-              </div>
+                </div>
+              )}
               <p className="text-xs text-text-muted">
                 {focused.width}×{focused.height} · seed {focused.seed} · {focused.steps}{" "}
                 steps · CFG {focused.cfg}
               </p>
-              {focused.status === "completed" && (
+              {focused.status === "completed" && focused.imageDataUrl && (
                 <div className="grid grid-cols-2 gap-2">
                   <Button size="sm" variant="secondary" onClick={() => setLightbox(focused)}>
                     <Maximize2 className="h-4 w-4" /> Full Size
@@ -480,6 +544,11 @@ export function GenerationWorkspace({ model }: { model: ModelInfo }) {
                     <Trash2 className="h-4 w-4" /> Delete
                   </Button>
                 </div>
+              )}
+              {focused.status === "failed" && (
+                <Button size="sm" variant="ghost" onClick={() => removeJob(focused.id)}>
+                  <Trash2 className="h-4 w-4" /> Delete
+                </Button>
               )}
             </>
           ) : (

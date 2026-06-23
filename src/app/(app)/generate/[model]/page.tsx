@@ -31,9 +31,6 @@ export default async function GeneratePage({
         <div className="flex flex-wrap items-center gap-3">
           <h1 className="text-[28px] font-bold leading-tight">{model.name}</h1>
           <Badge tone="lilac">{model.tagline}</Badge>
-          <Badge tone={model.status === "running" ? "success" : "neutral"}>
-            {model.status === "running" ? "Running" : "Stopped"}
-          </Badge>
         </div>
       </div>
 

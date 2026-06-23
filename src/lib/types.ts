@@ -2,15 +2,12 @@
 
 export type ModelId = "qwen-2512" | "qwen-edit-2511";
 
-export type ModelStatus = "running" | "stopped" | "starting" | "stopping";
-
 export interface ModelInfo {
   id: ModelId;
   name: string;
   tagline: string;
   description: string;
   kind: "generation" | "editing";
-  status: ModelStatus;
   /** GPU memory footprint in GB when loaded. */
   vramGb: number;
 }
@@ -51,24 +48,28 @@ export interface Lora {
   path: string;
 }
 
-export type DownloadKind = "model" | "lora";
-export type DownloadStatus =
-  | "queued"
-  | "downloading"
-  | "completed"
-  | "failed"
-  | "paused";
+export interface LoraSelection {
+  path: string;
+  strength: number;
+}
 
-export interface DownloadItem {
+/** A single downloadable file resolved from a Civitai/HF URL (for the picker). */
+export interface LoraCandidate {
   id: string;
-  name: string;
-  kind: DownloadKind;
+  fileName: string;
+  label: string;
+  downloadUrl: string;
+  sizeBytes?: number;
+  versionName?: string;
+  baseModel?: string;
+  /** Pre-selected in the picker (Civitai "primary" file / single-file repos). */
+  recommended?: boolean;
+}
+
+export interface LoraResolution {
   source: LoraSource;
-  status: DownloadStatus;
-  /** 0–100 */
-  progress: number;
-  sizeBytes: number;
-  startedAt: string;
+  modelName?: string;
+  candidates: LoraCandidate[];
 }
 
 export type JobStatus = "pending" | "running" | "completed" | "failed";
@@ -90,5 +91,5 @@ export interface QueueJob {
   imageDataUrl?: string;
   outputPath?: string;
   error?: string;
-  loras?: string[];
+  loras?: LoraSelection[];
 }

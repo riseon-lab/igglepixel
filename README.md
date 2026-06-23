@@ -43,7 +43,7 @@ Use `--push` instead of `--load` when publishing directly to a registry.
 
 For a RunPod template, publish `citivia-runpod:linux-amd64`, expose HTTP port
 `3000`, mount persistent storage at `/workspace`, and set `HF_TOKEN` if the
-selected Hugging Face model requires access. Pressing **Start** on the Running
+selected Hugging Face model requires access. Pressing **Start** on the Models
 page calls the runner `/load` endpoint; first load downloads model weights into
 `/workspace/models`.
 
@@ -131,9 +131,9 @@ Routes: `GET/POST /api/vault`, `GET/DELETE /api/vault/[id]`, `GET /api/keys/salt
 - **Auth / session** — server-side accounts (scrypt), httpOnly session cookie,
   single active session enforced server-side, gated API routes
   ([src/lib/auth/server.ts](src/lib/auth/server.ts)).
-- **Pages** — Running (live resource meters, start/stop), Models (card select),
+- **Pages** — Models (live resource meters, start/stop, workspace links),
   Assets (upload/filter/delete, aspect-preserving previews), LoRAs (Civitai / HF
-  / upload), Downloads (progress + history), Settings (API keys, git pull,
+  / upload), Downloads (empty state), Settings (API keys, git pull,
   session).
 - **Generation workspace** — shared by both models, with Qwen Edit adding the
   reference-image step above the prompt. Generate calls the configured runner
@@ -142,7 +142,7 @@ Routes: `GET/POST /api/vault`, `GET/DELETE /api/vault/[id]`, `GET /api/keys/salt
 
 ## Mock vs. real
 
-Some dashboard/download sample data still lives in [src/lib/mock.ts](src/lib/mock.ts).
+Some dashboard sample data still lives in [src/lib/mock.ts](src/lib/mock.ts).
 Integration points for the real build:
 
 | Concern | Preview | Real build |
@@ -150,7 +150,7 @@ Integration points for the real build:
 | Auth/session | **server-side accounts (scrypt) + httpOnly session cookie + single active session** ✅ | + rate limiting, password reset |
 | Assets | **encrypted at rest (AES-256-GCM), worker decryption, server stores only ciphertext** ✅ | + auth on the vault API, encrypted filenames |
 | Generation | UI posts to `/api/generate` | Isolated per-model runners (independent Python/CUDA envs) |
-| Downloads | mock list | Civitai / Hugging Face APIs |
+| Downloads | empty state | Civitai / Hugging Face APIs |
 | Storage | `.vault/` locally | `/workspace` via `CITIVIA_DATA_DIR` |
 
 ## Project layout
@@ -159,7 +159,7 @@ Integration points for the real build:
 src/
   app/
     (app)/            # authenticated routes (shared shell)
-      running/ models/ assets/ loras/ downloads/ settings/
+      models/ assets/ loras/ downloads/ settings/
       generate/[model]/
     setup/ login/     # public auth routes
   components/

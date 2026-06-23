@@ -3,10 +3,8 @@
 
 import type {
   Asset,
-  DownloadItem,
   Lora,
   ModelInfo,
-  QueueJob,
   ResolutionPreset,
 } from "./types";
 
@@ -34,7 +32,6 @@ export const MODELS: ModelInfo[] = [
     description:
       "High-fidelity text-to-image generation. Best for original artwork, concepts and renders.",
     kind: "generation",
-    status: "running",
     vramGb: 38,
   },
   {
@@ -44,7 +41,6 @@ export const MODELS: ModelInfo[] = [
     description:
       "Reference-guided editing. Supply an image and a prompt to transform, restyle or extend it.",
     kind: "editing",
-    status: "stopped",
     vramGb: 41,
   },
 ];
@@ -68,30 +64,3 @@ export const LORAS: Lora[] = [
   { id: "ink-watercolour.safetensors", name: "Ink & Watercolour", source: "civitai", baseModel: "Qwen 2512", sizeBytes: 167_000_000, triggerWords: ["ink wash", "watercolour"], installedAt: daysAgo(9), path: "ink-watercolour.safetensors" },
   { id: "architectural-detail.safetensors", name: "Architectural Detail", source: "upload", baseModel: "Qwen Edit 2511", sizeBytes: 240_000_000, triggerWords: ["archviz"], installedAt: daysAgo(12), path: "architectural-detail.safetensors" },
 ];
-
-export const DOWNLOADS: DownloadItem[] = [
-  { id: "d1", name: "Filmic Portrait v4", kind: "lora", source: "civitai", status: "downloading", progress: 64, sizeBytes: 231_000_000, startedAt: minutesAgo(3) },
-  { id: "d2", name: "Qwen Edit 2511 weights", kind: "model", source: "huggingface", status: "downloading", progress: 21, sizeBytes: 17_400_000_000, startedAt: minutesAgo(11) },
-  { id: "d3", name: "Neon Signage LoRA", kind: "lora", source: "civitai", status: "queued", progress: 0, sizeBytes: 184_000_000, startedAt: minutesAgo(1) },
-  { id: "d4", name: "Studio Product Light", kind: "lora", source: "huggingface", status: "completed", progress: 100, sizeBytes: 198_000_000, startedAt: daysAgo(5) },
-  { id: "d5", name: "Anime Lineart", kind: "lora", source: "civitai", status: "failed", progress: 38, sizeBytes: 176_000_000, startedAt: daysAgo(1) },
-];
-
-export const QUEUE: QueueJob[] = [
-  { id: "q1", model: "qwen-2512", prompt: "A serene mountain lake at golden hour, mist rising, ultra detailed", width: 1920, height: 1080, steps: 28, cfg: 4, seed: 84213, status: "running", progress: 52, hue: 32, createdAt: minutesAgo(1) },
-  { id: "q2", model: "qwen-2512", prompt: "Studio portrait of a woman, soft rim light, 85mm", width: 1344, height: 1792, steps: 24, cfg: 4.5, seed: 11902, status: "pending", progress: 0, hue: 280, createdAt: minutesAgo(1) },
-  { id: "q3", model: "qwen-edit-2511", prompt: "Replace background with a sunlit forest", width: 1024, height: 1024, steps: 20, cfg: 4, seed: 55001, status: "pending", progress: 0, hue: 140, createdAt: minutesAgo(2) },
-  { id: "q4", model: "qwen-2512", prompt: "Isometric cyberpunk alleyway, neon, rain", width: 1380, height: 1380, steps: 30, cfg: 5, seed: 77310, status: "completed", progress: 100, hue: 300, createdAt: minutesAgo(9) },
-  { id: "q5", model: "qwen-2512", prompt: "Minimalist product render of a ceramic mug on stone", width: 1024, height: 1024, steps: 22, cfg: 3.5, seed: 20445, status: "completed", progress: 100, hue: 90, createdAt: minutesAgo(14) },
-];
-
-/** GPU/host telemetry shown on the Running page (mock). */
-export const RESOURCE_USAGE = {
-  gpuName: "RTX PRO 6000",
-  vramUsedGb: 38,
-  vramTotalGb: 96,
-  gpuUtil: 71,
-  ramUsedGb: 22,
-  ramTotalGb: 128,
-  temperatureC: 64,
-};

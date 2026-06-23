@@ -44,18 +44,24 @@ export function QueuePanel({
         >
           <button
             onClick={() => onView(job)}
-            className="relative w-16 shrink-0 overflow-hidden rounded-[8px]"
+            className="relative grid w-16 shrink-0 place-items-center overflow-hidden rounded-[8px] bg-surface"
             aria-label="View full size"
           >
-            <PreviewTile
-              hue={job.hue}
-              width={job.width}
-              height={job.height}
-              src={job.imageDataUrl}
-              showLock={false}
-              className="rounded-[8px]"
-            />
-            {job.status === "running" && (
+            {job.imageDataUrl ? (
+              <PreviewTile
+                hue={job.hue}
+                width={job.width}
+                height={job.height}
+                src={job.imageDataUrl}
+                showLock={false}
+                className="rounded-[8px]"
+              />
+            ) : job.status === "running" ? (
+              <Loader2 className="h-5 w-5 animate-spin text-lilac" />
+            ) : (
+              <span className="h-2 w-2 rounded-full bg-text-muted" />
+            )}
+            {job.status === "running" && job.imageDataUrl && (
               <span className="absolute inset-0 grid place-items-center bg-black/40">
                 <Loader2 className="h-5 w-5 animate-spin text-white" />
               </span>

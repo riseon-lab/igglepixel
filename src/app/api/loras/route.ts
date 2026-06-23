@@ -23,11 +23,30 @@ export async function POST(req: NextRequest) {
       return Response.json(await saveUploadedLora(file), { status: 201 });
     }
 
-    const body = (await req.json().catch(() => null)) as { url?: unknown } | null;
-    if (!body || typeof body.url !== "string" || !body.url.trim()) {
-      return Response.json({ error: "LoRA URL is required." }, { status: 400 });
+    const body = (await req.json().catch(() => null)) as {
+      url?: unknown;
+      urls?: unknown;
+    } | null;
+
+    // Preferred path: install one or more chosen files (from the picker).
+    if (body && Array.isArray(body.urls)) {
+      const urls = body.urls.filter(
+        (u): u is string => typeof u === "string" && !!u.trim(),
+      );
+      if (!urls.length) {
+        return Response.json({ error: "No files selected." }, { status: 400 });
+      }
+      const installed = [];
+      for (const u of urls) installed.push(await downloadLora(u.trim()));
+      return Response.json(installed, { status: 201 });
     }
-    return Response.json(await downloadLora(body.url.trim()), { status: 201 });
+
+    // Backward-compatible single URL.
+    if (body && typeof body.url === "string" && body.url.trim()) {
+      return Response.json([await downloadLora(body.url.trim())], { status: 201 });
+    }
+
+    return Response.json({ error: "LoRA URL is required." }, { status: 400 });
   } catch (err) {
     return Response.json(
       { error: err instanceof Error ? err.message : "LoRA install failed." },

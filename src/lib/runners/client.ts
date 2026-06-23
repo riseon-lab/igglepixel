@@ -1,4 +1,4 @@
-import type { ModelId } from "@/lib/types";
+import type { LoraSelection, ModelId } from "@/lib/types";
 
 const DEFAULT_URLS: Record<ModelId, string> = {
   "qwen-2512": "http://127.0.0.1:8011",
@@ -20,7 +20,7 @@ export interface RunnerGenerateBody {
   cfg: number;
   seed: number;
   imageBase64?: string;
-  loras?: string[];
+  loras?: LoraSelection[];
 }
 
 export interface RunnerGenerateResult {
@@ -30,6 +30,17 @@ export interface RunnerGenerateResult {
   height: number;
   seed: number;
   image_base64: string;
+}
+
+export interface RunnerGenerationProgress {
+  active: boolean;
+  step: number;
+  steps: number;
+  progress: number;
+  seed?: number | null;
+  preview_mime?: string;
+  preview_base64?: string | null;
+  error?: string | null;
 }
 
 /** Shape returned by the Python runner's GET /health. */
@@ -45,6 +56,8 @@ export interface RunnerHealth {
   device?: string | null;
   vram_used_gb?: number | null;
   vram_total_gb?: number | null;
+  logs?: string[];
+  generation?: RunnerGenerationProgress;
 }
 
 export function runnerUrl(model: ModelId): string {
