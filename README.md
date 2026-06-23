@@ -3,10 +3,9 @@
 A self-hosted AI image generation platform (Qwen 2512 + Qwen Edit 2511), designed
 for RunPod deployment. Built from [plan.md](plan.md).
 
-> **Current status: runner-ready build.** The Next.js UI stays light and calls
-> separate HTTP inference runners. Run the Docker Compose stack below on a GPU pod
-> to generate with the Qwen runners; without those runners, the UI still loads but
-> generation requests return a runner connection error.
+> **Current status: single-container RunPod build.** The container starts the
+> Next.js UI plus two local HTTP inference runner processes for Qwen 2512 and
+> Qwen Edit 2511.
 
 ## Running locally
 
@@ -25,17 +24,28 @@ npm run lint
 npm run test:crypto          # AES-256-GCM unit tests (node --test, no extra deps)
 ```
 
-## Docker
+## Docker / RunPod
 
-The UI-only image listens on port 3000 and stores data under `/workspace`.
+RunPod templates pull one image, so the root `Dockerfile` bundles the UI and both
+model runners into one container:
+
+- Next UI: port `3000`.
+- Qwen 2512 runner: port `8011`, model `Qwen/Qwen-Image`.
+- Qwen Edit 2511 runner: port `8012`, model `Qwen/Qwen-Image-Edit`.
 
 ```bash
-docker buildx build --platform linux/amd64 -t citivia-studio:linux-amd64 --load .
-docker run --rm -p 3000:3000 -v citivia-workspace:/workspace citivia-studio:linux-amd64
+docker buildx build --platform linux/amd64 -t citivia-runpod:linux-amd64 --load .
+docker run --rm --gpus all -p 3000:3000 -v citivia-workspace:/workspace citivia-runpod:linux-amd64
 ```
 
 On Apple Silicon, the `--platform linux/amd64` target is required for RunPod.
 Use `--push` instead of `--load` when publishing directly to a registry.
+
+For a RunPod template, publish `citivia-runpod:linux-amd64`, expose HTTP port
+`3000`, mount persistent storage at `/workspace`, and set `HF_TOKEN` if the
+selected Hugging Face model requires access. Pressing **Start** on the Running
+page calls the runner `/load` endpoint; first load downloads model weights into
+`/workspace/models`.
 
 On startup the container pulls the latest UI from
 `https://github.com/riseon-lab/igglepixel.git` into `/workspace/igglepixel`,
@@ -44,62 +54,16 @@ baked image only. If you terminate TLS before the app, set
 `CITIVIA_SECURE_COOKIES=1`; plain port-3000 deployments leave it unset so login
 works over HTTP.
 
-## RunPod single-container template
-
-RunPod templates normally pull one image, so the production template image bundles
-the UI and both inference runners into one container while keeping them as
-separate local processes:
-
-- Next UI: port `3000`.
-- Qwen 2512 runner: port `8011`, model `Qwen/Qwen-Image`.
-- Qwen Edit 2511 runner: port `8012`, model `Qwen/Qwen-Image-Edit`.
-
-Build and run the single RunPod image:
-
-```bash
-docker buildx build --platform linux/amd64 -f Dockerfile.runpod -t citivia-runpod:linux-amd64 --load .
-docker run --rm --gpus all -p 3000:3000 -v citivia-workspace:/workspace citivia-runpod:linux-amd64
-```
-
-For a RunPod template, publish `citivia-runpod:linux-amd64`, expose HTTP port
-`3000`, mount persistent storage at `/workspace`, and set `HF_TOKEN` if the
-selected Hugging Face model requires access. First load/generation downloads
-model weights into `/workspace/models`; generated images go to
-`/workspace/outputs`; LoRAs live in `/workspace/loras`.
-
 Override defaults with:
 
 - `QWEN_2512_MODEL_ID` and `QWEN_EDIT_2511_MODEL_ID`.
 - `HF_TOKEN` or `HUGGINGFACE_TOKEN`.
 - `CITIVIA_AUTO_PULL=0` to skip startup git pull and run the baked UI only.
 - `RUNNER_CPU_OFFLOAD=0` to disable Diffusers CPU offload.
+- `RUNNER_SAVE_OUTPUTS=1` to also write generated PNGs to `/workspace/outputs`;
+  off by default so generated images are not stored plaintext.
 - `RUNNER_ACCESS_LOG=1` to show runner HTTP access logs; health `GET` logs are
   silent by default.
-
-### Optional multi-container runners
-
-If you are on a host that supports Docker Compose or multiple containers, you can
-keep the UI and runners in separate images:
-
-```bash
-docker buildx build --platform linux/amd64 -f runners/qwen-2512/Dockerfile -t qwen-2512-runner:linux-amd64 --load .
-docker buildx build --platform linux/amd64 -f runners/qwen-edit-2511/Dockerfile -t qwen-edit-2511-runner:linux-amd64 --load .
-docker buildx build --platform linux/amd64 -t citivia-studio:linux-amd64 --load .
-```
-
-```bash
-docker compose -f docker-compose.runners.yml up --build
-```
-
-Runner services expose `GET /health`, `POST /load`, `POST /unload`, and
-`POST /generate`. All services share `/workspace` for model cache, generated
-outputs, and LoRAs:
-
-- Qwen 2512 runner: `RUNNER_MODE=txt2img`, default `MODEL_ID=Qwen/Qwen-Image`.
-- Qwen Edit 2511 runner: `RUNNER_MODE=edit`, default `MODEL_ID=Qwen/Qwen-Image-Edit`.
-- Override model IDs with `MODEL_ID`, pass private/gated model access with
-  `HF_TOKEN` or `HUGGINGFACE_TOKEN`, and keep LoRAs in `/workspace/loras`.
-- UI runner URLs are `QWEN_2512_RUNNER_URL` and `QWEN_EDIT_2511_RUNNER_URL`.
 
 ## Encryption layer
 
@@ -131,6 +95,9 @@ The Assets flow is wired through the encryption layer end-to-end:
 - **Preview / download** — the ciphertext is fetched and decrypted in the Worker
   into an in-memory object URL (revoked on unmount); nothing decrypted is written
   to disk.
+- **Generated images** — runner responses are returned to the browser for preview
+  and download. They are not written to `/workspace/outputs` unless
+  `RUNNER_SAVE_OUTPUTS=1`; use Assets for encrypted persistent storage.
 - **Key** — [src/lib/crypto/provider.tsx](src/lib/crypto/provider.tsx) derives the
   AES key from the account password + a server-stored PBKDF2 salt
   (`GET /api/keys/salt`), so any device with the password can decrypt.

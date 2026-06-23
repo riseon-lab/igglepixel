@@ -7,7 +7,7 @@ export QWEN_EDIT_2511_RUNNER_URL="${QWEN_EDIT_2511_RUNNER_URL:-http://127.0.0.1:
 export HF_HOME="${HF_HOME:-/workspace/.cache/huggingface}"
 export RUNNER_CPU_OFFLOAD="${RUNNER_CPU_OFFLOAD:-1}"
 
-mkdir -p "$CITIVIA_DATA_DIR/models" "$CITIVIA_DATA_DIR/outputs" "$CITIVIA_DATA_DIR/loras"
+mkdir -p "$CITIVIA_DATA_DIR/models" "$CITIVIA_DATA_DIR/loras"
 
 RUNNER_MODE=txt2img \
 MODEL_ID="${QWEN_2512_MODEL_ID:-Qwen/Qwen-Image}" \

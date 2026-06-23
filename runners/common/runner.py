@@ -5,6 +5,7 @@ import gc
 import json
 import os
 import re
+import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from io import BytesIO
@@ -12,6 +13,11 @@ from pathlib import Path
 
 PIPE = None
 LOADED_LORAS = ()
+# Loading happens on a background thread so POST /load returns immediately and the
+# UI can poll /health for progress instead of holding a multi-minute request open.
+LOADING = False
+LOAD_ERROR = None
+_LOAD_LOCK = threading.Lock()
 
 MODE = os.getenv("RUNNER_MODE", "txt2img")
 MODEL_ID = os.getenv("MODEL_ID", "Qwen/Qwen-Image")
@@ -20,6 +26,7 @@ WORKSPACE = Path(os.getenv("CITIVIA_DATA_DIR", "/workspace"))
 OUTPUT_DIR = Path(os.getenv("OUTPUT_DIR", WORKSPACE / "outputs" / MODE))
 MODEL_CACHE_DIR = Path(os.getenv("MODEL_CACHE_DIR", WORKSPACE / "models"))
 LORA_DIR = Path(os.getenv("LORA_DIR", WORKSPACE / "loras"))
+SAVE_OUTPUTS = os.getenv("RUNNER_SAVE_OUTPUTS") == "1"
 
 
 def json_response(handler, status, body):
@@ -60,38 +67,67 @@ def load_pipe():
   if PIPE is not None:
     return PIPE
 
-  import torch
+  # Serialise loads so a background /load and an on-demand /generate can't both
+  # build the pipeline at once.
+  with _LOAD_LOCK:
+    if PIPE is not None:
+      return PIPE
 
-  dtype = torch.bfloat16 if torch.cuda.is_available() else torch.float32
-  if MODE == "edit":
-    try:
-      from diffusers import QwenImageEditPipeline
-      cls = QwenImageEditPipeline
-    except ImportError:
+    import torch
+
+    dtype = torch.bfloat16 if torch.cuda.is_available() else torch.float32
+    if MODE == "edit":
+      try:
+        from diffusers import QwenImageEditPipeline
+        cls = QwenImageEditPipeline
+      except ImportError:
+        from diffusers import DiffusionPipeline
+        cls = DiffusionPipeline
+    else:
       from diffusers import DiffusionPipeline
       cls = DiffusionPipeline
-  else:
-    from diffusers import DiffusionPipeline
-    cls = DiffusionPipeline
 
-  kwargs = {"torch_dtype": dtype, "cache_dir": str(MODEL_CACHE_DIR)}
-  token = os.getenv("HF_TOKEN") or os.getenv("HUGGINGFACE_TOKEN")
-  if token:
-    kwargs["token"] = token
+    kwargs = {"torch_dtype": dtype, "cache_dir": str(MODEL_CACHE_DIR)}
+    token = os.getenv("HF_TOKEN") or os.getenv("HUGGINGFACE_TOKEN")
+    if token:
+      kwargs["token"] = token
 
-  PIPE = cls.from_pretrained(MODEL_ID, **kwargs)
-  if os.getenv("RUNNER_CPU_OFFLOAD") == "1" and hasattr(PIPE, "enable_model_cpu_offload"):
-    PIPE.enable_model_cpu_offload()
-  else:
-    PIPE.to("cuda" if torch.cuda.is_available() else "cpu")
-  PIPE.set_progress_bar_config(disable=True)
+    pipe = cls.from_pretrained(MODEL_ID, **kwargs)
+    if os.getenv("RUNNER_CPU_OFFLOAD") == "1" and hasattr(pipe, "enable_model_cpu_offload"):
+      pipe.enable_model_cpu_offload()
+    else:
+      pipe.to("cuda" if torch.cuda.is_available() else "cpu")
+    pipe.set_progress_bar_config(disable=True)
+    PIPE = pipe
   return PIPE
 
 
+def _background_load():
+  global LOADING, LOAD_ERROR
+  LOADING = True
+  LOAD_ERROR = None
+  try:
+    load_pipe()
+  except Exception as exc:  # surfaced via /health so the UI can show it
+    LOAD_ERROR = str(exc)
+  finally:
+    LOADING = False
+
+
+def start_load():
+  """Kick off a non-blocking load; returns the current state immediately."""
+  if PIPE is not None:
+    return {"ok": True, "loaded": True, "loading": False}
+  if not LOADING:
+    threading.Thread(target=_background_load, daemon=True).start()
+  return {"ok": True, "loaded": False, "loading": True, "load_error": LOAD_ERROR}
+
+
 def unload_pipe():
-  global PIPE, LOADED_LORAS
+  global PIPE, LOADED_LORAS, LOAD_ERROR
   PIPE = None
   LOADED_LORAS = ()
+  LOAD_ERROR = None
   gc.collect()
   try:
     import torch
@@ -160,13 +196,15 @@ def generate(payload):
   with torch.inference_mode():
     image = pipe(**args).images[0]
 
-  OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-  out = OUTPUT_DIR / f"{int(time.time())}-{seed}.png"
-  image.save(out)
   buf = BytesIO()
   image.save(buf, format="PNG")
+  out = None
+  if SAVE_OUTPUTS:
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    out = OUTPUT_DIR / f"{int(time.time())}-{seed}.png"
+    image.save(out)
   return {
-    "path": str(out),
+    "path": str(out) if out else None,
     "mime": "image/png",
     "width": image.width,
     "height": image.height,
@@ -179,11 +217,26 @@ class Handler(BaseHTTPRequestHandler):
   def do_GET(self):
     if self.path != "/health":
       return json_response(self, 404, {"error": "not found"})
-    body = {"ok": True, "mode": MODE, "model": MODEL_ID, "loaded": PIPE is not None}
+    body = {
+      "ok": True,
+      "mode": MODE,
+      "model": MODEL_ID,
+      "loaded": PIPE is not None,
+      "loading": LOADING,
+      "load_error": LOAD_ERROR,
+    }
     try:
       import torch
       body["torch"] = torch.__version__
       body["cuda"] = torch.cuda.is_available()
+      if torch.cuda.is_available():
+        try:
+          free, total = torch.cuda.mem_get_info()
+          body["device"] = torch.cuda.get_device_name(0)
+          body["vram_total_gb"] = round(total / 1e9, 1)
+          body["vram_used_gb"] = round((total - free) / 1e9, 1)
+        except Exception:
+          pass
     except Exception:
       body["cuda"] = False
     json_response(self, 200, body)
@@ -191,11 +244,11 @@ class Handler(BaseHTTPRequestHandler):
   def do_POST(self):
     try:
       if self.path == "/load":
-        load_pipe()
-        return json_response(self, 200, {"ok": True})
+        # Non-blocking: returns immediately, loads on a background thread.
+        return json_response(self, 202, start_load())
       if self.path == "/unload":
         unload_pipe()
-        return json_response(self, 200, {"ok": True})
+        return json_response(self, 200, {"ok": True, "loaded": False, "loading": False})
       if self.path == "/generate":
         return json_response(self, 200, generate(decode_json(self)))
       json_response(self, 404, {"error": "not found"})
@@ -228,7 +281,8 @@ def main():
   if args.self_test:
     self_test()
     return
-  OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+  if SAVE_OUTPUTS:
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
   print(f"runner {MODE} {MODEL_ID} on :{PORT}", flush=True)
   ThreadingHTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
 

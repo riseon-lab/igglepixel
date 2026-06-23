@@ -23,6 +23,9 @@
 
   /* Status */
   --color-danger: #b3261e;
+  /* Legible danger red for text/icons on the dark surface (the base danger is
+     tuned for button/badge backgrounds and is too dark for small text). */
+  --color-danger-text: #ff8a80;
   --color-success: #3fae7a;
   --color-warning: #d9a441;
 
@@ -93,6 +96,22 @@ button {
 
 .animate-fade-in {
   animation: fade-in 0.25s ease-out;
+}
+
+/* Toast entrance — gentle slide + fade, respects the "subtle animations" rule */
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(-8px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.animate-toast-in {
+  animation: toast-in 0.2s ease-out;
 }
 
 /* Custom range input (sliders) — lilac per design language */

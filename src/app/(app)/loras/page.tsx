@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { Input } from "@/components/ui/Field";
 import { PageHeader } from "@/components/ui/PageHeader";
+import { useToast } from "@/components/ui/Toast";
 import { formatBytes, timeAgo } from "@/lib/format";
 import type { Lora, LoraSource } from "@/lib/types";
 
@@ -17,6 +18,7 @@ const SOURCE_LABEL: Record<LoraSource, string> = {
 };
 
 export default function LorasPage() {
+  const toast = useToast();
   const fileInput = useRef<HTMLInputElement>(null);
   const [loras, setLoras] = useState<Lora[]>([]);
   const [url, setUrl] = useState("");
@@ -54,8 +56,11 @@ export default function LorasPage() {
       if (!res.ok) throw new Error((await res.json()).error ?? "LoRA install failed.");
       setUrl("");
       await refresh();
+      toast.success("LoRA installed", "Saved to the shared runner LoRA folder.");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "LoRA install failed.");
+      const msg = err instanceof Error ? err.message : "LoRA install failed.";
+      setError(msg);
+      toast.error("LoRA install failed", msg);
     } finally {
       setBusy(false);
     }
@@ -71,8 +76,11 @@ export default function LorasPage() {
       const res = await fetch("/api/loras", { method: "POST", body });
       if (!res.ok) throw new Error((await res.json()).error ?? "LoRA upload failed.");
       await refresh();
+      toast.success("LoRA uploaded", file.name);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "LoRA upload failed.");
+      const msg = err instanceof Error ? err.message : "LoRA upload failed.";
+      setError(msg);
+      toast.error("LoRA upload failed", msg);
     } finally {
       setBusy(false);
       if (fileInput.current) fileInput.current.value = "";
@@ -86,9 +94,11 @@ export default function LorasPage() {
     });
     if (!res.ok) {
       setError("Could not delete LoRA.");
+      toast.error("Could not delete LoRA", "Please try again.");
       return;
     }
     setLoras((prev) => prev.filter((l) => l.id !== id));
+    toast.success("LoRA deleted");
   }
 
   return (

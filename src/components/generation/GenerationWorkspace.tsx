@@ -20,6 +20,7 @@ import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { Textarea } from "@/components/ui/Field";
 import { Slider } from "@/components/ui/Slider";
+import { useToast } from "@/components/ui/Toast";
 import { DEFAULT_NEGATIVE_PROMPT, QUEUE, RESOLUTION_PRESETS } from "@/lib/mock";
 import type { Lora, ModelInfo, QueueJob, ResolutionPreset } from "@/lib/types";
 import { ResolutionPicker } from "./ResolutionPicker";
@@ -47,6 +48,7 @@ function svgForJob(job: QueueJob): string {
 
 export function GenerationWorkspace({ model }: { model: ModelInfo }) {
   const isEdit = model.kind === "editing";
+  const toast = useToast();
 
   // ---- Controls ----
   const [prompt, setPrompt] = useState("");
@@ -144,19 +146,26 @@ export function GenerationWorkspace({ model }: { model: ModelInfo }) {
         status: "completed",
         progress: 100,
         imageDataUrl: `data:${result.mime};base64,${result.image_base64}`,
-        outputPath: result.path,
+        outputPath: result.path ?? undefined,
       };
       setJobs((prev) => prev.map((j) => (j.id === job.id ? done : j)));
       setFocused(done);
     } catch (err) {
+      const message = err instanceof Error ? err.message : "Runner failed.";
       const failed: QueueJob = {
         ...job,
         status: "failed",
         progress: 0,
-        error: err instanceof Error ? err.message : "Runner failed.",
+        error: message,
       };
       setJobs((prev) => prev.map((j) => (j.id === job.id ? failed : j)));
       setFocused(failed);
+      toast.error(
+        `${model.name} generation failed`,
+        /unreachable|fetch failed|ECONNREFUSED|502/.test(message)
+          ? "The model runner isn't reachable. Start it on the Running page."
+          : message,
+      );
     } finally {
       setBusyId(null);
     }

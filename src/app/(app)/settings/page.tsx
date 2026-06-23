@@ -8,6 +8,7 @@ import { Card } from "@/components/ui/Card";
 import { Input, Label } from "@/components/ui/Field";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { Toggle } from "@/components/ui/Toggle";
+import { useToast } from "@/components/ui/Toast";
 import { useSession } from "@/lib/session";
 
 function ApiKeyField({
@@ -78,6 +79,7 @@ function ApiKeyField({
 
 export default function SettingsPage() {
   const { username, logout } = useSession();
+  const toast = useToast();
   const [pulling, setPulling] = useState(false);
   const [pulled, setPulled] = useState(false);
   const [singleSession, setSingleSession] = useState(true);
@@ -93,12 +95,19 @@ export default function SettingsPage() {
   }, []);
 
   async function saveKey(id: "civitai" | "huggingface", value: string) {
-    const res = await fetch("/api/settings/keys", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ [id]: value }),
-    });
-    if (res.ok) setKeys(await res.json());
+    const label = id === "civitai" ? "Civitai" : "Hugging Face";
+    try {
+      const res = await fetch("/api/settings/keys", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ [id]: value }),
+      });
+      if (!res.ok) throw new Error();
+      setKeys(await res.json());
+      toast.success(`${label} API key saved`);
+    } catch {
+      toast.error(`Could not save ${label} API key`, "Please try again.");
+    }
   }
 
   function pull() {

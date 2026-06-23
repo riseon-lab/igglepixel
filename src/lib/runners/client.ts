@@ -24,7 +24,7 @@ export interface RunnerGenerateBody {
 }
 
 export interface RunnerGenerateResult {
-  path: string;
+  path?: string | null;
   mime: string;
   width: number;
   height: number;
@@ -32,13 +32,48 @@ export interface RunnerGenerateResult {
   image_base64: string;
 }
 
+/** Shape returned by the Python runner's GET /health. */
+export interface RunnerHealth {
+  ok: boolean;
+  mode?: string;
+  model?: string;
+  loaded: boolean;
+  loading?: boolean;
+  load_error?: string | null;
+  torch?: string;
+  cuda?: boolean;
+  device?: string | null;
+  vram_used_gb?: number | null;
+  vram_total_gb?: number | null;
+}
+
 export function runnerUrl(model: ModelId): string {
   return ENV_URLS[model] || DEFAULT_URLS[model];
 }
 
-export async function runnerHealth(model: ModelId): Promise<unknown> {
+export async function runnerHealth(model: ModelId): Promise<RunnerHealth> {
   const res = await fetch(`${runnerUrl(model)}/health`, { cache: "no-store" });
   if (!res.ok) throw new Error(`Runner health failed (${res.status}).`);
+  return res.json();
+}
+
+/** Start loading the model (non-blocking on the runner — poll health for progress). */
+export async function runnerLoad(model: ModelId): Promise<RunnerHealth> {
+  const res = await fetch(`${runnerUrl(model)}/load`, { method: "POST" });
+  if (!res.ok) {
+    const msg = await res.text().catch(() => "");
+    throw new Error(msg || `Runner load failed (${res.status}).`);
+  }
+  return res.json();
+}
+
+/** Unload the model and free its VRAM. */
+export async function runnerUnload(model: ModelId): Promise<RunnerHealth> {
+  const res = await fetch(`${runnerUrl(model)}/unload`, { method: "POST" });
+  if (!res.ok) {
+    const msg = await res.text().catch(() => "");
+    throw new Error(msg || `Runner unload failed (${res.status}).`);
+  }
   return res.json();
 }
 

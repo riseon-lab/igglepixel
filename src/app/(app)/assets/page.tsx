@@ -2,12 +2,13 @@
 
 import { clsx } from "clsx";
 import { Download, Loader2, Lock, Trash2, Upload } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { EncryptedImage } from "@/components/assets/EncryptedImage";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { PageHeader } from "@/components/ui/PageHeader";
+import { useToast } from "@/components/ui/Toast";
 import { useEncryption } from "@/lib/crypto/provider";
 import { formatBytes, timeAgo } from "@/lib/format";
 import {
@@ -45,23 +46,13 @@ async function imageDimensions(file: File): Promise<{ w: number; h: number }> {
 
 export default function AssetsPage() {
   const { client, ready, error } = useEncryption();
+  const toast = useToast();
   const [assets, setAssets] = useState<AssetMeta[]>([]);
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
   const [filter, setFilter] = useState<AssetKind | "all">("all");
   const [nowMs, setNowMs] = useState(0); // captured on load — avoids Date.now() during render
   const fileInput = useRef<HTMLInputElement>(null);
-
-  // Manual resync (used by event handlers, where synchronous setState is fine).
-  const refresh = useCallback(async () => {
-    setLoading(true);
-    try {
-      setAssets(await listAssets());
-      setNowMs(Date.now());
-    } finally {
-      setLoading(false);
-    }
-  }, []);
 
   // Initial load once the encryption key is ready. setState happens only after
   // the await, so it never triggers a synchronous cascade.
@@ -85,6 +76,7 @@ export default function AssetsPage() {
   async function onFiles(files: FileList | null) {
     if (!files?.length || !client) return;
     setUploading(true);
+    let ok = 0;
     try {
       for (const file of Array.from(files)) {
         const { w, h } = await imageDimensions(file);
@@ -100,9 +92,17 @@ export default function AssetsPage() {
           size: plain.length,
         });
         setAssets((prev) => [meta, ...prev]);
+        ok++;
       }
+      toast.success(
+        ok === 1 ? "Image encrypted & uploaded" : `${ok} images uploaded`,
+        "Encrypted in your browser before upload.",
+      );
     } catch (e) {
-      console.error("Upload failed", e);
+      toast.error(
+        "Upload failed",
+        e instanceof Error ? e.message : "Could not encrypt or upload the file.",
+      );
     } finally {
       setUploading(false);
       if (fileInput.current) fileInput.current.value = "";
@@ -110,24 +110,34 @@ export default function AssetsPage() {
   }
 
   async function remove(id: string) {
+    const previous = assets;
     setAssets((prev) => prev.filter((a) => a.id !== id));
     try {
       await deleteAsset(id);
+      toast.success("Asset deleted");
     } catch {
-      refresh(); // resync if the delete didn't take
+      setAssets(previous); // restore on failure
+      toast.error("Could not delete asset", "Please try again.");
     }
   }
 
   async function download(a: AssetMeta) {
     if (!client) return;
-    const ciphertext = await fetchCiphertext(a.id);
-    const plain = await client.decrypt(ciphertext);
-    const url = URL.createObjectURL(new Blob([plain as BlobPart], { type: a.mime }));
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = a.name;
-    link.click();
-    URL.revokeObjectURL(url);
+    try {
+      const ciphertext = await fetchCiphertext(a.id);
+      const plain = await client.decrypt(ciphertext);
+      const url = URL.createObjectURL(new Blob([plain as BlobPart], { type: a.mime }));
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = a.name;
+      link.click();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      toast.error(
+        "Download failed",
+        e instanceof Error ? e.message : "Could not fetch or decrypt the asset.",
+      );
+    }
   }
 
   return (
@@ -184,7 +194,7 @@ export default function AssetsPage() {
       </div>
 
       {error ? (
-        <Card className="py-16 text-center text-[#ff8a80]">
+        <Card className="py-16 text-center text-danger">
           Could not initialise encryption: {error}
         </Card>
       ) : !ready || loading ? (
