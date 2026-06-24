@@ -35,4 +35,5 @@ else
   echo "[bootstrap] WARNING: git pull failed; running last-synced code $(git rev-parse --short HEAD)" >&2
 fi
 
+chmod +x "$REPO_DIR"/scripts/*.sh 2>/dev/null || true
 exec sh "$REPO_DIR/scripts/runpod-start.sh"
