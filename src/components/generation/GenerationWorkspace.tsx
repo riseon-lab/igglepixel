@@ -24,6 +24,8 @@ import { Card } from "@/components/ui/Card";
 import { Textarea } from "@/components/ui/Field";
 import { Slider } from "@/components/ui/Slider";
 import { useToast } from "@/components/ui/Toast";
+import { useEncryption } from "@/lib/crypto/provider";
+import { uploadAsset } from "@/lib/vault/client";
 import { DEFAULT_NEGATIVE_PROMPT, RESOLUTION_PRESETS } from "@/lib/models";
 import type { RunnerHealth } from "@/lib/runners/client";
 import type {
@@ -47,9 +49,17 @@ function isLoraEnabled(lora: LoraSelection) {
   return lora.enabled !== false;
 }
 
+function base64ToBytes(b64: string): Uint8Array {
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return bytes;
+}
+
 export function GenerationWorkspace({ model }: { model: ModelInfo }) {
   const isEdit = model.kind === "editing";
   const toast = useToast();
+  const { client: cryptoClient } = useEncryption();
 
   // ---- Controls ----
   const [prompt, setPrompt] = useState("");
@@ -241,6 +251,29 @@ export function GenerationWorkspace({ model }: { model: ModelInfo }) {
         imageDataUrl: `data:${result.mime};base64,${result.image_base64}`,
         outputPath: result.path ?? undefined,
       });
+
+      // Persist the result to the encrypted vault so it appears in Assets.
+      // Best-effort: a save failure must not turn a good generation into an error.
+      if (cryptoClient) {
+        try {
+          const bytes = base64ToBytes(result.image_base64);
+          const ciphertext = await cryptoClient.encrypt(bytes);
+          await uploadAsset(ciphertext, {
+            name: `${model.id}-${result.seed}.png`,
+            kind: "generated",
+            mime: result.mime || "image/png",
+            width: result.width,
+            height: result.height,
+            size: bytes.length,
+          });
+          toast.success("Saved to Assets", "Encrypted in your browser.");
+        } catch {
+          toast.error(
+            "Couldn't save to Assets",
+            "The image generated but wasn't stored — download it to keep it.",
+          );
+        }
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : "Runner failed.";
       const failed: QueueJob = {
@@ -265,6 +298,7 @@ export function GenerationWorkspace({ model }: { model: ModelInfo }) {
   function removeJob(id: string) {
     setJobs((prev) => prev.filter((j) => j.id !== id));
     setFocused((f) => (f && f.id === id ? null : f));
+    toast.success("Removed from queue");
   }
 
   function reuseSettings(job: QueueJob) {
@@ -704,23 +738,23 @@ export function GenerationWorkspace({ model }: { model: ModelInfo }) {
           className="fixed inset-0 z-50 grid place-items-center bg-black/85 p-4 backdrop-blur-sm animate-fade-in"
           onClick={() => setLightbox(null)}
         >
-          <div className="relative" onClick={(e) => e.stopPropagation()}>
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              src={lightbox.imageDataUrl}
-              alt=""
-              width={lightbox.width}
-              height={lightbox.height}
-              className="block max-h-[90dvh] max-w-[92vw] w-auto h-auto rounded-[12px] object-contain"
-            />
-            <button
-              onClick={() => setLightbox(null)}
-              className="absolute right-3 top-3 grid h-9 w-9 place-items-center rounded-full bg-black/60 text-white hover:bg-black/80"
-              aria-label="Close"
-            >
-              <X className="h-5 w-5" />
-            </button>
-          </div>
+          {/* Close sits at the screen corner, clear of the image itself. */}
+          <button
+            onClick={() => setLightbox(null)}
+            className="fixed right-4 top-4 z-10 grid h-10 w-10 place-items-center rounded-full bg-white/10 text-white hover:bg-white/20"
+            aria-label="Close"
+          >
+            <X className="h-5 w-5" />
+          </button>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={lightbox.imageDataUrl}
+            alt=""
+            width={lightbox.width}
+            height={lightbox.height}
+            onClick={(e) => e.stopPropagation()}
+            className="block max-h-[90dvh] max-w-[92vw] w-auto h-auto rounded-[12px] object-contain"
+          />
         </div>
       )}
     </div>

@@ -20,6 +20,12 @@ LOAD_ERROR = None
 _LOAD_LOCK = threading.Lock()
 _LOG_LOCK = threading.Lock()
 _GEN_LOCK = threading.Lock()
+# Single-flight: one generation owns the GPU at a time. The diffusers pipeline and
+# the CUDA context are NOT reentrant, so concurrent /generate calls would corrupt
+# each other's tensors (illegal-memory-access crashes, doubled VRAM, garbage out).
+# /unload and /delete-weights also take this so they can't free the pipe or its
+# weights out from under an in-flight generation.
+_INFERENCE_LOCK = threading.Lock()
 LOGS = []
 GENERATION = {
   "active": False,
@@ -98,12 +104,29 @@ def latent_preview_base64(pipe, latents, height, width):
 
     # Qwen-Image hands the callback PACKED latents ([B, seq, c]); unpack them to a
     # spatial [B, C, h, w] grid so the preview has the right aspect ratio.
-    if tensor.ndim == 3 and hasattr(pipe, "_unpack_latents"):
-      try:
-        vsf = getattr(pipe, "vae_scale_factor", 8) or 8
-        tensor = pipe._unpack_latents(tensor, height, width, vsf)
-      except Exception:
-        pass
+    if tensor.ndim == 3:
+      unpacked = False
+      if hasattr(pipe, "_unpack_latents"):
+        try:
+          vsf = getattr(pipe, "vae_scale_factor", 8) or 8
+          tensor = pipe._unpack_latents(tensor, height, width, vsf)
+          unpacked = tensor.ndim >= 4
+        except Exception:
+          unpacked = False
+      if not unpacked and tensor.ndim == 3:
+        # Best-effort: factor the packed sequence into a grid matching the
+        # requested aspect so the preview is at least correctly oriented.
+        try:
+          import math
+
+          batch, seq, channels = tensor.shape
+          aspect = (width / height) if height else 1.0
+          rows = max(1, int(round(math.sqrt(seq / max(aspect, 1e-6)))))
+          while rows > 1 and seq % rows:
+            rows -= 1
+          tensor = tensor.reshape(batch, rows, seq // rows, channels).permute(0, 3, 1, 2)
+        except Exception:
+          pass
 
     while tensor.ndim > 4:
       tensor = tensor[0]
@@ -217,14 +240,19 @@ def load_pipe():
     device = "cuda" if torch.cuda.is_available() else "cpu"
     log_event(f"selected {device} with dtype {dtype}")
     if MODE == "edit":
-      try:
-        log_event("importing Qwen image edit pipeline")
-        from diffusers import QwenImageEditPipeline
-        cls = QwenImageEditPipeline
-      except ImportError:
+      # Qwen-Image-Edit-2511 needs the *Plus* pipeline; the older
+      # QwenImageEditPipeline produces wrong results with these weights. Fall
+      # back through older/generic classes if Plus isn't in this diffusers build.
+      import diffusers
+      cls = None
+      for name in ("QwenImageEditPlusPipeline", "QwenImageEditPipeline"):
+        cls = getattr(diffusers, name, None)
+        if cls is not None:
+          log_event(f"using {name}")
+          break
+      if cls is None:
         log_event("edit pipeline unavailable; falling back to DiffusionPipeline")
-        from diffusers import DiffusionPipeline
-        cls = DiffusionPipeline
+        cls = diffusers.DiffusionPipeline
     else:
       log_event("importing diffusion pipeline")
       from diffusers import DiffusionPipeline
@@ -421,7 +449,12 @@ def generate(payload):
     "generator": torch.Generator(device=device).manual_seed(seed),
   }
   if MODE == "edit":
-    args["image"] = image_from_data_url(payload.get("image_base64"))
+    ref = image_from_data_url(payload.get("image_base64"))
+    args["image"] = ref
+    # The edit pipeline sizes its output from the reference image, not the
+    # requested width/height — use the reference's aspect so the live preview
+    # unpacks with the correct orientation.
+    width, height = ref.size
   else:
     args["width"] = width
     args["height"] = height
@@ -504,16 +537,41 @@ class Handler(BaseHTTPRequestHandler):
         # Non-blocking: returns immediately, loads on a background thread.
         return json_response(self, 202, start_load())
       if self.path == "/unload":
-        unload_pipe()
-        return json_response(
-          self,
-          200,
-          {"ok": True, "loaded": False, "loading": False, "logs": recent_logs()},
-        )
+        # Refuse rather than free the pipe out from under a running generation.
+        if not _INFERENCE_LOCK.acquire(blocking=False):
+          return json_response(self, 409, {"error": "A generation is in progress."})
+        try:
+          with _LOAD_LOCK:  # also wait out any in-flight background load
+            unload_pipe()
+          return json_response(
+            self,
+            200,
+            {"ok": True, "loaded": False, "loading": False, "logs": recent_logs()},
+          )
+        finally:
+          _INFERENCE_LOCK.release()
       if self.path == "/delete-weights":
-        return json_response(self, 200, delete_weights())
+        # Never rmtree the weight cache while a generation or load is reading it.
+        if not _INFERENCE_LOCK.acquire(blocking=False):
+          return json_response(self, 409, {"error": "A generation is in progress."})
+        try:
+          with _LOAD_LOCK:
+            return json_response(self, 200, delete_weights())
+        finally:
+          _INFERENCE_LOCK.release()
       if self.path == "/generate":
-        return json_response(self, 200, generate(decode_json(self)))
+        # Single-flight: read the (possibly large) body first so a slow upload
+        # doesn't hold the GPU, then claim it. If another generation already owns
+        # the GPU, refuse fast with 409 instead of racing it.
+        payload = decode_json(self)
+        if not _INFERENCE_LOCK.acquire(blocking=False):
+          return json_response(
+            self, 409, {"error": "A generation is already in progress."}
+          )
+        try:
+          return json_response(self, 200, generate(payload))
+        finally:
+          _INFERENCE_LOCK.release()
       json_response(self, 404, {"error": "not found"})
     except Exception as exc:
       json_response(self, 500, {"error": str(exc)})

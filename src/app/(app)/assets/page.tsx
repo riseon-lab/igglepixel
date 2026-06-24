@@ -60,11 +60,22 @@ export default function AssetsPage() {
     if (!ready) return;
     let active = true;
     (async () => {
-      const data = await listAssets().catch(() => [] as AssetMeta[]);
-      if (!active) return;
-      setAssets(data);
-      setNowMs(Date.now());
-      setLoading(false);
+      try {
+        const data = await listAssets();
+        if (!active) return;
+        setAssets(data);
+      } catch (e) {
+        if (!active) return;
+        toast.error(
+          "Could not load assets",
+          e instanceof Error ? e.message : "Please try again.",
+        );
+      } finally {
+        if (active) {
+          setNowMs(Date.now());
+          setLoading(false);
+        }
+      }
     })();
     return () => {
       active = false;
