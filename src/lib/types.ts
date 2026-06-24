@@ -49,6 +49,7 @@ export interface Lora {
 export interface LoraSelection {
   path: string;
   strength: number;
+  enabled?: boolean;
 }
 
 /** A single downloadable file resolved from a Civitai/HF URL (for the picker). */

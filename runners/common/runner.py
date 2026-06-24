@@ -345,10 +345,17 @@ def lora_selection(value):
   raise ValueError("invalid LoRA selection")
 
 
+def lora_enabled(value):
+  return not isinstance(value, dict) or value.get("enabled", True) is not False
+
+
 def configure_loras(pipe, loras):
   global LOADED_LORAS
   selections = tuple(
-    (str(path), strength) for path, strength in (lora_selection(item) for item in (loras or []))
+    (str(path), strength)
+    for path, strength in (
+      lora_selection(item) for item in (loras or []) if lora_enabled(item)
+    )
   )
   if selections == LOADED_LORAS:
     return
@@ -525,6 +532,7 @@ def self_test():
   assert safe_lora_path("a/b.safetensors").is_absolute()
   assert lora_selection({"path": "a/b.safetensors", "strength": "0.05"})[1] == 0.1
   assert lora_selection("a/b.safetensors")[1] == 1.0
+  assert not lora_enabled({"path": "a/b.safetensors", "enabled": False})
   try:
     safe_lora_path("../x")
   except ValueError:

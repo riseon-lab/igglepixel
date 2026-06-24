@@ -2,6 +2,7 @@
 
 import { clsx } from "clsx";
 import {
+  Check,
   Dice5,
   Download,
   ImagePlus,
@@ -40,6 +41,10 @@ const GENERATION_POLL_MS = 500;
 
 function randomSeed() {
   return Math.floor(Math.random() * 1_000_000);
+}
+
+function isLoraEnabled(lora: LoraSelection) {
+  return lora.enabled !== false;
 }
 
 export function GenerationWorkspace({ model }: { model: ModelInfo }) {
@@ -154,7 +159,7 @@ export function GenerationWorkspace({ model }: { model: ModelInfo }) {
           cfg: job.cfg,
           seed: job.seed,
           imageBase64: reference?.dataUrl,
-          loras: job.loras,
+          loras: job.loras?.filter(isLoraEnabled),
         }),
       });
       if (!res.ok) throw new Error((await res.json()).error ?? "Runner failed.");
@@ -242,8 +247,17 @@ export function GenerationWorkspace({ model }: { model: ModelInfo }) {
     );
   }
 
+  function toggleLora(path: string) {
+    setSelectedLoras((prev) =>
+      prev.map((item) =>
+        item.path === path ? { ...item, enabled: !isLoraEnabled(item) } : item,
+      ),
+    );
+  }
+
   const generating = busyId !== null;
   const selectedPaths = new Set(selectedLoras.map((item) => item.path));
+  const enabledLoraCount = selectedLoras.filter(isLoraEnabled).length;
   const availableLoras = loras.filter((lora) => !selectedPaths.has(lora.path));
 
   return (
@@ -324,7 +338,9 @@ export function GenerationWorkspace({ model }: { model: ModelInfo }) {
           <div className="flex items-center justify-between">
             <SectionLabel>LoRAs</SectionLabel>
             <Badge tone={selectedLoras.length ? "lilac" : "neutral"}>
-              {selectedLoras.length}
+              {selectedLoras.length
+                ? `${enabledLoraCount}/${selectedLoras.length}`
+                : 0}
             </Badge>
           </div>
           {loraError && <p className="text-sm text-danger-text">{loraError}</p>}
@@ -332,12 +348,31 @@ export function GenerationWorkspace({ model }: { model: ModelInfo }) {
             <div className="grid gap-3">
               {selectedLoras.map((selection) => {
                 const lora = loras.find((item) => item.path === selection.path);
+                const enabled = isLoraEnabled(selection);
                 return (
                   <div
                     key={selection.path}
-                    className="rounded-[12px] border border-border bg-background p-3"
+                    className={clsx(
+                      "rounded-[12px] border border-border bg-background p-3",
+                      !enabled && "opacity-60",
+                    )}
                   >
                     <div className="flex items-center gap-3">
+                      <button
+                        type="button"
+                        onClick={() => toggleLora(selection.path)}
+                        className={clsx(
+                          "grid h-8 w-8 shrink-0 place-items-center rounded-md border transition-colors",
+                          enabled
+                            ? "border-lilac bg-lilac text-white"
+                            : "border-border text-text-muted hover:text-white",
+                        )}
+                        aria-label={`${enabled ? "Disable" : "Enable"} ${
+                          lora?.name ?? selection.path
+                        }`}
+                      >
+                        {enabled && <Check className="h-4 w-4" />}
+                      </button>
                       <Layers className="h-4 w-4 shrink-0 text-lilac" />
                       <div className="min-w-0 flex-1">
                         <p className="truncate text-sm font-medium">

@@ -11,6 +11,7 @@ function parseLoras(value: unknown): LoraSelection[] | undefined {
   return value.flatMap((item) => {
     if (typeof item === "string") return [{ path: item, strength: 1 }];
     if (!item || typeof item !== "object") return [];
+    if ((item as { enabled?: unknown }).enabled === false) return [];
     const path = (item as { path?: unknown }).path;
     if (typeof path !== "string") return [];
     const raw = Number((item as { strength?: unknown }).strength);
