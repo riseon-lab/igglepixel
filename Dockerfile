@@ -1,35 +1,38 @@
-# Citivia Studio — single-container RunPod template image.
-# UI and model runners stay separate processes, but ship as one image.
+# Citivia Studio — thin RunPod runtime image.
+#
+# This image bakes ONLY the runtime: CUDA + PyTorch, a Node binary, git, and the
+# heavy Python deps. It bakes NO application code. At boot it pulls the repo into
+# the persistent /workspace volume and runs everything from there, so a redeploy
+# is just a pod restart — nothing app-level is ever baked, so nothing goes stale.
 
-# ---- UI deps ----
-FROM node:22-slim AS deps
-WORKDIR /app
-COPY package.json package-lock.json ./
-RUN npm ci
-
-# ---- UI build ----
-FROM node:22-slim AS build
-WORKDIR /app
-COPY --from=deps /app/node_modules ./node_modules
-COPY . .
-ENV NEXT_TELEMETRY_DISABLED=1
-RUN npm run build
+# Source a Node binary to drop into the CUDA runtime.
+FROM node:22-slim AS node
 
 # ---- runtime ----
 FROM pytorch/pytorch:2.7.0-cuda12.8-cudnn9-runtime AS runtime
 
-# Node/npm are needed for the baked Next standalone server and optional startup pull.
-COPY --from=deps /usr/local/bin/node /usr/local/bin/node
-COPY --from=deps /usr/local/lib/node_modules /usr/local/lib/node_modules
+# Node + npm (to build/serve the pulled Next app) and git (to pull it).
+COPY --from=node /usr/local/bin/node /usr/local/bin/node
+COPY --from=node /usr/local/lib/node_modules /usr/local/lib/node_modules
 RUN ln -sf ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
-    && ln -sf ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx
+    && ln -sf ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates git \
+    && rm -rf /var/lib/apt/lists/*
 
-WORKDIR /app
+# Bake the heavy Python deps so a cold boot is a git pull, not a torch install.
+# (Deps are runtime, not app code. New deps => rebuild the image.)
+COPY runners/common/requirements.txt /tmp/requirements.txt
+RUN pip install --no-cache-dir -r /tmp/requirements.txt && rm /tmp/requirements.txt
+
 ENV NODE_ENV=production \
     NEXT_TELEMETRY_DISABLED=1 \
     PORT=3000 \
     HOSTNAME=0.0.0.0 \
     CITIVIA_DATA_DIR=/workspace \
+    CITIVIA_REPO_URL=https://github.com/riseon-lab/igglepixel.git \
+    CITIVIA_REPO_REF=main \
+    CITIVIA_REPO_DIR=/workspace/igglepixel \
     QWEN_2512_RUNNER_URL=http://127.0.0.1:8011 \
     QWEN_EDIT_2511_RUNNER_URL=http://127.0.0.1:8012 \
     QWEN_2512_MODEL_ID=Qwen/Qwen-Image-2512 \
@@ -37,21 +40,11 @@ ENV NODE_ENV=production \
     HF_HOME=/workspace/.cache/huggingface \
     PYTHONUNBUFFERED=1
 
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates git \
-    && rm -rf /var/lib/apt/lists/*
-
-COPY runners/common/requirements.txt /runner/requirements.txt
-RUN pip install --no-cache-dir -r /runner/requirements.txt
-COPY runners/common/runner.py /runner/runner.py
-
-COPY --from=build /app/.next/standalone ./
-COPY --from=build /app/.next/static ./.next/static
-COPY --from=build /app/public ./public
-COPY --from=build /app/scripts/start.sh ./scripts/start.sh
-COPY --from=build /app/scripts/runpod-start.sh ./scripts/runpod-start.sh
-RUN chmod +x ./scripts/start.sh ./scripts/runpod-start.sh
+# The ONLY baked code: a tiny, stable launcher that pulls the repo and hands off
+# to the repo's own scripts. Everything that can change lives in git.
+COPY scripts/bootstrap.sh /bootstrap.sh
+RUN chmod +x /bootstrap.sh
 
 VOLUME ["/workspace"]
 EXPOSE 3000
-CMD ["./scripts/runpod-start.sh"]
+CMD ["/bootstrap.sh"]

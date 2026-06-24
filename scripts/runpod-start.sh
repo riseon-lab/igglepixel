@@ -11,13 +11,12 @@ export HF_HOME="${HF_HOME:-/workspace/.cache/huggingface}"
 
 mkdir -p "$CITIVIA_DATA_DIR/models" "$CITIVIA_DATA_DIR/loras"
 
-# Prefer the runner from the pulled repo (kept current by start.sh's git pull)
-# over the baked copy, so runner updates ship without a full image rebuild.
-# Falls back to the baked runner on the very first boot.
-RUNNER_PY="/runner/runner.py"
-PULLED_RUNNER="${CITIVIA_REPO_DIR:-/workspace/igglepixel}/runners/common/runner.py"
-if [ -f "$PULLED_RUNNER" ]; then
-  RUNNER_PY="$PULLED_RUNNER"
+# The runner comes from the pulled repo — nothing is baked. bootstrap.sh has
+# already cloned/synced it before we get here.
+RUNNER_PY="${CITIVIA_REPO_DIR:-/workspace/igglepixel}/runners/common/runner.py"
+if [ ! -f "$RUNNER_PY" ]; then
+  echo "[runpod-start] FATAL: runner not found at $RUNNER_PY (repo not synced?)" >&2
+  exit 1
 fi
 
 RUNNER_MODE=txt2img \
@@ -45,7 +44,7 @@ cleanup() {
 
 trap cleanup INT TERM EXIT
 
-./scripts/start.sh &
+sh "${CITIVIA_REPO_DIR:-/workspace/igglepixel}/scripts/start.sh" &
 UI_PID=$!
 wait "$UI_PID"
 STATUS=$?
