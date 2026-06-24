@@ -27,13 +27,12 @@ done
 cd "$REPO_DIR"
 git remote set-url origin "$REPO_URL" 2>/dev/null || true
 
-# Pull latest. If the network is down, fall back to the code already on the
-# volume (the last good pull) — NOT to anything baked, because nothing is.
-if git fetch origin "$REPO_REF" && git reset --hard FETCH_HEAD; then
-  echo "[bootstrap] synced to $(git rev-parse --short HEAD)"
-else
-  echo "[bootstrap] WARNING: git pull failed; running last-synced code $(git rev-parse --short HEAD)" >&2
-fi
+# Pull latest. Do not run stale code: if DNS/network is down, wait and retry.
+while ! git fetch origin "$REPO_REF" || ! git reset --hard FETCH_HEAD; do
+  echo "[bootstrap] git sync failed; retrying in ${RETRY_SLEEP}s" >&2
+  sleep "$RETRY_SLEEP"
+done
+echo "[bootstrap] synced to $(git rev-parse --short HEAD)"
 
 chmod +x "$REPO_DIR"/scripts/*.sh 2>/dev/null || true
 exec sh "$REPO_DIR/scripts/runpod-start.sh"
