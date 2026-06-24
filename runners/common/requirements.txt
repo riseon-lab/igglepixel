@@ -1,9 +1,21 @@
-accelerate
-git+https://github.com/huggingface/diffusers
-huggingface_hub
-pillow
-protobuf
-safetensors
-sentencepiece
-tokenizers
-transformers
+# Pinned for reproducible pod builds.
+#
+# Unpinned, every cold boot resolved to whatever was latest that hour — so two
+# pods built a day apart ran different code, a prime suspect for "it used to work,
+# now it's flaky." diffusers tracks an unstable git branch (needed for the Qwen
+# pipelines), so it is pinned to a specific commit; the rest are the latest
+# releases as of 2026-06-24.
+#
+# To update: bump deliberately, rebuild the image, and confirm a real generation
+# still works before shipping — these versions are not yet verified against a GPU
+# build, only frozen from the current latest set.
+accelerate==1.14.0
+diffusers @ git+https://github.com/huggingface/diffusers@6a71b6e332abae01a05d36133003e5370ca1d0a8
+huggingface_hub==1.20.1
+peft==0.19.1
+pillow==12.2.0
+protobuf==7.35.1
+safetensors==0.8.0
+sentencepiece==0.2.1
+tokenizers==0.23.1
+transformers==5.12.1

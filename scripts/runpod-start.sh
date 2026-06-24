@@ -90,10 +90,25 @@ stop_port_listener "$PORT"
 
 # The runner comes from the pulled repo — nothing is baked. bootstrap.sh has
 # already cloned/synced it before we get here.
-RUNNER_PY="${CITIVIA_REPO_DIR:-/workspace/igglepixel}/runners/common/runner.py"
+REPO_DIR="${CITIVIA_REPO_DIR:-/workspace/igglepixel}"
+RUNNER_PY="$REPO_DIR/runners/common/runner.py"
 if [ ! -f "$RUNNER_PY" ]; then
   echo "[runpod-start] FATAL: runner not found at $RUNNER_PY (repo not synced?)" >&2
   exit 1
+fi
+
+# Sync Python deps only if the pulled requirements differ from what the image
+# baked (recorded in /opt/deps-baked.md5). Lets a new dep ship via "push + restart"
+# without an image rebuild; a normal restart with unchanged deps does nothing.
+REQ="$REPO_DIR/runners/common/requirements.txt"
+if [ -f "$REQ" ]; then
+  BAKED_HASH="$(cat /opt/deps-baked.md5 2>/dev/null || echo none)"
+  CUR_HASH="$(md5sum "$REQ" | cut -d' ' -f1)"
+  if [ "$CUR_HASH" != "$BAKED_HASH" ]; then
+    echo "[runpod-start] requirements changed since image build; installing deps"
+    pip install --no-cache-dir -r "$REQ" \
+      || echo "[runpod-start] WARN: pip install failed; continuing with baked deps" >&2
+  fi
 fi
 
 RUNNER_MODE=txt2img \

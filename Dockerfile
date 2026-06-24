@@ -21,9 +21,13 @@ RUN ln -sf ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
     && rm -rf /var/lib/apt/lists/*
 
 # Bake the heavy Python deps so a cold boot is a git pull, not a torch install.
-# (Deps are runtime, not app code. New deps => rebuild the image.)
+# Also record a hash of what we baked: at boot, runpod-start.sh compares it to the
+# pulled requirements and only re-installs if a dep was added/changed since this
+# image was built — so "add a dep, push, restart" works without an image rebuild.
 COPY runners/common/requirements.txt /tmp/requirements.txt
-RUN pip install --no-cache-dir -r /tmp/requirements.txt && rm /tmp/requirements.txt
+RUN pip install --no-cache-dir -r /tmp/requirements.txt \
+    && md5sum /tmp/requirements.txt | cut -d' ' -f1 > /opt/deps-baked.md5 \
+    && rm /tmp/requirements.txt
 
 ENV NODE_ENV=production \
     NEXT_TELEMETRY_DISABLED=1 \
