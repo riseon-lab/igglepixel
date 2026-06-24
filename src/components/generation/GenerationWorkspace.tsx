@@ -3,6 +3,9 @@
 import { clsx } from "clsx";
 import {
   Check,
+  ChevronLeft,
+  ChevronRight,
+  Clock,
   Dice5,
   Download,
   ImagePlus,
@@ -17,7 +20,6 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
-import { PreviewTile } from "@/components/PreviewTile";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
@@ -25,9 +27,9 @@ import { Textarea } from "@/components/ui/Field";
 import { Slider } from "@/components/ui/Slider";
 import { useToast } from "@/components/ui/Toast";
 import { useEncryption } from "@/lib/crypto/provider";
-import { uploadAsset } from "@/lib/vault/client";
+import { useModelWorkspace } from "@/lib/generation/workspace-store";
+import { deleteAsset, uploadAsset } from "@/lib/vault/client";
 import { DEFAULT_NEGATIVE_PROMPT, RESOLUTION_PRESETS } from "@/lib/models";
-import type { RunnerHealth } from "@/lib/runners/client";
 import type {
   Lora,
   LoraSelection,
@@ -39,7 +41,12 @@ import { ResolutionPicker } from "./ResolutionPicker";
 import { QueuePanel } from "./QueuePanel";
 
 type SeedMode = "random" | "fixed";
-const GENERATION_POLL_MS = 500;
+
+interface JobParams {
+  negativePrompt: string;
+  imageBase64?: string;
+  matchRef: boolean;
+}
 
 function randomSeed() {
   return Math.floor(Math.random() * 1_000_000);
@@ -56,17 +63,29 @@ function base64ToBytes(b64: string): Uint8Array {
   return bytes;
 }
 
+interface GenResult {
+  width: number;
+  height: number;
+  seed: number;
+  mime: string;
+  image_base64: string;
+  path?: string | null;
+}
+
 export function GenerationWorkspace({ model }: { model: ModelInfo }) {
   const isEdit = model.kind === "editing";
   const toast = useToast();
   const { client: cryptoClient } = useEncryption();
+  const { jobs, references, refIndex, setJobs, setReferences, setRefIndex } =
+    useModelWorkspace(model.id);
 
-  // ---- Controls ----
+  // ---- Controls (local; not persisted) ----
   const [prompt, setPrompt] = useState("");
   const [negative, setNegative] = useState(DEFAULT_NEGATIVE_PROMPT);
   const [resolution, setResolution] = useState<ResolutionPreset>(
     RESOLUTION_PRESETS[1],
   );
+  const [matchRef, setMatchRef] = useState(true); // edit only
   const [steps, setSteps] = useState(20);
   const [cfg, setCfg] = useState(4);
   const [seedMode, setSeedMode] = useState<SeedMode>("random");
@@ -76,17 +95,36 @@ export function GenerationWorkspace({ model }: { model: ModelInfo }) {
   const [selectedLoras, setSelectedLoras] = useState<LoraSelection[]>([]);
   const [loraToAdd, setLoraToAdd] = useState("");
   const [loraError, setLoraError] = useState<string | null>(null);
-  const [reference, setReference] = useState<{
-    name: string;
-    dataUrl: string;
-  } | null>(null);
   const refInput = useRef<HTMLInputElement>(null);
 
   // ---- Queue / preview ----
-  const [jobs, setJobs] = useState<QueueJob[]>([]);
   const [focused, setFocused] = useState<QueueJob | null>(null);
   const [lightbox, setLightbox] = useState<QueueJob | null>(null);
-  const [busyId, setBusyId] = useState<string | null>(null);
+  const [runningId, setRunningId] = useState<string | null>(null);
+
+  // Mirror jobs into a ref so the async queue drainer reads the latest list, and
+  // keep per-job generation params (negative/ref/matchRef) that aren't on QueueJob.
+  const jobsRef = useRef(jobs);
+  jobsRef.current = jobs;
+  const drainingRef = useRef(false);
+  const abortRef = useRef<AbortController | null>(null);
+  const paramsRef = useRef<Record<string, JobParams>>({});
+
+  const activeRef = references[refIndex];
+  const generating = runningId !== null;
+  const pendingCount = jobs.filter((j) => j.status === "pending").length;
+
+  // Write through both the ref (immediate, for the drainer) and the store.
+  function setJobsBoth(update: (prev: QueueJob[]) => QueueJob[]) {
+    const next = update(jobsRef.current);
+    jobsRef.current = next;
+    setJobs(() => next);
+  }
+
+  function patchJob(id: string, patch: Partial<QueueJob>) {
+    setJobsBoth((prev) => prev.map((j) => (j.id === id ? { ...j, ...patch } : j)));
+    setFocused((f) => (f && f.id === id ? { ...f, ...patch } : f));
+  }
 
   useEffect(() => {
     fetch("/api/loras", { cache: "no-store" })
@@ -100,41 +138,32 @@ export function GenerationWorkspace({ model }: { model: ModelInfo }) {
       );
   }, []);
 
+  // On (re)mount, any job still "running"/"pending" is a leftover from a previous
+  // visit whose in-flight request and params are gone — mark it interrupted so the
+  // queue doesn't show a stuck spinner. Completed/failed jobs persist as history.
   useEffect(() => {
-    if (!busyId) return;
+    setJobsBoth((prev) =>
+      prev.map((j) =>
+        j.status === "running" || j.status === "pending"
+          ? {
+              ...j,
+              status: "failed",
+              progress: 0,
+              error: "Interrupted — generation didn't finish.",
+            }
+          : j,
+      ),
+    );
+    setFocused((f) => f ?? jobsRef.current[jobsRef.current.length - 1] ?? null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-    async function pollGeneration() {
-      try {
-        const res = await fetch(`/api/runners/${model.id}`, { cache: "no-store" });
-        if (!res.ok) return;
-        const health: RunnerHealth = await res.json();
-        const generation = health.generation;
-        if (!generation) return;
-        const progress = Math.max(0, Math.min(100, Math.round(generation.progress)));
-        const preview = generation.preview_base64
-          ? `data:${generation.preview_mime ?? "image/png"};base64,${generation.preview_base64}`
-          : undefined;
-        const update = (job: QueueJob): QueueJob =>
-          job.id === busyId
-            ? { ...job, progress, imageDataUrl: preview ?? job.imageDataUrl }
-            : job;
-        setJobs((prev) => prev.map(update));
-        setFocused((job) => (job?.id === busyId ? update(job) : job));
-      } catch {
-        // Final /generate error handling owns user-visible failures.
-      }
-    }
-
-    void pollGeneration();
-    const timer = setInterval(() => void pollGeneration(), GENERATION_POLL_MS);
-    return () => clearInterval(timer);
-  }, [busyId, model.id]);
-
-  function buildJob(status: QueueJob["status"]): QueueJob {
+  function enqueue() {
+    if (isEdit && !activeRef) return;
     const useSeed = seedMode === "random" ? randomSeed() : seed;
     if (seedMode === "random") setSeed(useSeed);
-    return {
-      id: `job-${Date.now()}`,
+    const job: QueueJob = {
+      id: `job-${Date.now()}-${Math.floor(Math.random() * 10000)}`,
       model: model.id,
       prompt: prompt.trim() || "(no prompt)",
       width: resolution.width,
@@ -142,76 +171,85 @@ export function GenerationWorkspace({ model }: { model: ModelInfo }) {
       steps,
       cfg,
       seed: useSeed,
-      status,
+      status: "pending",
       progress: 0,
       createdAt: new Date().toISOString(),
       loras: selectedLoras,
     };
+    paramsRef.current[job.id] = {
+      negativePrompt: negative,
+      imageBase64: isEdit ? activeRef?.dataUrl : undefined,
+      matchRef: isEdit ? matchRef : false,
+    };
+    setJobsBoth((prev) => [...prev, job]);
+    setLastSeed(useSeed);
+    if (!generating) setFocused(job);
+    void drain();
   }
 
-  async function generate() {
-    const job = buildJob("running");
-    setJobs((prev) => [job, ...prev.filter((j) => j.status !== "running")]);
-    setFocused(job);
-    setBusyId(job.id);
-    setLastSeed(job.seed);
-    // Keep both the queue and the focused panel in sync as the job evolves.
-    let view = job;
-    const apply = (patch: Partial<QueueJob>) => {
-      view = { ...view, ...patch };
-      setJobs((prev) => prev.map((j) => (j.id === view.id ? view : j)));
-      setFocused(view);
-    };
+  async function drain() {
+    if (drainingRef.current) return;
+    drainingRef.current = true;
+    try {
+      for (;;) {
+        const next = jobsRef.current.find((j) => j.status === "pending");
+        if (!next) break;
+        await runJob(next);
+      }
+    } finally {
+      drainingRef.current = false;
+    }
+  }
 
+  async function runJob(job: QueueJob) {
+    const extra =
+      paramsRef.current[job.id] ?? { negativePrompt: " ", matchRef: false };
+    setRunningId(job.id);
+    patchJob(job.id, { status: "running", progress: 0, error: undefined });
+    setFocused(jobsRef.current.find((j) => j.id === job.id) ?? null);
+
+    const controller = new AbortController();
+    abortRef.current = controller;
     try {
       const res = await fetch("/api/generate", {
         method: "POST",
         headers: { "content-type": "application/json" },
+        signal: controller.signal,
         body: JSON.stringify({
           model: model.id,
           prompt: job.prompt,
-          negativePrompt: negative,
+          negativePrompt: extra.negativePrompt,
           width: job.width,
           height: job.height,
           steps: job.steps,
           cfg: job.cfg,
           seed: job.seed,
-          imageBase64: reference?.dataUrl,
+          imageBase64: extra.imageBase64,
+          matchRef: extra.matchRef,
           loras: job.loras?.filter(isLoraEnabled),
         }),
       });
 
-      // A non-OK response is a plain error (validation/auth) — read it defensively
-      // so an HTML proxy page never crashes JSON.parse.
       if (!res.ok || !res.body) {
         const text = await res.text().catch(() => "");
         let msg = text;
         try {
           msg = JSON.parse(text).error ?? text;
         } catch {
-          /* not JSON (e.g. proxy HTML) — keep the raw text */
+          /* not JSON (e.g. proxy HTML) — keep raw text */
         }
         throw new Error(msg || "Runner failed.");
       }
 
-      // Stream of NDJSON frames: progress (with live preview) then a final result.
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
       let buffer = "";
-      type GenResult = {
-        width: number;
-        height: number;
-        seed: number;
-        mime: string;
-        image_base64: string;
-        path?: string | null;
-      };
       let result: GenResult | null = null;
       let streamError: string | null = null;
 
       for (;;) {
-        const { done: streamDone, value } = await reader.read();
-        if (streamDone) break;
+        const { done, value } = await reader.read();
+        if (done) break;
         buffer += decoder.decode(value, { stream: true });
         let nl: number;
         while ((nl = buffer.indexOf("\n")) >= 0) {
@@ -225,11 +263,12 @@ export function GenerationWorkspace({ model }: { model: ModelInfo }) {
             continue;
           }
           if (msg.type === "progress") {
-            apply({
-              progress: typeof msg.progress === "number" ? msg.progress : view.progress,
+            patchJob(job.id, {
+              progress:
+                typeof msg.progress === "number" ? msg.progress : undefined,
               imageDataUrl: msg.preview_base64
                 ? `data:${msg.preview_mime ?? "image/png"};base64,${msg.preview_base64}`
-                : view.imageDataUrl,
+                : undefined,
             });
           } else if (msg.type === "result") {
             result = msg as unknown as GenResult;
@@ -242,7 +281,7 @@ export function GenerationWorkspace({ model }: { model: ModelInfo }) {
       if (streamError) throw new Error(streamError);
       if (!result) throw new Error("Runner returned no image.");
 
-      apply({
+      patchJob(job.id, {
         width: result.width,
         height: result.height,
         seed: result.seed,
@@ -252,13 +291,12 @@ export function GenerationWorkspace({ model }: { model: ModelInfo }) {
         outputPath: result.path ?? undefined,
       });
 
-      // Persist the result to the encrypted vault so it appears in Assets.
-      // Best-effort: a save failure must not turn a good generation into an error.
+      // Persist to the encrypted vault so it shows in Assets (best-effort).
       if (cryptoClient) {
         try {
           const bytes = base64ToBytes(result.image_base64);
           const ciphertext = await cryptoClient.encrypt(bytes);
-          await uploadAsset(ciphertext, {
+          const meta = await uploadAsset(ciphertext, {
             name: `${model.id}-${result.seed}.png`,
             kind: "generated",
             mime: result.mime || "image/png",
@@ -266,7 +304,7 @@ export function GenerationWorkspace({ model }: { model: ModelInfo }) {
             height: result.height,
             size: bytes.length,
           });
-          toast.success("Saved to Assets", "Encrypted in your browser.");
+          patchJob(job.id, { vaultId: meta.id });
         } catch {
           toast.error(
             "Couldn't save to Assets",
@@ -275,30 +313,50 @@ export function GenerationWorkspace({ model }: { model: ModelInfo }) {
         }
       }
     } catch (err) {
-      const message = err instanceof Error ? err.message : "Runner failed.";
-      const failed: QueueJob = {
-        ...job,
-        status: "failed",
-        progress: 0,
-        error: message,
-      };
-      setJobs((prev) => prev.map((j) => (j.id === job.id ? failed : j)));
-      setFocused(failed);
-      toast.error(
-        `${model.name} generation failed`,
-        /unreachable|fetch failed|ECONNREFUSED|502/.test(message)
-          ? "The model runner isn't reachable. Start it on the Running page."
-          : message,
-      );
+      const aborted =
+        controller.signal.aborted ||
+        (err instanceof DOMException && err.name === "AbortError");
+      if (aborted) {
+        patchJob(job.id, { status: "failed", progress: 0, error: "Cancelled" });
+      } else {
+        const message = err instanceof Error ? err.message : "Runner failed.";
+        patchJob(job.id, { status: "failed", progress: 0, error: message });
+        toast.error(
+          `${model.name} generation failed`,
+          /unreachable|fetch failed|ECONNREFUSED|502/.test(message)
+            ? "The model runner isn't reachable. Start it on the Models page."
+            : message,
+        );
+      }
     } finally {
-      setBusyId(null);
+      abortRef.current = null;
+      setRunningId((cur) => (cur === job.id ? null : cur));
+      delete paramsRef.current[job.id];
     }
   }
 
+  function cancelCurrent() {
+    abortRef.current?.abort();
+    void fetch(`/api/runners/${model.id}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ action: "cancel" }),
+    }).catch(() => {});
+    toast.success("Cancelling…");
+  }
+
   function removeJob(id: string) {
-    setJobs((prev) => prev.filter((j) => j.id !== id));
+    const job = jobsRef.current.find((j) => j.id === id);
+    if (job?.status === "running") cancelCurrent();
+    setJobsBoth((prev) => prev.filter((j) => j.id !== id));
     setFocused((f) => (f && f.id === id ? null : f));
-    toast.success("Removed from queue");
+    delete paramsRef.current[id];
+    if (job?.vaultId) {
+      void deleteAsset(job.vaultId).catch(() => {});
+      toast.success("Deleted", "Removed from queue and Assets.");
+    } else {
+      toast.success("Removed from queue");
+    }
   }
 
   function reuseSettings(job: QueueJob) {
@@ -324,6 +382,33 @@ export function GenerationWorkspace({ model }: { model: ModelInfo }) {
     link.click();
   }
 
+  // ---- Reference images ----
+  function addReferenceFiles(files: FileList | null) {
+    if (!files?.length) return;
+    const startIndex = references.length;
+    Array.from(files).forEach((f) => {
+      const reader = new FileReader();
+      reader.onload = () =>
+        setReferences((prev) => [
+          ...prev,
+          { name: f.name, dataUrl: String(reader.result) },
+        ]);
+      reader.readAsDataURL(f);
+    });
+    setRefIndex(startIndex);
+    if (refInput.current) refInput.current.value = "";
+  }
+
+  function cycleRef(dir: number) {
+    if (references.length < 2) return;
+    setRefIndex((refIndex + dir + references.length) % references.length);
+  }
+
+  function removeActiveRef() {
+    setReferences((prev) => prev.filter((_, i) => i !== refIndex));
+  }
+
+  // ---- LoRAs ----
   function addLora() {
     if (!loraToAdd) return;
     setSelectedLoras((prev) =>
@@ -354,7 +439,6 @@ export function GenerationWorkspace({ model }: { model: ModelInfo }) {
     );
   }
 
-  const generating = busyId !== null;
   const selectedPaths = new Set(selectedLoras.map((item) => item.path));
   const enabledLoraCount = selectedLoras.filter(isLoraEnabled).length;
   const availableLoras = loras.filter((lora) => !selectedPaths.has(lora.path));
@@ -362,44 +446,94 @@ export function GenerationWorkspace({ model }: { model: ModelInfo }) {
   return (
     <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(320px,380px)]">
       {/* ---------- Controls column ---------- */}
-      <div className="min-w-0 flex flex-col gap-5">
+      <div className="order-2 min-w-0 flex flex-col gap-5 xl:order-1">
         {isEdit && (
           <Card className="flex flex-col gap-3">
-            <SectionLabel>Reference Image</SectionLabel>
+            <div className="flex items-center justify-between">
+              <SectionLabel>Reference Images</SectionLabel>
+              {references.length > 0 && (
+                <Badge tone="lilac">
+                  {refIndex + 1}/{references.length}
+                </Badge>
+              )}
+            </div>
             <input
               ref={refInput}
               type="file"
               accept="image/*"
+              multiple
               hidden
-              onChange={(e) => {
-                const f = e.target.files?.[0];
-                if (!f) return;
-                const reader = new FileReader();
-                reader.onload = () => {
-                  setReference({
-                    name: f.name,
-                    dataUrl: String(reader.result),
-                  });
-                };
-                reader.readAsDataURL(f);
-              }}
+              onChange={(e) => addReferenceFiles(e.target.files)}
             />
-            {reference ? (
-              <div className="flex items-center gap-4">
-                <div className="w-24 overflow-hidden rounded-[12px]">
-                  <PreviewTile
-                    width={1}
-                    height={1}
-                    src={reference.dataUrl}
-                    showLock={false}
-                  />
+            {activeRef ? (
+              <div className="flex flex-col gap-3">
+                <div className="relative">
+                  <div className="overflow-hidden rounded-[12px] bg-background">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={activeRef.dataUrl}
+                      alt={activeRef.name}
+                      className="max-h-72 w-full object-contain"
+                    />
+                  </div>
+                  {references.length > 1 && (
+                    <>
+                      <button
+                        onClick={() => cycleRef(-1)}
+                        className="absolute left-2 top-1/2 grid h-8 w-8 -translate-y-1/2 place-items-center rounded-full bg-black/60 text-white hover:bg-black/80"
+                        aria-label="Previous reference"
+                      >
+                        <ChevronLeft className="h-4 w-4" />
+                      </button>
+                      <button
+                        onClick={() => cycleRef(1)}
+                        className="absolute right-2 top-1/2 grid h-8 w-8 -translate-y-1/2 place-items-center rounded-full bg-black/60 text-white hover:bg-black/80"
+                        aria-label="Next reference"
+                      >
+                        <ChevronRight className="h-4 w-4" />
+                      </button>
+                    </>
+                  )}
+                  <button
+                    onClick={removeActiveRef}
+                    className="absolute right-2 top-2 grid h-7 w-7 place-items-center rounded-full bg-black/60 text-white hover:bg-black/80"
+                    aria-label="Remove this reference"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
                 </div>
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm font-medium">{reference.name}</p>
-                  <p className="text-xs text-text-muted">Ready to edit</p>
-                </div>
-                <Button variant="ghost" onClick={() => setReference(null)} aria-label="Remove reference">
-                  <X className="h-4 w-4" />
+                <p className="truncate text-sm font-medium" title={activeRef.name}>
+                  {activeRef.name}
+                </p>
+                {references.length > 1 && (
+                  <div className="flex gap-2 overflow-x-auto pb-1">
+                    {references.map((r, i) => (
+                      <button
+                        key={`${r.name}-${i}`}
+                        onClick={() => setRefIndex(i)}
+                        className={clsx(
+                          "h-12 w-12 shrink-0 overflow-hidden rounded-md border",
+                          i === refIndex
+                            ? "border-lilac"
+                            : "border-border opacity-70 hover:opacity-100",
+                        )}
+                        aria-label={`Reference ${i + 1}`}
+                      >
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img
+                          src={r.dataUrl}
+                          alt=""
+                          className="h-full w-full object-cover"
+                        />
+                      </button>
+                    ))}
+                  </div>
+                )}
+                <Button
+                  variant="secondary"
+                  onClick={() => refInput.current?.click()}
+                >
+                  <ImagePlus className="h-4 w-4" /> Add more
                 </Button>
               </div>
             ) : (
@@ -408,7 +542,7 @@ export function GenerationWorkspace({ model }: { model: ModelInfo }) {
                 className="flex flex-col items-center justify-center gap-2 rounded-[12px] border-2 border-dashed border-border py-10 text-text-muted transition-colors hover:border-lilac hover:text-white"
               >
                 <ImagePlus className="h-7 w-7" />
-                <span className="text-sm">Upload a reference image to edit</span>
+                <span className="text-sm">Upload reference image(s) to edit</span>
               </button>
             )}
           </Card>
@@ -537,11 +671,27 @@ export function GenerationWorkspace({ model }: { model: ModelInfo }) {
 
         <Card className="flex flex-col gap-3">
           <SectionLabel>Resolution</SectionLabel>
-          <ResolutionPicker
-            presets={RESOLUTION_PRESETS}
-            value={resolution}
-            onChange={setResolution}
-          />
+          {isEdit && (
+            <div className="flex w-fit gap-1 rounded-[10px] bg-background p-1">
+              <SeedTab active={matchRef} onClick={() => setMatchRef(true)}>
+                Match reference
+              </SeedTab>
+              <SeedTab active={!matchRef} onClick={() => setMatchRef(false)}>
+                Custom size
+              </SeedTab>
+            </div>
+          )}
+          {isEdit && matchRef ? (
+            <p className="text-sm text-text-muted">
+              Output keeps each reference image&apos;s own dimensions.
+            </p>
+          ) : (
+            <ResolutionPicker
+              presets={RESOLUTION_PRESETS}
+              value={resolution}
+              onChange={setResolution}
+            />
+          )}
         </Card>
 
         <Card className="flex flex-col gap-5">
@@ -613,23 +763,31 @@ export function GenerationWorkspace({ model }: { model: ModelInfo }) {
         {/* Action bar */}
         <div className="sticky bottom-24 z-10 flex flex-wrap gap-3 rounded-[16px] border border-border bg-surface/90 p-3 backdrop-blur md:bottom-4">
           <Button
-            className="min-w-[180px] flex-1"
-            onClick={generate}
-            disabled={generating || (isEdit && !reference)}
+            className="min-w-[160px] flex-1"
+            onClick={enqueue}
+            disabled={isEdit && !activeRef}
           >
-            <Sparkles className="h-4 w-4" /> Generate
+            <Sparkles className="h-4 w-4" />
+            {generating ? "Queue another" : "Generate"}
           </Button>
+          {generating && (
+            <Button variant="secondary" onClick={cancelCurrent}>
+              <X className="h-4 w-4" /> Cancel
+            </Button>
+          )}
         </div>
       </div>
 
       {/* ---------- Preview + Queue column ---------- */}
-      <div className="min-w-0 flex flex-col gap-5 xl:sticky xl:top-20 xl:self-start">
+      <div className="order-1 min-w-0 flex flex-col gap-5 xl:order-2 xl:sticky xl:top-20 xl:self-start">
         <Card className="flex flex-col gap-3">
           <div className="flex items-center justify-between">
             <SectionLabel>Preview</SectionLabel>
-            {focused?.status === "running" && (
+            {focused?.status === "running" ? (
               <Badge tone="lilac">{focused.progress}%</Badge>
-            )}
+            ) : focused?.status === "pending" ? (
+              <Badge tone="neutral">Queued</Badge>
+            ) : null}
           </div>
 
           {focused ? (
@@ -658,6 +816,11 @@ export function GenerationWorkspace({ model }: { model: ModelInfo }) {
                       <>
                         <Loader2 className="h-8 w-8 animate-spin text-lilac" />
                         <p className="text-sm">Starting generation…</p>
+                      </>
+                    ) : focused.status === "pending" ? (
+                      <>
+                        <Clock className="h-8 w-8" />
+                        <p className="text-sm">Queued — waiting to run</p>
                       </>
                     ) : (
                       <>
@@ -702,9 +865,9 @@ export function GenerationWorkspace({ model }: { model: ModelInfo }) {
                   </Button>
                 </div>
               )}
-              {focused.status === "failed" && (
+              {(focused.status === "failed" || focused.status === "pending") && (
                 <Button size="sm" variant="ghost" onClick={() => removeJob(focused.id)}>
-                  <Trash2 className="h-4 w-4" /> Delete
+                  <Trash2 className="h-4 w-4" /> Remove
                 </Button>
               )}
             </>
@@ -721,10 +884,13 @@ export function GenerationWorkspace({ model }: { model: ModelInfo }) {
         <Card className="flex flex-col gap-3">
           <div className="flex items-center justify-between">
             <SectionLabel>Queue</SectionLabel>
-            <span className="text-xs text-text-muted">{jobs.length} jobs</span>
+            <span className="text-xs text-text-muted">
+              {jobs.length} job{jobs.length === 1 ? "" : "s"}
+              {pendingCount > 0 ? ` · ${pendingCount} queued` : ""}
+            </span>
           </div>
           <QueuePanel
-            jobs={jobs}
+            jobs={[...jobs].reverse()}
             onRemove={removeJob}
             onView={setLightbox}
             onDownload={downloadJob}

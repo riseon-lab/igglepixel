@@ -20,6 +20,8 @@ export interface RunnerGenerateBody {
   cfg: number;
   seed: number;
   imageBase64?: string;
+  /** Edit only: when true the output matches the reference image's size. */
+  matchRef?: boolean;
   loras?: LoraSelection[];
 }
 
@@ -90,6 +92,11 @@ export async function runnerUnload(model: ModelId): Promise<RunnerHealth> {
   return res.json();
 }
 
+/** Ask the runner to interrupt the in-flight generation. */
+export async function runnerCancel(model: ModelId): Promise<void> {
+  await fetch(`${runnerUrl(model)}/cancel`, { method: "POST" }).catch(() => {});
+}
+
 /** Unload and delete the model's cached weights from disk. */
 export async function runnerDeleteWeights(model: ModelId): Promise<RunnerHealth> {
   const res = await fetch(`${runnerUrl(model)}/delete-weights`, { method: "POST" });
@@ -115,6 +122,7 @@ export async function runGeneration(
       cfg: body.cfg,
       seed: body.seed,
       image_base64: body.imageBase64,
+      match_ref: body.matchRef,
       loras: body.loras,
     }),
   });

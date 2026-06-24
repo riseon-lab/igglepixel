@@ -17,6 +17,8 @@ LOADED_LORAS = ()
 # UI can poll /health for progress instead of holding a multi-minute request open.
 LOADING = False
 LOAD_ERROR = None
+# Set by POST /cancel; the step callback checks it and interrupts the pipeline.
+CANCEL_REQUESTED = False
 _LOAD_LOCK = threading.Lock()
 _LOG_LOCK = threading.Lock()
 _GEN_LOCK = threading.Lock()
@@ -154,6 +156,11 @@ def latent_preview_base64(pipe, latents, height, width):
 
 def progress_callback(pipe, total_steps, seed, height, width):
   def callback(_pipe, step, _timestep, callback_kwargs):
+    if CANCEL_REQUESTED:
+      try:
+        _pipe._interrupt = True  # diffusers breaks the sampling loop on this
+      except Exception:
+        pass
     preview = latent_preview_base64(pipe, callback_kwargs.get("latents"), height, width)
     current = int(step) + 1
     set_generation(
@@ -172,6 +179,11 @@ def progress_callback(pipe, total_steps, seed, height, width):
 
 def legacy_progress_callback(pipe, total_steps, seed, height, width):
   def callback(step, _timestep, latents):
+    if CANCEL_REQUESTED:
+      try:
+        pipe._interrupt = True
+      except Exception:
+        pass
     preview = latent_preview_base64(pipe, latents, height, width)
     current = int(step) + 1
     set_generation(
@@ -413,9 +425,11 @@ def image_from_data_url(value):
 
 
 def generate(payload):
+  global CANCEL_REQUESTED
   import inspect
   import torch
 
+  CANCEL_REQUESTED = False
   prompt = str(payload.get("prompt") or "").strip()
   if not prompt:
     raise ValueError("prompt is required")
@@ -448,18 +462,24 @@ def generate(payload):
     "true_cfg_scale": cfg,
     "generator": torch.Generator(device=device).manual_seed(seed),
   }
+  params = inspect.signature(pipe.__call__).parameters
+
   if MODE == "edit":
     ref = image_from_data_url(payload.get("image_base64"))
     args["image"] = ref
-    # The edit pipeline sizes its output from the reference image, not the
-    # requested width/height — use the reference's aspect so the live preview
-    # unpacks with the correct orientation.
-    width, height = ref.size
+    # By default the edit pipeline sizes its output from the reference image.
+    # When the client asks for a specific resolution (match_ref false) and the
+    # pipeline supports width/height, honour it; otherwise fall back to the ref
+    # size. Either way `width`/`height` drive the live preview's aspect.
+    if payload.get("match_ref", True) or "width" not in params or "height" not in params:
+      width, height = ref.size
+    else:
+      args["width"] = width
+      args["height"] = height
   else:
     args["width"] = width
     args["height"] = height
 
-  params = inspect.signature(pipe.__call__).parameters
   if "callback_on_step_end" in params:
     args["callback_on_step_end"] = progress_callback(pipe, steps, seed, height, width)
     if "callback_on_step_end_tensor_inputs" in params:
@@ -470,8 +490,14 @@ def generate(payload):
       args["callback_steps"] = 1
 
   try:
+    if hasattr(pipe, "_interrupt"):
+      pipe._interrupt = False
     with torch.inference_mode():
-      image = pipe(**args).images[0]
+      result = pipe(**args)
+    if CANCEL_REQUESTED:
+      set_generation(active=False, error="cancelled")
+      raise RuntimeError("cancelled")
+    image = result.images[0]
 
     final_base64 = image_base64(image)
     set_generation(
@@ -499,6 +525,15 @@ def generate(payload):
   except Exception as exc:
     set_generation(active=False, error=str(exc))
     raise
+
+
+def request_cancel():
+  """Flag the in-flight generation to stop. The step callback honours it and
+  interrupts the pipeline; runs on a separate thread from the held GPU lock."""
+  global CANCEL_REQUESTED
+  CANCEL_REQUESTED = True
+  log_event("cancel requested")
+  return {"ok": True}
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -559,6 +594,9 @@ class Handler(BaseHTTPRequestHandler):
             return json_response(self, 200, delete_weights())
         finally:
           _INFERENCE_LOCK.release()
+      if self.path == "/cancel":
+        # Must not take the inference lock — the running generation holds it.
+        return json_response(self, 200, request_cancel())
       if self.path == "/generate":
         # Single-flight: read the (possibly large) body first so a slow upload
         # doesn't hold the GPU, then claim it. If another generation already owns

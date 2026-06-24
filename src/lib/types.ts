@@ -88,6 +88,8 @@ export interface QueueJob {
   createdAt: string;
   imageDataUrl?: string;
   outputPath?: string;
+  /** Id of the encrypted vault asset this image was saved as, if any. */
+  vaultId?: string;
   error?: string;
   loras?: LoraSelection[];
 }

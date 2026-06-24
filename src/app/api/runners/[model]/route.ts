@@ -1,6 +1,7 @@
 import type { NextRequest } from "next/server";
 import { requireSession, unauthorized } from "@/lib/auth/server";
 import {
+  runnerCancel,
   runnerDeleteWeights,
   runnerHealth,
   runnerLoad,
@@ -50,8 +51,15 @@ export async function POST(
   } catch {
     return new Response("Invalid request body.", { status: 400 });
   }
-  if (action !== "start" && action !== "stop") {
-    return new Response("action must be 'start' or 'stop'.", { status: 400 });
+  if (action !== "start" && action !== "stop" && action !== "cancel") {
+    return new Response("action must be 'start', 'stop' or 'cancel'.", {
+      status: 400,
+    });
+  }
+
+  if (action === "cancel") {
+    await runnerCancel(model);
+    return Response.json({ ok: true });
   }
 
   try {

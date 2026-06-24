@@ -51,6 +51,7 @@ export async function POST(req: NextRequest) {
     seed: Number(body.seed) || Date.now(),
     imageBase64:
       typeof body.imageBase64 === "string" ? body.imageBase64 : undefined,
+    matchRef: body.matchRef !== false,
     loras: parseLoras(body.loras),
   };
 
