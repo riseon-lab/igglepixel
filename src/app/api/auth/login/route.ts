@@ -19,7 +19,9 @@ export async function POST(req: NextRequest) {
   if ("error" in result)
     return NextResponse.json({ error: result.error }, { status: 401 });
 
-  const res = NextResponse.json({ username }, { status: 200 });
+  // Echo the account's canonical username (the request may omit it — login is
+  // password-only for this single-account deployment).
+  const res = NextResponse.json({ username: result.username }, { status: 200 });
   setSessionCookie(res, result.token); // rotating the token ends any other session
   return res;
 }

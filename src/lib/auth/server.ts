@@ -1,6 +1,7 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import {
+  accountStatus,
   createAccount,
   getAccount,
   login,
@@ -49,5 +50,5 @@ export function unauthorized(): Response {
   return new Response("Unauthorized", { status: 401 });
 }
 
-export { createAccount, getAccount, login, logout, resetAccount };
+export { accountStatus, createAccount, getAccount, login, logout, resetAccount };
 export type { AccountRecord };

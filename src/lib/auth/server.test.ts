@@ -31,3 +31,30 @@ test("resetAccount removes the account so setup can run again", async () => {
   const result = await auth.createAccount("admin", "password123");
   assert.ok("token" in result);
 });
+
+test("login is password-only: a correct password wins without the username", async () => {
+  await auth.resetAccount();
+  await auth.createAccount("studio-admin", "password123");
+
+  const noName = await auth.login("", "password123");
+  assert.ok("token" in noName, "correct password alone should log in");
+
+  const wrongName = await auth.login("someone-else", "password123");
+  assert.ok("error" in wrongName, "a supplied-but-wrong username is still rejected");
+
+  const wrongPw = await auth.login("", "nope");
+  assert.ok("error" in wrongPw, "a wrong password is rejected");
+});
+
+test("accountStatus distinguishes missing, ok, and corrupt", async () => {
+  await auth.resetAccount();
+  assert.equal(await auth.accountStatus(), "missing");
+
+  await auth.createAccount("admin", "password123");
+  assert.equal(await auth.accountStatus(), "ok");
+
+  // Simulate a torn write (pod SIGKILLed mid-write before atomic rename existed):
+  // the file exists but isn't valid/usable JSON.
+  await fs.writeFile(path.join(TMP, "vault", "account.json"), "{ truncated");
+  assert.equal(await auth.accountStatus(), "corrupt");
+});

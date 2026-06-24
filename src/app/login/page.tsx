@@ -11,7 +11,6 @@ export default function LoginPage() {
   const { ready, hasAccount, authenticated, password: hasKey, login } =
     useSession();
   const router = useRouter();
-  const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -20,15 +19,19 @@ export default function LoginPage() {
   useEffect(() => {
     if (!ready) return;
     if (!hasAccount) router.replace("/setup");
-    // Only leave if fully ready: authenticated AND this tab has the key material.
+    // Only leave once fully ready: authenticated AND this tab has the key material.
     else if (authenticated && hasKey) router.replace("/running");
   }, [ready, hasAccount, authenticated, hasKey, router]);
+
+  // Already logged in (valid cookie) but this browser lacks the key → "unlock",
+  // not "log in". This is the common case after a restart on a fresh browser.
+  const unlocking = authenticated && !hasKey;
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
     setSubmitting(true);
-    const err = await login(username, password);
+    const err = await login(password);
     if (err) {
       setError(err);
       setSubmitting(false);
@@ -64,19 +67,14 @@ export default function LoginPage() {
   return (
     <AuthShell
       eyebrow="Citivia Studio"
-      title="Welcome back"
-      subtitle="Log in to your studio. Logging in here will end any other active session."
+      title={unlocking ? "Unlock your studio" : "Welcome back"}
+      subtitle={
+        unlocking
+          ? "Enter your password to unlock your encrypted studio on this device."
+          : "Enter your password to log in. Logging in here ends any other active session."
+      }
     >
       <form onSubmit={onSubmit} className="flex flex-col gap-4">
-        <div>
-          <Label>Username</Label>
-          <Input
-            value={username}
-            onChange={(e) => setUsername(e.target.value)}
-            placeholder="username"
-            autoComplete="username"
-          />
-        </div>
         <div>
           <Label>Password</Label>
           <Input
@@ -89,7 +87,13 @@ export default function LoginPage() {
         </div>
         {error && <p className="text-sm text-danger-text">{error}</p>}
         <Button type="submit" className="mt-2 w-full" disabled={submitting}>
-          {submitting ? "Logging in…" : "Log in"}
+          {submitting
+            ? unlocking
+              ? "Unlocking…"
+              : "Logging in…"
+            : unlocking
+              ? "Unlock"
+              : "Log in"}
         </Button>
         <Button
           type="button"
