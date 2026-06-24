@@ -145,6 +145,14 @@ export function GenerationWorkspace({ model }: { model: ModelInfo }) {
     setFocused(job);
     setBusyId(job.id);
     setLastSeed(job.seed);
+    // Keep both the queue and the focused panel in sync as the job evolves.
+    let view = job;
+    const apply = (patch: Partial<QueueJob>) => {
+      view = { ...view, ...patch };
+      setJobs((prev) => prev.map((j) => (j.id === view.id ? view : j)));
+      setFocused(view);
+    };
+
     try {
       const res = await fetch("/api/generate", {
         method: "POST",
@@ -162,10 +170,69 @@ export function GenerationWorkspace({ model }: { model: ModelInfo }) {
           loras: job.loras?.filter(isLoraEnabled),
         }),
       });
-      if (!res.ok) throw new Error((await res.json()).error ?? "Runner failed.");
-      const result = await res.json();
-      const done: QueueJob = {
-        ...job,
+
+      // A non-OK response is a plain error (validation/auth) — read it defensively
+      // so an HTML proxy page never crashes JSON.parse.
+      if (!res.ok || !res.body) {
+        const text = await res.text().catch(() => "");
+        let msg = text;
+        try {
+          msg = JSON.parse(text).error ?? text;
+        } catch {
+          /* not JSON (e.g. proxy HTML) — keep the raw text */
+        }
+        throw new Error(msg || "Runner failed.");
+      }
+
+      // Stream of NDJSON frames: progress (with live preview) then a final result.
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      type GenResult = {
+        width: number;
+        height: number;
+        seed: number;
+        mime: string;
+        image_base64: string;
+        path?: string | null;
+      };
+      let result: GenResult | null = null;
+      let streamError: string | null = null;
+
+      for (;;) {
+        const { done: streamDone, value } = await reader.read();
+        if (streamDone) break;
+        buffer += decoder.decode(value, { stream: true });
+        let nl: number;
+        while ((nl = buffer.indexOf("\n")) >= 0) {
+          const line = buffer.slice(0, nl).trim();
+          buffer = buffer.slice(nl + 1);
+          if (!line) continue;
+          let msg: Record<string, unknown>;
+          try {
+            msg = JSON.parse(line);
+          } catch {
+            continue;
+          }
+          if (msg.type === "progress") {
+            apply({
+              progress: typeof msg.progress === "number" ? msg.progress : view.progress,
+              imageDataUrl: msg.preview_base64
+                ? `data:${msg.preview_mime ?? "image/png"};base64,${msg.preview_base64}`
+                : view.imageDataUrl,
+            });
+          } else if (msg.type === "result") {
+            result = msg as unknown as GenResult;
+          } else if (msg.type === "error") {
+            streamError = (msg.error as string) || "Runner failed.";
+          }
+        }
+      }
+
+      if (streamError) throw new Error(streamError);
+      if (!result) throw new Error("Runner returned no image.");
+
+      apply({
         width: result.width,
         height: result.height,
         seed: result.seed,
@@ -173,9 +240,7 @@ export function GenerationWorkspace({ model }: { model: ModelInfo }) {
         progress: 100,
         imageDataUrl: `data:${result.mime};base64,${result.image_base64}`,
         outputPath: result.path ?? undefined,
-      };
-      setJobs((prev) => prev.map((j) => (j.id === job.id ? done : j)));
-      setFocused(done);
+      });
     } catch (err) {
       const message = err instanceof Error ? err.message : "Runner failed.";
       const failed: QueueJob = {

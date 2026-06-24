@@ -1,7 +1,7 @@
 import type { NextRequest } from "next/server";
 import { requireSession, unauthorized } from "@/lib/auth/server";
-import { runGeneration } from "@/lib/runners/client";
-import type { LoraSelection } from "@/lib/types";
+import { runGeneration, runnerHealth } from "@/lib/runners/client";
+import type { LoraSelection, ModelId } from "@/lib/types";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -40,25 +40,92 @@ export async function POST(req: NextRequest) {
     return Response.json({ error: "Reference image is required." }, { status: 400 });
   }
 
-  try {
-    const result = await runGeneration({
-      model,
-      prompt,
-      negativePrompt: String(body.negativePrompt ?? " "),
-      width: Number(body.width) || 1024,
-      height: Number(body.height) || 1024,
-      steps: Number(body.steps) || 30,
-      cfg: Number(body.cfg) || 4,
-      seed: Number(body.seed) || Date.now(),
-      imageBase64:
-        typeof body.imageBase64 === "string" ? body.imageBase64 : undefined,
-      loras: parseLoras(body.loras),
-    });
-    return Response.json(result);
-  } catch (err) {
-    return Response.json(
-      { error: err instanceof Error ? err.message : "Runner failed." },
-      { status: 502 },
-    );
-  }
+  const args = {
+    model: model as ModelId,
+    prompt,
+    negativePrompt: String(body.negativePrompt ?? " "),
+    width: Number(body.width) || 1024,
+    height: Number(body.height) || 1024,
+    steps: Number(body.steps) || 30,
+    cfg: Number(body.cfg) || 4,
+    seed: Number(body.seed) || Date.now(),
+    imageBase64:
+      typeof body.imageBase64 === "string" ? body.imageBase64 : undefined,
+    loras: parseLoras(body.loras),
+  };
+
+  // Generation runs for minutes (model load + sampling) and returns a single JSON
+  // blob only at the very end. The browser<->Next hop goes through RunPod's proxy,
+  // which kills any request that sends no bytes for ~100s. So instead of awaiting
+  // the whole thing, we stream NDJSON: forward the runner's live progress/preview
+  // frames (polled over loopback, which has no proxy/timeout) as keepalive, then
+  // emit the final result. One JSON object per line.
+  const encoder = new TextEncoder();
+  const stream = new ReadableStream<Uint8Array>({
+    async start(controller) {
+      let closed = false;
+      const send = (obj: unknown) => {
+        if (closed) return;
+        try {
+          controller.enqueue(encoder.encode(JSON.stringify(obj) + "\n"));
+        } catch {
+          closed = true;
+        }
+      };
+
+      // Flush an immediate frame so the proxy sees bytes before the first poll.
+      send({ type: "progress", progress: 0, step: 0, steps: args.steps });
+
+      let finished = false;
+      const generation = runGeneration(args).then(
+        (result) => ({ ok: true as const, result }),
+        (err) => ({
+          ok: false as const,
+          error: err instanceof Error ? err.message : "Runner failed.",
+        }),
+      );
+
+      // Poll the runner's /health (loopback) and forward progress as keepalive.
+      const poll = (async () => {
+        while (!finished) {
+          await new Promise((r) => setTimeout(r, 1200));
+          if (finished) break;
+          try {
+            const g = (await runnerHealth(args.model)).generation;
+            if (g) {
+              send({
+                type: "progress",
+                progress: g.progress,
+                step: g.step,
+                steps: g.steps,
+                preview_mime: g.preview_mime,
+                preview_base64: g.preview_base64,
+              });
+            } else {
+              send({ type: "ping" });
+            }
+          } catch {
+            send({ type: "ping" });
+          }
+        }
+      })();
+
+      const outcome = await generation;
+      finished = true;
+      await poll;
+      if (outcome.ok) send({ type: "result", ...outcome.result });
+      else send({ type: "error", error: outcome.error });
+      closed = true;
+      controller.close();
+    },
+  });
+
+  return new Response(stream, {
+    headers: {
+      "content-type": "application/x-ndjson; charset=utf-8",
+      "cache-control": "no-store, no-transform",
+      // Discourage any intermediary from buffering the stream.
+      "x-accel-buffering": "no",
+    },
+  });
 }
