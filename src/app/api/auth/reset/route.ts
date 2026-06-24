@@ -23,6 +23,26 @@ export async function GET() {
   );
 }
 
+/**
+ * Reject anything that isn't a same-origin request. Reset is intentionally
+ * usable without a session (it is the "forgot password" recovery on the login
+ * screen), so this no-auth, account-destroying POST would otherwise be a prime
+ * CSRF target — a cross-site auto-submitting <form> could wipe the account.
+ */
+function sameOrigin(req: NextRequest): boolean {
+  // Sec-Fetch-Site is sent by every current browser; trust it when present.
+  const site = req.headers.get("sec-fetch-site");
+  if (site) return site === "same-origin" || site === "none";
+  // Older clients: fall back to comparing Origin against the request host.
+  const origin = req.headers.get("origin");
+  if (!origin) return true; // non-browser caller (no Origin) — not a CSRF vector
+  try {
+    return new URL(origin).host === req.headers.get("host");
+  } catch {
+    return false;
+  }
+}
+
 async function readConfirm(req: NextRequest): Promise<unknown> {
   const type = req.headers.get("content-type") ?? "";
   if (type.includes("application/json")) {
@@ -34,6 +54,9 @@ async function readConfirm(req: NextRequest): Promise<unknown> {
 }
 
 export async function POST(req: NextRequest) {
+  if (!sameOrigin(req))
+    return NextResponse.json({ error: "Cross-site request blocked." }, { status: 403 });
+
   let confirm: unknown;
   try {
     confirm = await readConfirm(req);
